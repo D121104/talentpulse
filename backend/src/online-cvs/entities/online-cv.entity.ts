@@ -99,6 +99,27 @@ export class OnlineCV {
   @Column({ type: 'jsonb', default: '[]' })
   awards: AwardEntry[];
 
+  @Column({
+    type: 'jsonb',
+    default: '["objective", "education", "experience", "skills", "activities", "certificates", "awards"]',
+  })
+  sectionOrder: string[];
+
+  @Column({ nullable: true })
+  fontFamily: string;
+
+  @Column({ nullable: true })
+  themeColor: string;
+
+  @Column({ nullable: true })
+  fontSize: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  customFormatting: any;
+
+  @Column({ type: 'text', nullable: true })
+  htmlContent: string;
+
   @Column({ nullable: true })
   pdfUrl: string;
 
