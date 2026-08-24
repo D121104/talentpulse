@@ -130,7 +130,7 @@ export default function Header() {
                   <UserAvatar src={user.avatar} alt={user.name} size="md" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold text-slate-900 dark:text-white">{user.name}</p>
-                    <p className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+                    <p className="flex items-center gap-1 text-xs text-primary dark:text-primary-light">
                       <CheckCircle2 className="h-3 w-3" />
                       <span>{t('userMenu.verifiedAccount')}</span>
                     </p>
@@ -153,7 +153,7 @@ export default function Header() {
                     onClick={() => setMobileMenuOpen(false)}
                     className="flex items-center gap-1.5 p-2 rounded-lg bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200"
                   >
-                    <FileText className="h-3.5 w-3.5 text-emerald-500" />
+                    <FileText className="h-3.5 w-3.5 text-primary" />
                     <span>{t('userMenu.myCvs')}</span>
                   </Link>
                 </div>

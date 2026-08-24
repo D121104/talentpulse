@@ -6,7 +6,9 @@ import { en } from './en';
 
 const resources = {
   vi: { translation: vi },
+  'vi-VN': { translation: vi },
   en: { translation: en },
+  'en-US': { translation: en },
 };
 
 i18n
@@ -15,6 +17,9 @@ i18n
   .init({
     resources,
     fallbackLng: 'vi',
+    supportedLngs: ['vi', 'en', 'vi-VN', 'en-US'],
+    load: 'languageOnly',
+    nonExplicitSupportedLngs: true,
     interpolation: {
       escapeValue: false,
     },

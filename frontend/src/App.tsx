@@ -9,6 +9,9 @@ import RegisterPage from './pages/auth/RegisterPage';
 import GoogleCallbackPage from './pages/auth/GoogleCallbackPage';
 import PendingApprovalPage from './pages/auth/PendingApprovalPage';
 import DashboardEntryPage from './pages/dashboard/DashboardEntryPage';
+import MyCVPage from './pages/cv/MyCVPage';
+import CVTemplatePage from './pages/cv/CVTemplatePage';
+import CVEditorPage from './pages/cv/CVEditorPage';
 
 function App() {
   return (
@@ -25,6 +28,10 @@ function App() {
             <Route path="/pending-approval" element={<PendingApprovalPage />} />
             <Route element={<ProtectedRoute />}>
               <Route path="/dashboard" element={<DashboardEntryPage />} />
+              <Route path="/my-cv" element={<MyCVPage />} />
+              <Route path="/cv-templates" element={<CVTemplatePage />} />
+              <Route path="/cv-editor/:id" element={<CVEditorPage />} />
+              <Route path="/cv-editor/new" element={<CVEditorPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
