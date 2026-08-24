@@ -9,7 +9,7 @@ export interface IUser {
   company?: {
     _id: string;
     name: string;
-    isActive: boolean;
+    isActive?: boolean;
   };
   avatar?: string;
   isApproved?: boolean;

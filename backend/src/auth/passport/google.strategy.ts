@@ -21,11 +21,17 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     done: VerifyCallback,
   ): Promise<any> {
     const { name, emails, photos } = profile;
+    const email = emails?.[0]?.value?.trim().toLowerCase();
+
+    if (!email) {
+      return done(new Error('Google account does not provide an email address'));
+    }
+
     const user = {
-      email: emails[0].value,
-      firstName: name.givenName ?? '',
-      lastName: name.familyName ?? '',
-      picture: photos[0].value,
+      email,
+      firstName: name?.givenName ?? '',
+      lastName: name?.familyName ?? '',
+      picture: photos?.[0]?.value,
       accessToken,
     };
     done(null, user);

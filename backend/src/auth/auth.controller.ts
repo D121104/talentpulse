@@ -1,24 +1,25 @@
 import {
-  Controller,
-  Post,
-  UseGuards,
-  Body,
-  Res,
-  Req,
-  Get,
   BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  Res,
+  UseGuards,
 } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { Public, User } from 'src/decorator/customize';
-import { LocalAuthGuard } from './local-auth.guard';
-import { CreateUserDto } from 'src/users/dto/create-user.dto';
-import { Request, Response } from 'express';
-import { IUser } from 'src/users/users.interface';
-import { JwtAuthGuard } from './jwt-auth.guard';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { AuthGuard } from '@nestjs/passport';
-import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
+import { Request, Response } from 'express';
+import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { LocalAuthGuard } from './local-auth.guard';
+import { GoogleExchangeDto } from './dto/google-exchange.dto';
+import { LoginDto } from './dto/login.dto';
+import { Public, User } from 'src/decorator/customize';
+import { IUser } from 'src/users/users.interface';
+import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { CreateHrDto } from 'src/users/dto/create-hr.dto';
 
 @Controller('auth')
@@ -31,100 +32,91 @@ export class AuthController {
 
   @Public()
   @UseGuards(LocalAuthGuard)
-  @UseGuards(ThrottlerGuard)
-  @ApiOperation({ summary: 'Login' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        username: { type: 'string' },
-        password: { type: 'string' },
-      },
-      example: {
-        username: 'test@gmail.com',
-        password: '123456',
-      },
-    },
-  })
-  @Post('/login')
+  @ApiOperation({ summary: 'Login with email and password' })
+  @ApiBody({ type: LoginDto })
+  @Post('login')
   handleLogin(
-    @Req() req: Request & { user: IUser },
-    @Res({ passthrough: true }) res: Response,
+    @Body() _loginDto: LoginDto,
+    @Req() request: Request & { user: IUser },
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.login(req.user, res);
+    return this.authService.login(request.user, response);
   }
 
   @Public()
-  @ApiOperation({ summary: 'Register' })
-  @Post('/register')
+  @ApiOperation({ summary: 'Register a Candidate account' })
+  @Post('register')
   handleRegister(@Body() createUserDto: CreateUserDto) {
     return this.authService.register(createUserDto);
   }
 
+  @Public()
+  @ApiOperation({ summary: 'Register an HR account pending approval' })
+  @Post('hr/register')
+  handleRegisterHr(@Body() createHrDto: CreateHrDto) {
+    return this.authService.registerHr(createHrDto);
+  }
+
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Get account user' })
+  @ApiOperation({ summary: 'Get current account' })
   @ApiBearerAuth()
-  @Get('/account')
-  async handleAccount(@User() user: IUser) {
-    return await this.authService.handleAccount(user);
+  @Get('account')
+  handleAccount(@User() user: IUser) {
+    return this.authService.handleAccount(user);
   }
 
-  @Get('/google')
+  @Public()
+  @Get('google')
   @UseGuards(AuthGuard('google'))
-  async googleAuth(@Req() req) {
-    // Initiates the Google OAuth2 login flow
+  googleAuth() {
+    // Passport redirects the browser to Google's consent screen.
   }
 
+  @Public()
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  async googleAuthRedirect(
-    @Req() req,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const result = await this.authService.googleLogin(req, res);
-    res.redirect(
-      `${this.configService.get<string>('URL_FRONTEND')}/auth/google?token=${
-        result.access_token
-      }`,
-    );
+  async googleAuthRedirect(@Req() request: Request & { user: any }, @Res() response: Response) {
+    const code = await this.authService.createGoogleExchangeCode(request.user);
+    const frontendUrl = this.configService.get<string>('URL_FRONTEND');
+    response.redirect(`${frontendUrl}/auth/google/callback?code=${encodeURIComponent(code)}`);
   }
 
-  @ApiOperation({
-    summary: 'Refresh token',
-    description: 'Refresh token, need refresh token in cookies',
-  })
-  @Post('/refresh')
-  handleRefresh(
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
+  @Public()
+  @ApiOperation({ summary: 'Exchange a Google OAuth code for a session' })
+  @Post('google/exchange')
+  exchangeGoogleCode(
+    @Body() dto: GoogleExchangeDto,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    const refreshToken = req.body.refresh_token || req.cookies['refresh_token'];
+    return this.authService.exchangeGoogleCode(dto.code, response);
+  }
+
+  @Public()
+  @ApiOperation({ summary: 'Refresh the current session from a cookie' })
+  @Post('refresh')
+  handleRefresh(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const refreshToken = request.cookies?.refresh_token;
     if (!refreshToken) {
-      throw new BadRequestException('Token không hợp lệ!');
+      throw new BadRequestException('Refresh token không tồn tại');
     }
-    return this.authService.generateNewToken(refreshToken, res);
+    return this.authService.generateNewToken(refreshToken, response);
+  }
+
+  @Public()
+  @ApiOperation({ summary: 'Reset a password with an OTP token' })
+  @Post('reset-password')
+  handleResetPassword(@Body() body: { token: string; password: string }) {
+    return this.authService.resetPassword(body.token, body.password);
   }
 
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Logout', description: 'Logout user' })
+  @ApiOperation({ summary: 'Logout and revoke the current refresh token' })
   @ApiBearerAuth()
-  @Post('/logout')
-  handleLogout(@Res({ passthrough: true }) res: Response, @User() user: IUser) {
-    return this.authService.logout(user, res);
-  }
-
-  @Post('/reset-password')
-  @ApiOperation({ summary: 'Reset password' })
-  @Public()
-  handleResetPassword(@Body() body: { token: string; password: string }) {
-    const { token, password } = body;
-    return this.authService.resetPassword(token, password);
-  }
-
-  @Post('/hr/register')
-  @ApiOperation({ summary: 'Register HR account' })
-  @Public()
-  handleRegisterHr(@Body() createUserDto: CreateHrDto) {
-    return this.authService.registerHr(createUserDto);
+  @Post('logout')
+  handleLogout(@Res({ passthrough: true }) response: Response, @User() user: IUser) {
+    return this.authService.logout(user, response);
   }
 }

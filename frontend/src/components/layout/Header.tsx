@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
-import { Menu, X, Sun, Moon, Globe, ChevronDown } from 'lucide-react';
+import { Menu, X, Sun, Moon, Globe, ChevronDown, LogOut } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../auth/AuthContext';
 
 export default function Header() {
   const { t, i18n } = useTranslation();
   const { theme, toggleTheme } = useTheme();
+  const { user, status, logout } = useAuth();
+  const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
@@ -19,6 +23,11 @@ export default function Header() {
   const switchLang = (lang: string) => {
     i18n.changeLanguage(lang);
     setLangDropdownOpen(false);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/', { replace: true });
   };
 
   const navLinks = [
@@ -39,7 +48,7 @@ export default function Header() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 lg:h-18 items-center justify-between">
           {/* Logo */}
-          <a href="/" className="flex items-center gap-2 shrink-0">
+          <Link to="/" className="flex items-center gap-2 shrink-0">
             <img
               src="/logo-lightmode.svg"
               alt="TalentPulse"
@@ -50,7 +59,7 @@ export default function Header() {
               alt="TalentPulse"
               className="h-10 sm:h-12 w-auto hidden dark:block transition-all duration-200"
             />
-          </a>
+          </Link>
 
           {/* Desktop Nav */}
           <nav className="hidden lg:flex items-center gap-1">
@@ -114,18 +123,23 @@ export default function Header() {
 
             {/* Auth Buttons (Desktop) */}
             <div className="hidden lg:flex items-center gap-2 ml-2">
-              <a
-                href="/login"
+              {status === 'authenticated' && user ? <>
+                <Link to="/dashboard" className="max-w-40 truncate px-3 py-2 text-sm font-semibold text-slate-700 transition hover:text-primary dark:text-slate-200">{user.name}</Link>
+                <button onClick={() => void handleLogout()} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-red-600 dark:text-slate-300 dark:hover:bg-slate-800"><LogOut className="h-4 w-4" />Dang xuat</button>
+              </> : <>
+              <Link
+                to="/login"
                 className="px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100/60 dark:hover:bg-slate-800/60 rounded-lg transition-all duration-200 cursor-pointer"
               >
                 {t('nav.signIn')}
-              </a>
-              <a
-                href="/register"
+              </Link>
+              <Link
+                to="/register"
                 className="px-5 py-2.5 text-sm font-semibold text-white bg-primary hover:bg-primary-dark rounded-xl shadow-sm shadow-primary/20 hover:shadow-md hover:shadow-primary/30 transition-all duration-300 active:scale-95 cursor-pointer"
               >
                 {t('nav.signUp')}
-              </a>
+              </Link>
+              </>}
             </div>
 
             {/* Mobile Menu Toggle */}
@@ -155,12 +169,7 @@ export default function Header() {
               </a>
             ))}
             <div className="pt-3 border-t border-gray-200/60 dark:border-slate-700 flex flex-col gap-2">
-              <a href="/login" className="px-4 py-3 text-sm font-semibold text-center text-slate-700 dark:text-slate-200 border border-gray-200 dark:border-slate-700 rounded-xl">
-                {t('nav.signIn')}
-              </a>
-              <a href="/register" className="px-4 py-3 text-sm font-semibold text-center text-white bg-primary rounded-xl">
-                {t('nav.signUp')}
-              </a>
+              {status === 'authenticated' && user ? <><Link to="/dashboard" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-sm font-semibold text-center text-slate-700 dark:text-slate-200 border border-gray-200 dark:border-slate-700 rounded-xl">Trang cua toi</Link><button onClick={() => { setMobileMenuOpen(false); void handleLogout(); }} className="px-4 py-3 text-sm font-semibold text-center text-white bg-primary rounded-xl">Dang xuat</button></> : <><Link to="/login" className="px-4 py-3 text-sm font-semibold text-center text-slate-700 dark:text-slate-200 border border-gray-200 dark:border-slate-700 rounded-xl">{t('nav.signIn')}</Link><Link to="/register" className="px-4 py-3 text-sm font-semibold text-center text-white bg-primary rounded-xl">{t('nav.signUp')}</Link></>}
             </div>
           </div>
         </div>
