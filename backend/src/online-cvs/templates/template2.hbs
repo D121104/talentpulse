@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV - {{fullName}}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.4; color: #333; background: white; }
+    .cv-container { max-width: 850px; margin: 0 auto; padding: 30px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #333; }
+    .header-left { flex: 1; }
+    .name { font-size: 24pt; font-weight: bold; text-transform: uppercase; margin-bottom: 5px; }
+    .position { font-size: 12pt; color: #666; }
+    .header-right { flex-shrink: 0; }
+    .contact-item { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 5px; font-size: 10pt; white-space: nowrap; }
+    .contact-icon { font-size: 10pt; }
+    .main-content { display: flex; gap: 30px; }
+    .left-column { flex: 1; }
+    .right-column { flex: 1; }
+    .section { margin-bottom: 25px; }
+    .section-title { font-size: 12pt; font-weight: bold; text-transform: uppercase; margin-bottom: 15px; padding-bottom: 5px; border-bottom: 2px solid #333; }
+    .objective { text-align: justify; font-size: 10pt; color: #555; }
+    .timeline-entry { display: flex; gap: 15px; margin-bottom: 15px; }
+    .timeline-left { flex: 0 0 100px; font-size: 9pt; }
+    .timeline-dot { width: 8px; height: 8px; background: #333; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+    .timeline-right { flex: 1; }
+    .company { font-weight: bold; }
+    .date { color: #666; font-size: 9pt; }
+    .position-text { font-style: italic; color: #555; }
+    .description { font-size: 10pt; margin-top: 5px; }
+    .entry { margin-bottom: 15px; }
+    .entry-date { font-size: 9pt; color: #666; }
+    .entry-major { font-style: italic; color: #555; }
+    .entry-title { font-weight: bold; }
+    .entry-description { font-size: 10pt; margin-top: 3px; }
+    .skill-item { padding: 5px 0; border-bottom: 1px dotted #ddd; font-size: 10pt; }
+    .cert-item, .award-item { margin-bottom: 10px; }
+    .cert-date, .award-date { font-size: 9pt; color: #666; }
+    .cert-name, .award-name { font-weight: 500; }
+  </style>
+</head>
+<body>
+  <div class="cv-container">
+    <div class="header">
+      <div class="header-left">
+        <div class="name">{{fullName}}</div>
+        <div class="position">{{position}}</div>
+      </div>
+      <div class="header-right">
+        {{#if phone}}<div class="contact-item"><span class="contact-icon">📞Số điện thoại: </span>{{phone}}</div>{{/if}}
+        {{#if email}}<div class="contact-item"><span class="contact-icon">✉️Email: </span>{{email}}</div>{{/if}}
+        {{#if address}}<div class="contact-item"><span class="contact-icon">📍Địa chỉ hiện tại: </span>{{address}}</div>{{/if}}
+      </div>
+    </div>
+
+    {{#if careerObjective}}
+    <div class="section">
+      <div class="section-title">MỤC TIÊU NGHỀ NGHIỆP</div>
+      <div class="objective">{{careerObjective}}</div>
+    </div>
+    {{/if}}
+
+    {{#if workExperience.length}}
+    <div class="section">
+      <div class="section-title">KINH NGHIỆM LÀM VIỆC</div>
+      {{#each workExperience}}
+      <div class="timeline-entry">
+        <div class="timeline-left">
+          <div class="company">{{this.companyName}}</div>
+          <div class="date">{{this.startDate}} - {{this.endDate}}</div>
+        </div>
+        <div class="timeline-dot"></div>
+        <div class="timeline-right">
+          <div class="position-text">{{this.position}}</div>
+          <div class="description">{{this.description}}</div>
+        </div>
+      </div>
+      {{/each}}
+    </div>
+    {{/if}}
+
+    <div class="main-content">
+      <div class="left-column">
+        {{#if education.length}}
+        <div class="section">
+          <div class="section-title">HỌC VẤN</div>
+          {{#each education}}
+          <div class="entry">
+            <div class="entry-date">{{this.startDate}} - {{this.endDate}}</div>
+            <div class="entry-major">{{this.major}}</div>
+            <div class="entry-title">{{this.schoolName}}</div>
+            <div class="entry-description">{{this.description}}</div>
+          </div>
+          {{/each}}
+        </div>
+        {{/if}}
+
+        {{#if certificates.length}}
+        <div class="section">
+          <div class="section-title">CHỨNG CHỈ</div>
+          {{#each certificates}}
+          <div class="cert-item">
+            <div class="cert-date">{{this.date}}</div>
+            <div class="cert-name">{{this.name}}</div>
+          </div>
+          {{/each}}
+        </div>
+        {{/if}}
+      </div>
+
+      <div class="right-column">
+        {{#if skills.length}}
+        <div class="section">
+          <div class="section-title">KỸ NĂNG</div>
+          {{#each skills}}
+          <div class="skill-item">{{this.name}}</div>
+          {{/each}}
+        </div>
+        {{/if}}
+
+        {{#if awards.length}}
+        <div class="section">
+          <div class="section-title">DANH HIỆU VÀ GIẢI THƯỞNG</div>
+          {{#each awards}}
+          <div class="award-item">
+            <div class="award-date">{{this.date}}</div>
+            <div class="award-name">{{this.name}}</div>
+          </div>
+          {{/each}}
+        </div>
+        {{/if}}
+      </div>
+    </div>
+  </div>
+</body>
+</html>
