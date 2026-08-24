@@ -86,6 +86,7 @@ export const fileUploadApi = {
 
     const response = await fetch(`${API_URL}/files/upload`, {
       method: 'POST',
+      credentials: 'include',
       body: formData,
       headers: {
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
@@ -112,6 +113,7 @@ export const fileUploadApi = {
 
     const response = await fetch(`${API_URL}/files/upload-image`, {
       method: 'POST',
+      credentials: 'include',
       body: formData,
       headers: {
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),

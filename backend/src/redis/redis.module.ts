@@ -13,6 +13,11 @@ import * as redisStore from 'cache-manager-redis-store';
         host: configService.get<string>('REDIS_HOST') || 'localhost',
         port: configService.get<number>('REDIS_PORT') || 6379,
         password: configService.get<string>('REDIS_PASSWORD') || undefined,
+        // cache-manager-redis-store@2 uses node-redis v3 options.
+        tls:
+          configService.get<string>('REDIS_TLS') === 'true'
+            ? {}
+            : undefined,
         ttl: 60 * 60, // 1 hour default
       }),
       inject: [ConfigService],
