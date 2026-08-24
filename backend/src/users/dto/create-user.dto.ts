@@ -6,6 +6,7 @@ import {
   IsNotEmpty,
   IsObject,
   IsOptional,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 import { Role } from 'src/decorator/customize';
@@ -38,6 +39,7 @@ export class RegisterUserDto {
     description: 'The password of the user',
   })
   @IsNotEmpty({ message: 'Password cannot be empty' })
+  @MinLength(8, { message: 'Password must be at least 8 characters long' })
   password: string;
 
   @ApiProperty({
@@ -105,6 +107,7 @@ export class CreateUserDto {
     description: 'The password of the user',
   })
   @IsNotEmpty({ message: 'Password cannot be empty' })
+  @MinLength(8, { message: 'Password must be at least 8 characters long' })
   password: string;
 
   @ApiProperty({
