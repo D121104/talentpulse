@@ -76,9 +76,19 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
   async googleAuthRedirect(@Req() request: Request & { user: any }, @Res() response: Response) {
-    const code = await this.authService.createGoogleExchangeCode(request.user);
-    const frontendUrl = this.configService.get<string>('URL_FRONTEND');
-    response.redirect(`${frontendUrl}/auth/google/callback?code=${encodeURIComponent(code)}`);
+    const frontendUrl = (
+      this.configService.get<string>('URL_FRONTEND') || 'http://localhost:5173'
+    ).replace(/\/$/, '');
+
+    try {
+      if (!request.user) {
+        return response.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+      }
+      const code = await this.authService.createGoogleExchangeCode(request.user);
+      return response.redirect(`${frontendUrl}/auth/google/callback?code=${encodeURIComponent(code)}`);
+    } catch (error) {
+      return response.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+    }
   }
 
   @Public()
