@@ -214,4 +214,34 @@ export class CreateOnlineCVDto {
   @ValidateNested({ each: true })
   @Type(() => AwardEntryDto)
   awards?: AwardEntryDto[];
+
+  @ApiPropertyOptional({ type: [String], example: ['objective', 'skills', 'experience', 'education'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  sectionOrder?: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fontFamily?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  themeColor?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fontSize?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  customFormatting?: any;
+
+  @ApiPropertyOptional({ description: 'HTML snapshot of CV canvas for pixel-perfect PDF export' })
+  @IsOptional()
+  @IsString()
+  htmlContent?: string;
 }

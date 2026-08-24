@@ -11,7 +11,6 @@ import { IUser } from 'src/users/users.interface';
 import { CreateOnlineCVDto } from './dto/create-online-cv.dto';
 import { UpdateOnlineCVDto } from './dto/update-online-cv.dto';
 import { FilesService } from 'src/files/files.service';
-import { UserCVsService } from 'src/usercvs/usercvs.service';
 import * as Handlebars from 'handlebars';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -25,7 +24,6 @@ export class OnlineCVsService {
     @InjectRepository(OnlineCV)
     private readonly onlineCVRepo: Repository<OnlineCV>,
     private readonly filesService: FilesService,
-    private readonly userCVsService: UserCVsService,
   ) {
     this.loadPuppeteer();
   }
@@ -40,8 +38,10 @@ export class OnlineCVsService {
 
   // Create a new online CV
   async create(createOnlineCVDto: CreateOnlineCVDto, user: IUser) {
+    const { htmlContent, ...dataToSave } = createOnlineCVDto;
     const newCV = this.onlineCVRepo.create({
-      ...createOnlineCVDto,
+      ...dataToSave,
+      htmlContent,
       userId: user._id,
       createdBy: {
         _id: user._id,
@@ -51,12 +51,14 @@ export class OnlineCVsService {
 
     const savedCV = await this.onlineCVRepo.save(newCV);
 
-    return {
-      _id: savedCV._id,
-      templateType: savedCV.templateType,
-      fullName: savedCV.fullName,
-      createdAt: savedCV.createdAt,
-    };
+    // If htmlContent is provided, generate PDF & upload to Cloudinary
+    try {
+      await this.exportToPdf(savedCV._id, user, htmlContent);
+    } catch (err) {
+      Logger.error('Auto PDF generation on create failed:', err);
+    }
+
+    return await this.findOne(savedCV._id, user);
   }
 
   // Get all online CVs of current user
@@ -88,48 +90,32 @@ export class OnlineCVsService {
 
   // Update online CV
   async update(id: string, updateOnlineCVDto: UpdateOnlineCVDto, user: IUser) {
-    const cv = await this.onlineCVRepo.findOne({
-      where: {
-        _id: id,
-        userId: user._id,
-        isDeleted: false,
-      },
-    });
+    const cv = await this.findOne(id, user);
 
-    if (!cv) {
-      throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
-    }
+    const { htmlContent, ...dataToSave } = updateOnlineCVDto;
 
     await this.onlineCVRepo.update(id, {
-      ...updateOnlineCVDto,
+      ...dataToSave,
+      htmlContent,
       updatedBy: {
         _id: user._id,
         email: user.email,
       },
     });
 
+    // Auto update PDF & upload to Cloudinary
+    try {
+      await this.exportToPdf(id, user, htmlContent);
+    } catch (err) {
+      Logger.error('Auto PDF generation on update failed:', err);
+    }
+
     return await this.findOne(id, user);
   }
 
   // Delete online CV
   async remove(id: string, user: IUser) {
-    const cv = await this.onlineCVRepo.findOne({
-      where: {
-        _id: id,
-        userId: user._id,
-        isDeleted: false,
-      },
-    });
-
-    if (!cv) {
-      throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
-    }
-
-    if (cv.pdfUrl) {
-      throw new BadRequestException(
-        'Không thể xóa CV đã được xuất PDF. Vui lòng xóa bản PDF trước.',
-      );
-    }
+    const cv = await this.findOne(id, user);
 
     await this.onlineCVRepo.update(id, {
       isDeleted: true,
@@ -167,8 +153,8 @@ export class OnlineCVsService {
     return template(cv);
   }
 
-  // Export CV to PDF and save to user's CV list
-  async exportToPdf(id: string, user: IUser) {
+  // Export CV to PDF and save to Cloudinary
+  async exportToPdf(id: string, user: IUser, htmlContent?: string, isPremium?: boolean) {
     const cv = await this.findOne(id, user);
 
     if (!puppeteer) {
@@ -176,19 +162,71 @@ export class OnlineCVsService {
     }
 
     try {
-      const html = this.generateHTML(cv);
+      const contentToUse = htmlContent || cv.htmlContent;
+      let finalHtml = '';
+
+      const watermarkHtml = isPremium
+        ? ''
+        : `
+<div style="position: fixed; bottom: 8px; left: 0; right: 0; text-align: center; font-size: 8pt; color: #94a3b8; font-family: 'Inter', sans-serif; border-top: 1px dashed #cbd5e1; padding-top: 4px; margin: 0 40px; pointer-events: none; z-index: 9999; background: white;">
+  © <strong>talentpulse.vn</strong> &bull; Nền tảng tạo CV & kết nối ứng viên thông minh
+</div>`;
+
+      if (contentToUse && contentToUse.trim().length > 0) {
+        finalHtml = `
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${cv.fullName || 'CV'}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Roboto:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 0;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background-color: #ffffff;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    .print\\:hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  ${contentToUse}
+  ${watermarkHtml}
+</body>
+</html>`;
+      } else {
+        finalHtml = this.generateHTML(cv);
+        if (!isPremium) {
+          finalHtml = finalHtml.replace('</body>', `${watermarkHtml}</body>`);
+        }
+      }
 
       const browser = await puppeteer.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
       const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'networkidle0' });
+      await page.setContent(finalHtml, { waitUntil: 'networkidle0' });
 
       const pdfBuffer = await page.pdf({
         format: 'A4',
         printBackground: true,
-        margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' },
+        margin: { top: '0mm', right: '0mm', bottom: '0mm', left: '0mm' },
       });
 
       await browser.close();
@@ -200,119 +238,16 @@ export class OnlineCVsService {
         'application/pdf',
       );
 
-      // Update online CV with PDF URL
-      await this.onlineCVRepo.update(id, { pdfUrl: uploadResult.url });
-
-      const parsedTextParts = [
-        cv.fullName ? `Họ tên: ${cv.fullName}` : '',
-        cv.position ? `Vị trí: ${cv.position}` : '',
-        cv.phone ? `Điện thoại: ${cv.phone}` : '',
-        cv.email ? `Email: ${cv.email}` : '',
-        cv.address ? `Địa chỉ: ${cv.address}` : '',
-        cv.careerObjective ? `Mục tiêu nghề nghiệp: ${cv.careerObjective}` : '',
-        cv.skills?.length
-          ? `Kỹ năng: ${cv.skills
-              .map(
-                (s: any) =>
-                  s.name + (s.description ? ` (${s.description})` : ''),
-              )
-              .join(', ')}`
-          : '',
-        cv.education?.length
-          ? `Học vấn: ${cv.education
-              .map(
-                (e: any) =>
-                  `${e.schoolName} - ${e.major} (${e.startDate || ''} - ${
-                    e.endDate || ''
-                  })`,
-              )
-              .join('. ')}`
-          : '',
-        cv.workExperience?.length
-          ? `Kinh nghiệm: ${cv.workExperience
-              .map(
-                (w: any) =>
-                  `${w.companyName} - ${w.position} (${w.startDate || ''} - ${
-                    w.endDate || ''
-                  }): ${w.description || ''}`,
-              )
-              .join('. ')}`
-          : '',
-        cv.certificates?.length
-          ? `Chứng chỉ: ${cv.certificates.map((c: any) => c.name).join(', ')}`
-          : '',
-        cv.activities?.length
-          ? `Hoạt động: ${cv.activities
-              .map((a: any) => `${a.organizationName} - ${a.position}`)
-              .join(', ')}`
-          : '',
-        cv.awards?.length
-          ? `Giải thưởng: ${cv.awards.map((a: any) => a.name).join(', ')}`
-          : '',
-      ];
-      const parsedText = parsedTextParts.filter(Boolean).join('\n');
-
-      const skillsArr = (cv.skills || [])
-        .map((s: any) => s.name)
-        .filter(Boolean);
-      const educationArr = (cv.education || [])
-        .map((e: any) => `${e.schoolName || ''} - ${e.major || ''}`)
-        .filter((s: string) => s.trim() !== '-');
-      const experienceArr = (cv.workExperience || [])
-        .map(
-          (w: any) =>
-            `${w.companyName || ''} - ${w.position || ''}: ${
-              w.description || ''
-            }`,
-        )
-        .filter(Boolean);
-      const certificatesArr = (cv.certificates || [])
-        .map((c: any) => c.name)
-        .filter(Boolean);
-
-      const existingUserCV = await this.userCVsService.findByOnlineCvId(
-        id,
-        user,
-      );
-
-      if (existingUserCV) {
-        await this.userCVsService.update(
-          existingUserCV._id.toString(),
-          {
-            url: uploadResult.url,
-            title: `${cv.fullName} - ${
-              cv.templateType === 'template1' ? 'Mẫu cơ bản' : 'Mẫu hiện đại'
-            }`,
-            parsedText,
-            skills: skillsArr,
-            education: educationArr,
-            experience: experienceArr,
-            certificates: certificatesArr,
-          },
-          user,
-        );
-      } else {
-        await this.userCVsService.create(
-          {
-            url: uploadResult.url,
-            title: `${cv.fullName} - ${
-              cv.templateType === 'template1' ? 'Mẫu cơ bản' : 'Mẫu hiện đại'
-            }`,
-            onlineCvId: id,
-            parsedText,
-            skills: skillsArr,
-            education: educationArr,
-            experience: experienceArr,
-            certificates: certificatesArr,
-          },
-          user,
-        );
-      }
+      // Update online CV with PDF URL and htmlContent
+      await this.onlineCVRepo.update(id, {
+        pdfUrl: uploadResult.url,
+        ...(contentToUse ? { htmlContent: contentToUse } : {}),
+      });
 
       return {
         _id: cv._id,
         pdfUrl: uploadResult.url,
-        message: 'Xuất PDF thành công và đã lưu vào danh sách CV',
+        message: 'Xuất PDF thành công',
       };
     } catch (error) {
       console.error('PDF generation error:', error);

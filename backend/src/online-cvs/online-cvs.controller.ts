@@ -72,11 +72,15 @@ export class OnlineCVsController {
 
   @UseGuards(JwtAuthGuard)
   @Post(':id/export')
-  @ApiOperation({ summary: 'Export online CV to PDF and save to user CVs' })
+  @ApiOperation({ summary: 'Export online CV to PDF' })
   @ApiBearerAuth()
   @ResponseMessage('Xuất CV thành PDF')
-  exportToPdf(@Param('id') id: string, @User() user: IUser) {
-    return this.onlineCVsService.exportToPdf(id, user);
+  exportToPdf(
+    @Param('id') id: string,
+    @Body() body: { htmlContent?: string; isPremium?: boolean },
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.exportToPdf(id, user, body?.htmlContent, body?.isPremium);
   }
 
   @UseGuards(JwtAuthGuard)

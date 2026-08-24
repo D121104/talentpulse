@@ -1,0 +1,19 @@
+FROM public.ecr.aws/lambda/nodejs:20 AS build
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+COPY package.json package-lock.json nest-cli.json tsconfig.json tsconfig.build.json ./
+RUN npm ci --include=dev
+
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+FROM public.ecr.aws/lambda/nodejs:20
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+COPY --from=build ${LAMBDA_TASK_ROOT}/dist ./dist
+COPY --from=build ${LAMBDA_TASK_ROOT}/node_modules ./node_modules
+COPY --from=build ${LAMBDA_TASK_ROOT}/package.json ./package.json
+
+CMD ["dist/lambda.handler"]

@@ -26,6 +26,8 @@ import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
 
+const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
+
 @Module({
   imports: [
     // Config
@@ -42,8 +44,8 @@ import { OnlineCVsModule } from './online-cvs/online-cvs.module';
       },
     ]),
 
-    // Schedule (Cron jobs)
-    ScheduleModule.forRoot(),
+    // Lambda executions are short lived, so cron jobs run in a separate worker.
+    ...(runBackgroundJobs ? [ScheduleModule.forRoot()] : []),
 
     // Bull Queue with Redis
     BullModule.forRootAsync({
@@ -53,6 +55,10 @@ import { OnlineCVsModule } from './online-cvs/online-cvs.module';
           host: configService.get<string>('REDIS_HOST') || 'localhost',
           port: configService.get<number>('REDIS_PORT') || 6379,
           password: configService.get<string>('REDIS_PASSWORD') || undefined,
+          tls:
+            configService.get<string>('REDIS_TLS') === 'true'
+              ? {}
+              : undefined,
         },
       }),
       inject: [ConfigService],
@@ -61,6 +67,7 @@ import { OnlineCVsModule } from './online-cvs/online-cvs.module';
     // PostgreSQL with TypeORM
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
+      inject: [ConfigService],
       useFactory: async (configService: ConfigService) => ({
         type: 'postgres',
         host: configService.get<string>('DB_HOST', 'localhost'),
@@ -68,11 +75,17 @@ import { OnlineCVsModule } from './online-cvs/online-cvs.module';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres123'),
         database: configService.get<string>('DB_DATABASE', 'recruitment_db'),
+
         autoLoadEntities: true,
+
         synchronize:
           configService.get<string>('DB_SYNCHRONIZE', 'true') === 'true',
+
+        ssl:
+          process.env.NODE_ENV === 'production'
+            ? { rejectUnauthorized: false }
+            : false,
       }),
-      inject: [ConfigService],
     }),
 
     // Feature modules
