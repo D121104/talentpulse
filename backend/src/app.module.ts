@@ -26,6 +26,8 @@ import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
 
+const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
+
 @Module({
   imports: [
     // Config
@@ -42,8 +44,8 @@ import { OnlineCVsModule } from './online-cvs/online-cvs.module';
       },
     ]),
 
-    // Schedule (Cron jobs)
-    ScheduleModule.forRoot(),
+    // Lambda executions are short lived, so cron jobs run in a separate worker.
+    ...(runBackgroundJobs ? [ScheduleModule.forRoot()] : []),
 
     // Bull Queue with Redis
     BullModule.forRootAsync({
