@@ -11,15 +11,15 @@ import { AuthController } from './auth.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { GoogleStrategy } from './passport/google.strategy';
-import { CompaniesModule } from 'src/companies/companies.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
+import { RedisModule } from 'src/redis/redis.module';
 
 @Module({
   imports: [
     UsersModule,
-    CompaniesModule,
     PassportModule,
     NotificationsModule,
+    RedisModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

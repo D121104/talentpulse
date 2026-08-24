@@ -58,3 +58,25 @@ coverage/
 *.tmp
 *.temp
 scratch/
+
+# Local agent configuration and state
+.kilo/
+
+# Generated Graphify artifacts and cache
+graphify-out/
+
+# Local plans and planning notes
+*PLAN*.md
+*plan*.md
+
+# TypeScript and lint caches
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# Certificates and private keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx

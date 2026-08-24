@@ -1,12 +1,18 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { IUser } from 'src/users/users.interface';
+import { User } from 'src/users/entities/user.entity';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(private configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(User) private readonly userRepo: Repository<User>,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       secretOrKey: configService.get<string>('JWT_SECRET'),
@@ -14,16 +20,25 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: IUser) {
-    const { _id, name, email, role, company, age, gender, address } = payload;
+    const user = await this.userRepo.findOne({ where: { _id: payload._id } });
+    if (!user || user.isDeleted || user.deletedAt) {
+      throw new UnauthorizedException('Tài khoản không tồn tại');
+    }
+    if (user.isLocked) {
+      throw new ForbiddenException(user.lockedReason || 'Tài khoản đã bị khóa');
+    }
+
     return {
-      _id,
-      name,
-      email,
-      role,
-      company,
-      age,
-      gender,
-      address,
-    };
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      company: user.company,
+      age: user.age,
+      gender: user.gender,
+      address: user.address,
+      avatar: user.avatar,
+      isApproved: user.isApproved,
+    } as IUser;
   }
 }

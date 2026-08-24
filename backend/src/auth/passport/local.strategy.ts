@@ -3,7 +3,6 @@ import { PassportStrategy } from '@nestjs/passport';
 import {
   Injectable,
   UnauthorizedException,
-  ForbiddenException,
 } from '@nestjs/common';
 import { AuthService } from '../auth.service';
 
@@ -11,7 +10,7 @@ import { AuthService } from '../auth.service';
 export class LocalStrategy extends PassportStrategy(Strategy) {
   constructor(private authService: AuthService) {
     super({
-      usernameField: 'username',
+      usernameField: 'email',
     });
   }
 
@@ -19,13 +18,6 @@ export class LocalStrategy extends PassportStrategy(Strategy) {
     const user = await this.authService.validateUser(username, password);
     if (!user) {
       throw new UnauthorizedException('Email hoặc mật khẩu không đúng!');
-    }
-
-    // Check if user is locked
-    if (user.isLocked) {
-      throw new ForbiddenException(
-        'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Admin để biết thêm chi tiết.',
-      );
     }
 
     return user;

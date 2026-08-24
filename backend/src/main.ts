@@ -66,6 +66,7 @@ async function bootstrap() {
     origin: [
       configService.get<string>('URL_FRONTEND'),
       'http://localhost:3000',
+      'http://localhost:5173',
       'http://localhost:8081',
       'http://192.168.1.238:8081',
       'exp://192.168.1.238:8081',
