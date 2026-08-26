@@ -23,6 +23,7 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { RedisService } from 'src/redis/redis.service';
+import { MailService } from 'src/mail/mail.service';
 
 interface GoogleProfile {
   email: string;
@@ -41,6 +42,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly notificationsService: NotificationsService,
     private readonly redisService: RedisService,
+    private readonly mailService: MailService,
   ) {}
 
   async validateUser(email: string, password: string): Promise<IUser | null> {
@@ -80,6 +82,23 @@ export class AuthService {
     return this.createSession(currentUser, response);
   }
 
+  private generateVerificationToken(user: User): string {
+    const secret =
+      this.configService.get<string>('JWT_ACCESS_TOKEN_SECRET') ||
+      'talentpulse_verification_secret_key';
+    return this.jwtService.sign(
+      {
+        sub: user._id,
+        email: user.email,
+        type: 'account_verification',
+      },
+      {
+        secret,
+        expiresIn: '24h',
+      },
+    );
+  }
+
   async register(createUserDto: CreateUserDto) {
     const email = this.normalizeEmail(createUserDto.email);
     await this.ensureEmailIsAvailable(email);
@@ -89,10 +108,133 @@ export class AuthService {
       email,
       password: this.usersService.hashPassword(createUserDto.password),
       role: Role.USER,
+      isVerified: false,
     });
     const savedUser = await this.userRepo.save(newUser);
 
-    return { user: this.serializeUser(savedUser) };
+    const verificationToken = this.generateVerificationToken(savedUser);
+    savedUser.verificationToken = verificationToken;
+    await this.userRepo.save(savedUser);
+
+    // Send account verification email asynchronously
+    this.mailService
+      .sendAccountVerificationEmail(
+        savedUser.email,
+        savedUser.name || 'Bạn',
+        verificationToken,
+      )
+      .catch((err) => {
+        console.error('Failed to send verification email on register:', err);
+      });
+
+    return {
+      user: this.serializeUser(savedUser),
+      message: 'Đăng ký thành công! Vui lòng kiểm tra email để xác thực tài khoản.',
+    };
+  }
+
+  async verifyAccount(token: string) {
+    if (!token || typeof token !== 'string') {
+      throw new BadRequestException('Mã xác thực không hợp lệ');
+    }
+
+    const secret =
+      this.configService.get<string>('JWT_ACCESS_TOKEN_SECRET') ||
+      'talentpulse_verification_secret_key';
+
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(token.trim(), { secret });
+    } catch {
+      // Fallback: check if it's a legacy hex token
+      const userWithHex = await this.userRepo.findOne({
+        where: { verificationToken: token.trim(), isDeleted: false },
+      });
+      if (userWithHex) {
+        userWithHex.isVerified = true;
+        userWithHex.verifiedAt = new Date();
+        userWithHex.verificationToken = null as any;
+        const saved = await this.userRepo.save(userWithHex);
+        return {
+          message: 'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
+          user: this.serializeUser(saved),
+        };
+      }
+      throw new BadRequestException(
+        'Liên kết xác thực không hợp lệ hoặc đã hết hạn (sau 24h). Vui lòng yêu cầu gửi lại email mới.',
+      );
+    }
+
+    if (payload.type !== 'account_verification' || !payload.sub || !payload.email) {
+      throw new BadRequestException('Mã xác thực không đúng định dạng bảo mật.');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { _id: payload.sub, email: payload.email, isDeleted: false },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Không tìm thấy tài khoản người dùng tương ứng.');
+    }
+
+    // IDEMPOTENCY: If user is already verified, return success safely (avoids duplicate call failures)
+    if (user.isVerified) {
+      return {
+        message: 'Tài khoản của bạn đã được xác thực thành công.',
+        user: this.serializeUser(user),
+        alreadyVerified: true,
+      };
+    }
+
+    // Check if the token was superseded by a newer resend request
+    if (user.verificationToken && user.verificationToken !== token.trim()) {
+      throw new BadRequestException(
+        'Liên kết xác thực này đã bị thay thế bởi yêu cầu gửi lại mới nhất. Vui lòng kiểm tra email mới nhất.',
+      );
+    }
+
+    user.isVerified = true;
+    user.verifiedAt = new Date();
+    user.verificationToken = null as any;
+
+    const updatedUser = await this.userRepo.save(user);
+
+    return {
+      message: 'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
+      user: this.serializeUser(updatedUser),
+    };
+  }
+
+  async resendVerification(email?: string, userId?: string) {
+    let user: User | null = null;
+
+    if (userId) {
+      user = await this.userRepo.findOne({ where: { _id: userId, isDeleted: false } });
+    } else if (email) {
+      user = await this.findUserByEmail(email);
+    }
+
+    if (!user) {
+      throw new BadRequestException('Không tìm thấy tài khoản người dùng với email này.');
+    }
+
+    if (user.isVerified) {
+      throw new BadRequestException('Tài khoản này đã được xác thực thành công trước đó.');
+    }
+
+    const verificationToken = this.generateVerificationToken(user);
+    user.verificationToken = verificationToken;
+    await this.userRepo.save(user);
+
+    await this.mailService.sendAccountVerificationEmail(
+      user.email,
+      user.name || 'Bạn',
+      verificationToken,
+    );
+
+    return {
+      message: 'Đã gửi lại email xác thực thành công. Vui lòng kiểm tra hòm thư của bạn.',
+    };
   }
 
   async registerHr(createHrDto: CreateHrDto) {
@@ -149,6 +291,8 @@ export class AuthService {
           name: [profile.firstName, profile.lastName].filter(Boolean).join(' '),
           avatar: profile.picture,
           role: Role.USER,
+          isVerified: true, // Google OAuth automatically verifies the Gmail address
+          verifiedAt: new Date(),
           password: this.usersService.hashPassword(
             crypto.randomBytes(32).toString('hex'),
           ),
@@ -158,6 +302,11 @@ export class AuthService {
       this.assertUserCanAuthenticate(user);
 
       const updates: Partial<User> = {};
+      if (!user.isVerified) {
+        updates.isVerified = true;
+        updates.verifiedAt = user.verifiedAt || new Date();
+        updates.verificationToken = null as any;
+      }
       if (!user.name && (profile.firstName || profile.lastName)) {
         updates.name = [profile.firstName, profile.lastName]
           .filter(Boolean)
@@ -168,6 +317,7 @@ export class AuthService {
       }
       if (Object.keys(updates).length > 0) {
         await this.userRepo.update(user._id, updates);
+        user = { ...user, ...updates };
       }
     }
 
@@ -277,6 +427,16 @@ export class AuthService {
       avatar: user.avatar,
       company: user.company,
       isApproved: user.isApproved,
+      isPremium: user.isPremium || false,
+      premiumPlan: user.premiumPlan || 'FREE',
+      premiumExpiresAt: user.premiumExpiresAt || undefined,
+      isVerified: user.isVerified || false,
+      verifiedAt: user.verifiedAt || undefined,
+      lastBoostedAt: user.lastBoostedAt || undefined,
+      boostExpiresAt: user.boostExpiresAt || undefined,
+      isJobSeeking: user.isJobSeeking ?? true,
+      isJobRecommendation: user.isJobRecommendation ?? true,
+      allowRecruiterSearch: user.allowRecruiterSearch ?? true,
     };
   }
 

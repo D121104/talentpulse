@@ -57,7 +57,7 @@ export function LanguageSwitcher({ variant = 'dropdown', className = '' }: Langu
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-800/80 rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md transition-all cursor-pointer shadow-sm"
+        className="flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-700/60 dark:hover:text-white rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-white/80 dark:bg-slate-800/80 backdrop-blur-md transition-colors duration-200 cursor-pointer shadow-xs"
         aria-label="Switch language"
       >
         <Globe className="w-4 h-4 text-slate-500 dark:text-slate-400" />

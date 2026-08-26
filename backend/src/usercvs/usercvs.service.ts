@@ -230,6 +230,28 @@ export class UserCVsService {
     return { message: 'Đã đặt làm CV chính' };
   }
 
+  // Toggle allow recruiter to search this CV
+  async toggleSearchable(id: string, user: IUser, isSearchable?: boolean) {
+    const cv = await this.findOne(id, user);
+    const newSearchable = isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
+
+    await this.userCVRepo.update(id, {
+      isSearchable: newSearchable,
+      updatedBy: {
+        _id: user._id,
+        email: user.email,
+      },
+    });
+
+    return {
+      _id: cv._id,
+      isSearchable: newSearchable,
+      message: newSearchable
+        ? 'Đã bật cho phép Nhà Tuyển Dụng tìm kiếm CV này'
+        : 'Đã tắt cho phép Nhà Tuyển Dụng tìm kiếm CV này',
+    };
+  }
+
   async remove(id: string, user: IUser) {
     const cv = await this.findOne(id, user);
     await this.userCVRepo.update(id, {

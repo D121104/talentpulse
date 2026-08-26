@@ -57,6 +57,9 @@ export class OnlineCV {
   @Column({ enum: ['template1', 'template2'] })
   templateType: string;
 
+  @Column({ nullable: true })
+  title: string;
+
   @Column()
   fullName: string;
 
@@ -129,6 +132,12 @@ export class OnlineCV {
   @ManyToOne(() => User, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;
+
+  @Column({ default: true })
+  isSearchable: boolean;
+
+  @Column({ default: false })
+  isPrimary: boolean;
 
   @Column({ default: false })
   isDeleted: boolean;

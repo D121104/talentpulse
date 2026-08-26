@@ -7,6 +7,7 @@ import {
   IsNotEmptyObject,
   IsNumber,
   IsObject,
+  IsOptional,
   IsString,
   ValidateNested,
 } from 'class-validator';
@@ -56,4 +57,13 @@ export class CreateJobDto {
   @IsBoolean()
   @IsNotEmpty()
   isActive: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  isHot?: boolean;
+
+  @IsDate()
+  @IsOptional()
+  @Transform(({ value }) => (value ? new Date(value) : undefined))
+  boostedAt?: Date;
 }

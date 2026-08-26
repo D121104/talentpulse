@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -7,6 +8,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OnlineCV } from './entities/online-cv.entity';
+import { User } from 'src/users/entities/user.entity';
+import { UsersService } from 'src/users/users.service';
 import { IUser } from 'src/users/users.interface';
 import { CreateOnlineCVDto } from './dto/create-online-cv.dto';
 import { UpdateOnlineCVDto } from './dto/update-online-cv.dto';
@@ -23,6 +26,9 @@ export class OnlineCVsService {
   constructor(
     @InjectRepository(OnlineCV)
     private readonly onlineCVRepo: Repository<OnlineCV>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+    private readonly usersService: UsersService,
     private readonly filesService: FilesService,
   ) {
     this.loadPuppeteer();
@@ -38,9 +44,53 @@ export class OnlineCVsService {
 
   // Create a new online CV
   async create(createOnlineCVDto: CreateOnlineCVDto, user: IUser) {
+    const userInDb = await this.userRepo.findOne({ where: { _id: user._id } });
+    if (!userInDb) {
+      throw new NotFoundException('Không tìm thấy tài khoản người dùng');
+    }
+
+    const isPremium = this.usersService.isCandidatePremium(userInDb);
+    const isVerified = userInDb.isVerified || false;
+
+    // 1. Enforce max CV limits: Thường (3), Đã xác thực (6), Premium (Không giới hạn)
+    const maxLimit = isPremium ? 9999 : isVerified ? 6 : 3;
+    const currentCount = await this.onlineCVRepo.count({
+      where: { userId: user._id, isDeleted: false },
+    });
+
+    if (currentCount >= maxLimit) {
+      const upgradeMsg = isVerified
+        ? 'Vui lòng nâng cấp gói Candidate Premium để tạo không giới hạn CV.'
+        : 'Vui lòng xác thực tài khoản qua Email (để nâng hạn mức lên 6 CV) hoặc nâng cấp gói Candidate Premium (không giới hạn CV).';
+      throw new ForbiddenException(
+        `Bạn đã đạt giới hạn tối đa ${maxLimit} CV cho cấp tài khoản hiện tại. ${upgradeMsg}`,
+      );
+    }
+
+    // 2. Enforce Premium Template Lock: Template khác template1 là mẫu Cao Cấp
+    const isPremiumTemplate =
+      createOnlineCVDto.templateType &&
+      createOnlineCVDto.templateType !== 'template1';
+
+    if (isPremiumTemplate && !isPremium) {
+      throw new ForbiddenException(
+        'Mẫu CV Cao Cấp này chỉ dành riêng cho tài khoản Candidate Premium. Vui lòng nâng cấp gói Premium để tạo CV với mẫu này.',
+      );
+    }
+
+    const isPrimary = currentCount === 0 || createOnlineCVDto.isPrimary === true;
+
+    if (isPrimary) {
+      await this.onlineCVRepo.update(
+        { userId: user._id, isPrimary: true },
+        { isPrimary: false },
+      );
+    }
+
     const { htmlContent, ...dataToSave } = createOnlineCVDto;
     const newCV = this.onlineCVRepo.create({
       ...dataToSave,
+      isPrimary,
       htmlContent,
       userId: user._id,
       createdBy: {
@@ -65,7 +115,7 @@ export class OnlineCVsService {
   async findByUser(user: IUser) {
     const cvs = await this.onlineCVRepo.find({
       where: { userId: user._id, isDeleted: false },
-      order: { createdAt: 'DESC' },
+      order: { isPrimary: 'DESC', createdAt: 'DESC' },
     });
     Logger.log(`Found ${cvs.length} online CV(s) for user ${user.email}`);
     return cvs;
@@ -91,6 +141,20 @@ export class OnlineCVsService {
   // Update online CV
   async update(id: string, updateOnlineCVDto: UpdateOnlineCVDto, user: IUser) {
     const cv = await this.findOne(id, user);
+
+    // Enforce Premium Template Lock on update
+    if (
+      updateOnlineCVDto.templateType &&
+      updateOnlineCVDto.templateType !== 'template1'
+    ) {
+      const userInDb = await this.userRepo.findOne({ where: { _id: user._id } });
+      const isPremium = this.usersService.isCandidatePremium(userInDb);
+      if (!isPremium) {
+        throw new ForbiddenException(
+          'Mẫu CV Cao Cấp này chỉ dành riêng cho tài khoản Candidate Premium. Vui lòng nâng cấp gói Premium để sử dụng mẫu này.',
+        );
+      }
+    }
 
     const { htmlContent, ...dataToSave } = updateOnlineCVDto;
 
@@ -129,6 +193,52 @@ export class OnlineCVsService {
     return await this.onlineCVRepo.softDelete(id);
   }
 
+  // Toggle allow recruiter to search this online CV
+  async toggleSearchable(id: string, user: IUser, isSearchable?: boolean) {
+    const cv = await this.findOne(id, user);
+    const newSearchable = isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
+
+    await this.onlineCVRepo.update(id, {
+      isSearchable: newSearchable,
+      updatedBy: {
+        _id: user._id,
+        email: user.email,
+      },
+    });
+
+    return {
+      _id: cv._id,
+      isSearchable: newSearchable,
+      message: newSearchable
+        ? 'Đã bật cho phép Nhà Tuyển Dụng tìm kiếm CV này'
+        : 'Đã tắt cho phép Nhà Tuyển Dụng tìm kiếm CV này',
+    };
+  }
+
+  // Set an online CV as primary
+  async setPrimary(id: string, user: IUser) {
+    const cv = await this.findOne(id, user);
+
+    await this.onlineCVRepo.update(
+      { userId: user._id, isPrimary: true },
+      { isPrimary: false },
+    );
+
+    await this.onlineCVRepo.update(id, {
+      isPrimary: true,
+      updatedBy: {
+        _id: user._id,
+        email: user.email,
+      },
+    });
+
+    return {
+      _id: cv._id,
+      isPrimary: true,
+      message: 'Đã đặt làm CV chính thành công',
+    };
+  }
+
   // Resolve templates directory (dist or src fallback)
   private getTemplatesDir(): string {
     const compiledDir = join(__dirname, 'templates');
@@ -161,14 +271,29 @@ export class OnlineCVsService {
       throw new BadRequestException('PDF generation is not available');
     }
 
+    // Verify premium directly from database to prevent watermark bypass
+    const userInDb = await this.userRepo.findOne({ where: { _id: user._id } });
+    const userHasPremium = this.usersService.isCandidatePremium(userInDb);
+    // Watermark is ONLY removed when explicitly downloading with Premium mode (isPremium === true)
+    const shouldRemoveWatermark = Boolean(isPremium) && userHasPremium;
+
     try {
-      const contentToUse = htmlContent || cv.htmlContent;
+      let contentToUse = htmlContent || cv.htmlContent;
       let finalHtml = '';
 
-      const watermarkHtml = isPremium
+      if (shouldRemoveWatermark && contentToUse) {
+        // Strip any existing watermark blocks from HTML specifically for this Premium download
+        contentToUse = contentToUse
+          .replace(/<div[^>]*class="[^"]*cv-watermark[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+          .replace(/<div[^>]*data-watermark="true"[^>]*>[\s\S]*?<\/div>/gi, '')
+          .replace(/<div[^>]*>[\s\S]*?Được tạo bởi[\s\S]*?TalentPulse[\s\S]*?<\/div>/gi, '')
+          .replace(/<div style="position: fixed; bottom: 8px;[\s\S]*?<\/div>/gi, '');
+      }
+
+      const watermarkHtml = shouldRemoveWatermark
         ? ''
         : `
-<div style="position: fixed; bottom: 8px; left: 0; right: 0; text-align: center; font-size: 8pt; color: #94a3b8; font-family: 'Inter', sans-serif; border-top: 1px dashed #cbd5e1; padding-top: 4px; margin: 0 40px; pointer-events: none; z-index: 9999; background: white;">
+<div class="cv-watermark" style="position: fixed; bottom: 8px; left: 0; right: 0; text-align: center; font-size: 8pt; color: #94a3b8; font-family: 'Inter', sans-serif; border-top: 1px dashed #cbd5e1; padding-top: 4px; margin: 0 40px; pointer-events: none; z-index: 9999; background: white;">
   © <strong>talentpulse.vn</strong> &bull; Nền tảng tạo CV & kết nối ứng viên thông minh
 </div>`;
 
@@ -202,16 +327,17 @@ export class OnlineCVsService {
     .print\\:hidden {
       display: none !important;
     }
+    ${shouldRemoveWatermark ? '.cv-watermark, [data-watermark] { display: none !important; }' : ''}
   </style>
 </head>
 <body>
   ${contentToUse}
-  ${watermarkHtml}
+  ${!contentToUse.includes('talentpulse.vn') && !shouldRemoveWatermark ? watermarkHtml : ''}
 </body>
 </html>`;
       } else {
         finalHtml = this.generateHTML(cv);
-        if (!isPremium) {
+        if (!shouldRemoveWatermark) {
           finalHtml = finalHtml.replace('</body>', `${watermarkHtml}</body>`);
         }
       }

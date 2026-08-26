@@ -5,13 +5,14 @@ import { CompaniesController } from './companies.controller';
 import { Company } from './entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
 import { User } from 'src/users/entities/user.entity';
+import { Application } from 'src/applications/entities/application.entity';
 import { UsersModule } from 'src/users/users.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Company, Job, User]),
+    TypeOrmModule.forFeature([Company, Job, User, Application]),
     RedisModule,
     forwardRef(() => UsersModule),
     NotificationsModule,
@@ -21,3 +22,4 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
   exports: [CompaniesService, CompaniesModule],
 })
 export class CompaniesModule {}
+

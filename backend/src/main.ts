@@ -1,12 +1,31 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { TransformInterceptor } from './core/transform.interceptor';
+import cookieParser from 'cookie-parser';
 import serveStatic from 'serve-static';
 import { join } from 'path';
 import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { v4 as uuidv4 } from 'uuid';
+import { types } from 'pg';
 import { AppModule } from './app.module';
-import { configureHttpApp } from './bootstrap';
+
+// Configure PostgreSQL type parsers for TIMESTAMP (OID 1114) and TIMESTAMPTZ (OID 1184)
+// TypeORM writes JavaScript Date objects to PostgreSQL as UTC strings ('YYYY-MM-DD HH:mm:ss.ms').
+// Without this parser, node-pg interprets TIMESTAMP WITHOUT TIME ZONE as local time,
+// which causes a double-offset shift when serialized to ISO JSON (e.g. subtracting 7 hours in GMT+7).
+types.setTypeParser(1114, (stringValue: string) => {
+  if (!stringValue) return null;
+  const isoStr = stringValue.includes('T') ? stringValue : stringValue.replace(' ', 'T');
+  return new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
+});
+
+types.setTypeParser(1184, (stringValue: string) => {
+  if (!stringValue) return null;
+  return new Date(stringValue);
+});
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -16,9 +35,60 @@ async function bootstrap() {
   app.setBaseViewsDir(join(__dirname, '..', 'public'));
   app.setViewEngine('hbs');
 
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+    }),
+  );
+  app.useGlobalInterceptors(new TransformInterceptor());
+
   app.use(serveStatic(join(__dirname, '..', 'public')));
-  app.use(helmet());
-  configureHttpApp(app, configService);
+
+  // Set nonce for CSP policy
+  app.use((req, res, next) => {
+    res.locals.nonce = uuidv4();
+    next();
+  });
+
+  app.setGlobalPrefix('api');
+  app.use(cookieParser());
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: ['1'],
+  });
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: [
+            "'self'",
+            (req, res: any) => `'nonce-${res.locals.nonce}'`,
+          ],
+          styleSrc: ["'self'"],
+          imgSrc: ["'self'", 'data:'],
+          connectSrc: ["'self'"],
+          fontSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          mediaSrc: ["'self'"],
+          frameSrc: ["'self'"],
+        },
+      },
+    }),
+  );
+
+  app.enableCors({
+    origin: [
+      configService.get<string>('URL_FRONTEND'),
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:8081',
+      'http://192.168.1.238:8081',
+      'exp://192.168.1.238:8081',
+    ],
+    credentials: true,
+  });
 
   // Swagger documentation
   const config = new DocumentBuilder()

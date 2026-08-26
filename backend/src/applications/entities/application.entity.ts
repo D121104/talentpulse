@@ -16,6 +16,7 @@ import { Job } from 'src/jobs/entities/job.entity';
 export enum ApplicationStatus {
   PENDING = 'PENDING',
   REVIEWING = 'REVIEWING',
+  CONSIDERING = 'CONSIDERING',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
 }

@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { MailService } from './mail.service';
 import { MailController } from './mail.controller';
+import { MailProcessor } from './mail.processor';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { ConfigService } from '@nestjs/config';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bull';
 import { Subscriber } from 'src/subscribers/entities/subscriber.entity';
 import { Job } from 'src/jobs/entities/job.entity';
 
@@ -23,7 +25,7 @@ import { Job } from 'src/jobs/entities/job.entity';
           },
         },
         defaults: {
-          from: `"No Reply" <${configService.get<string>('EMAIL_AUTH_USER')}>`,
+          from: `"TalentPulse" <${configService.get<string>('EMAIL_AUTH_USER') || 'no-reply@talentpulse.com'}>`,
         },
         template: (() => {
           const compiledDir = join(__dirname, 'templates');
@@ -40,9 +42,12 @@ import { Job } from 'src/jobs/entities/job.entity';
       inject: [ConfigService],
     }),
     TypeOrmModule.forFeature([Subscriber, Job]),
+    BullModule.registerQueue({
+      name: 'mail-queue',
+    }),
   ],
   controllers: [MailController],
-  providers: [MailService],
-  exports: [MailService],
+  providers: [MailService, MailProcessor],
+  exports: [MailService, BullModule],
 })
 export class MailModule {}

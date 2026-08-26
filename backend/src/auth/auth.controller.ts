@@ -122,6 +122,22 @@ export class AuthController {
     return this.authService.resetPassword(body.token, body.password);
   }
 
+  @Public()
+  @ApiOperation({ summary: 'Verify candidate email account' })
+  @Post('verify-account')
+  handleVerifyAccount(@Body() body: { token: string }) {
+    return this.authService.verifyAccount(body.token);
+  }
+
+  @Public()
+  @ApiOperation({ summary: 'Resend candidate account verification email' })
+  @Post('resend-verification')
+  handleResendVerification(
+    @Body() body: { email?: string; userId?: string },
+  ) {
+    return this.authService.resendVerification(body.email, body.userId);
+  }
+
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Logout and revoke the current refresh token' })
   @ApiBearerAuth()

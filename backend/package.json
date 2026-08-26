@@ -22,7 +22,10 @@
     "migration:show": "typeorm-ts-node-commonjs migration:show -d src/database/data-source.ts",
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
-    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/database/data-source.ts"
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/database/data-source.ts",
+    "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
+    "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
+    "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts"
   },
   "dependencies": {
     "@codegenie/serverless-express": "^4.17.1",
@@ -80,7 +83,6 @@
     "@nestjs/cli": "9.4.2",
     "@nestjs/schematics": "9.1.0",
     "@nestjs/testing": "9.0.0",
-    "@types/aws-lambda": "^8.10.162",
     "@types/bcryptjs": "^2.4.6",
     "@types/cache-manager": "^4.0.1",
     "@types/cookie-parser": "^1.4.7",

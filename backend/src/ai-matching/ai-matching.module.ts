@@ -6,8 +6,6 @@ import { CVProcessingService } from './cv-processing.service';
 import { CVProcessingProcessor } from './cv-processing.processor';
 import { CVMatchResult } from './entities/cv-match-result.entity';
 
-const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
-
 @Module({
   imports: [
     TypeOrmModule.forFeature([CVMatchResult]),
@@ -15,11 +13,7 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
       name: 'cv-processing',
     }),
   ],
-  providers: [
-    AIMatchingService,
-    CVProcessingService,
-    ...(runBackgroundJobs ? [CVProcessingProcessor] : []),
-  ],
+  providers: [AIMatchingService, CVProcessingService, CVProcessingProcessor],
   exports: [AIMatchingService, CVProcessingService],
 })
 export class AIMatchingModule {}

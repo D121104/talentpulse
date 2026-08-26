@@ -60,6 +60,9 @@ export class UserCV {
   @Column({ default: false })
   isPrimary: boolean;
 
+  @Column({ default: true })
+  isSearchable: boolean;
+
   @Column({ type: 'uuid' })
   userId: string;
 
