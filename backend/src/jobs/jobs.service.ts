@@ -86,11 +86,11 @@ export class JobsService {
     const current = qs.current ? parseInt(qs.current) : 1;
     const skip = (current - 1) * limit;
 
-    const queryBuilder = this.jobRepo
-      .createQueryBuilder('job')
-      .where("job.company->>'_id' = :companyId", { companyId: companyInDb._id })
-      .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('job.endDate > :now', { now: new Date() });
+    const queryBuilder = this.activeJobQueryService
+      .createNonDeletedQuery()
+      .andWhere("job.company->>'_id' = :companyId", {
+        companyId: companyInDb._id,
+      });
 
     if (sort) {
       for (const [key, value] of Object.entries(sort)) {
@@ -163,10 +163,11 @@ export class JobsService {
     const current = qs.current ? parseInt(qs.current) : 1;
     const skip = (current - 1) * limit;
 
-    const queryBuilder = this.jobRepo
-      .createQueryBuilder('job')
-      .where("job.company->>'_id' = :companyId", { companyId: companyInDb._id })
-      .andWhere('job.isDeleted = :isDeleted', { isDeleted: false });
+    const queryBuilder = this.activeJobQueryService
+      .createNonDeletedQuery()
+      .andWhere("job.company->>'_id' = :companyId", {
+        companyId: companyInDb._id,
+      });
 
     if (name && name.trim()) {
       queryBuilder.andWhere('job.name ILIKE :name', {
@@ -249,12 +250,11 @@ export class JobsService {
 
     if (!isHrPrem && user.role !== Role.ADMIN) {
       const now = new Date();
-      const activeJobsCount = await this.jobRepo
-        .createQueryBuilder('job')
-        .where("job.company->>'_id' = :companyId", { companyId: company._id })
-        .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('job.isActive = :isActive', { isActive: true })
-        .andWhere('job.endDate > :now', { now })
+      const activeJobsCount = await this.activeJobQueryService
+        .createActiveQuery(now)
+        .andWhere("job.company->>'_id' = :companyId", {
+          companyId: company._id,
+        })
         .getCount();
 
       if (activeJobsCount >= maxActiveJobs) {
@@ -440,6 +440,20 @@ export class JobsService {
     return job;
   }
 
+  /**
+   * Internal lookup for authenticated HR/admin workflows. This must not be
+   * used by public candidate reads because it intentionally includes jobs
+   * outside their active date window.
+   */
+  async findOneForInternal(id: string) {
+    const job = await this.activeJobQueryService.findNonDeletedById(id);
+
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+    return job;
+  }
+
   async update(id: string, updateJobDto: UpdateJobDto, user: IUser) {
     const userInDb = await this.usersService.findOneByEmail(user.email);
 
@@ -453,7 +467,7 @@ export class JobsService {
       );
     }
 
-    const currentJob = await this.jobRepo.findOne({ where: { _id: id } });
+    const currentJob = await this.activeJobQueryService.findNonDeletedById(id);
     if (!currentJob) {
       throw new NotFoundException('Job not found');
     }
@@ -495,7 +509,7 @@ export class JobsService {
 
     // Re-process all CVs only when description has changed
     if (descriptionChanged) {
-      const updatedJob = await this.jobRepo.findOne({ where: { _id: id } });
+      const updatedJob = await this.activeJobQueryService.findNonDeletedById(id);
       if (updatedJob) {
         await this.cvProcessingService.reprocessAllCVsForJob(id, {
           name: updatedJob.name,
@@ -512,7 +526,7 @@ export class JobsService {
   async remove(id: string, user: IUser) {
     const userInDb = await this.usersService.findOneByEmail(user.email);
 
-    const job = await this.jobRepo.findOne({ where: { _id: id } });
+    const job = await this.activeJobQueryService.findNonDeletedById(id);
     if (!job) {
       throw new NotFoundException('Job not found');
     }
@@ -552,9 +566,7 @@ export class JobsService {
       );
     }
 
-    const job = await this.jobRepo.findOne({
-      where: { _id: id, isDeleted: false },
-    });
+    const job = await this.activeJobQueryService.findNonDeletedById(id);
     if (!job) {
       throw new NotFoundException('Job not found');
     }

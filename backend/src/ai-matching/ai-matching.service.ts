@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import axios from 'axios';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 
 // Dynamic import for @xenova/transformers (ESM module)
 let pipeline: any;
@@ -17,11 +18,20 @@ export class AIMatchingService implements OnModuleInit {
   private modelLoadPromise: Promise<void> | null = null;
 
   async onModuleInit() {
-    // Preload the model on startup
-    this.loadModel();
-    // Load pdf-parse and mammoth dynamically
-    this.loadPdfParser();
-    this.loadMammoth();
+    // Queue workers are the only startup path that needs the embedding model
+    // and document parsers. Avoid downloading Xenova in API-only runtimes.
+    if (!areQueueWorkersEnabled()) {
+      this.logger.log('Background workers disabled; skipping AI model preload');
+      return;
+    }
+
+    // Preload the model and parsers for the CV worker.
+    void this.loadModel().catch(() => {
+      // loadModel logs the provider-specific failure; keep startup from
+      // producing an unhandled promise rejection.
+    });
+    void this.loadPdfParser();
+    void this.loadMammoth();
   }
 
   /**
@@ -130,12 +140,7 @@ export class AIMatchingService implements OnModuleInit {
       const extractedText = data.text.trim();
       this.logger.log(`Extracted ${extractedText.length} characters from PDF`);
 
-      // Log first 200 chars for debugging
-      if (extractedText.length > 0) {
-        this.logger.log(
-          `PDF text preview: ${extractedText.substring(0, 200)}...`,
-        );
-      } else {
+      if (extractedText.length === 0) {
         this.logger.warn(
           'PDF has no extractable text - may be image-based PDF',
         );

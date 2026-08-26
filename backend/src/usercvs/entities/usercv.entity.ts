@@ -39,6 +39,13 @@ export class UserCV {
   @Column({ type: 'varchar', length: 64, nullable: true })
   contentHash: string;
 
+  @Column({
+    type: 'varchar',
+    length: 64,
+    default: () => 'uuid_generate_v4()::text',
+  })
+  contentVersion: string;
+
   @Column({ type: 'timestamptz', nullable: true })
   parsedAt: Date;
 

@@ -7,8 +7,9 @@ import {
 import { InjectQueue } from '@nestjs/bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bull';
-import { createHash } from 'crypto';
-import { Repository } from 'typeorm';
+import { createHash, randomUUID } from 'crypto';
+import { IsNull, Repository } from 'typeorm';
+import { isUUID } from 'class-validator';
 import { UserCV } from './entities/usercv.entity';
 import { IUser } from 'src/users/users.interface';
 import { CreateUserCVDto } from './dto/create-usercv.dto';
@@ -16,6 +17,8 @@ import { UpdateUserCVDto } from './dto/update-usercv.dto';
 import { CVParseStatus } from './cv-parse-status';
 import { AiCvConsentsService } from 'src/ai-consents/ai-cv-consents.service';
 import { UserCvParseJobData } from './cv-parse.processor';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
+import { AI_CV_CONSENT_ERROR_MESSAGES } from 'src/ai-consents/ai-cv-consent.policy';
 
 export interface CandidateCvSnapshot {
   cvId: string;
@@ -39,19 +42,22 @@ export class UserCVsService {
     private readonly aiCvConsentsService: AiCvConsentsService,
   ) {}
 
+  private getUploadedFileType(url: string): 'pdf' | 'doc' | 'docx' {
+    const cleanUrl = url.toLowerCase().split('?')[0].split('#')[0];
+    if (cleanUrl.endsWith('.pdf')) return 'pdf';
+    if (cleanUrl.endsWith('.doc')) return 'doc';
+    if (cleanUrl.endsWith('.docx')) return 'docx';
+    throw new BadRequestException(
+      'Chỉ chấp nhận file PDF, DOC hoặc DOCX. Vui lòng tải lên đúng định dạng.',
+    );
+  }
+
   async create(createUserCVDto: CreateUserCVDto, user: IUser) {
     const url = createUserCVDto.url?.trim() || '';
-    const cleanUrl = url.toLowerCase().split('?')[0].split('#')[0];
     const isOnline = Boolean(createUserCVDto.onlineCvId);
 
     if (!isOnline) {
-      const isPdf = cleanUrl.endsWith('.pdf');
-      const isDocx = cleanUrl.endsWith('.docx') || cleanUrl.endsWith('.doc');
-      if (!isPdf && !isDocx) {
-        throw new BadRequestException(
-          'Chỉ chấp nhận file PDF hoặc DOCX. Vui lòng tải lên đúng định dạng.',
-        );
-      }
+      this.getUploadedFileType(url);
     }
 
     const existingCVs = await this.userCVRepo.count({
@@ -81,7 +87,7 @@ export class UserCVsService {
       title: createUserCVDto.title,
       description: createUserCVDto.description,
       onlineCvId: createUserCVDto.onlineCvId,
-      fileType: isOnline ? 'online' : cleanUrl.endsWith('.pdf') ? 'pdf' : 'docx',
+      fileType: isOnline ? 'online' : this.getUploadedFileType(url),
       skills: isOnline ? createUserCVDto.skills || [] : [],
       education: isOnline ? createUserCVDto.education || [] : [],
       experience: isOnline ? createUserCVDto.experience || [] : [],
@@ -92,14 +98,15 @@ export class UserCVsService {
       contentHash: onlineReady
         ? createHash('sha256').update(onlineText, 'utf8').digest('hex')
         : null,
+      contentVersion: randomUUID(),
       userId: user._id,
       isPrimary,
       createdBy: { _id: user._id, email: user.email },
     });
 
     const savedCV = await this.userCVRepo.save(newCV);
-    if (!isOnline) {
-      await this.enqueueParse(savedCV._id, url);
+    if (!isOnline && areQueueWorkersEnabled()) {
+      await this.enqueueParse(savedCV._id, url, savedCV.contentVersion);
     }
 
     return {
@@ -113,11 +120,15 @@ export class UserCVsService {
     };
   }
 
-  private async enqueueParse(cvId: string, fileUrl: string): Promise<void> {
+  private async enqueueParse(
+    cvId: string,
+    fileUrl: string,
+    contentVersion: string,
+  ): Promise<void> {
     try {
       await this.cvParseQueue.add(
         'parse-cv',
-        { cvId, fileUrl },
+        { cvId, fileUrl, expectedUrl: fileUrl, contentVersion },
         {
           attempts: 3,
           backoff: { type: 'exponential', delay: 5000 },
@@ -126,10 +137,19 @@ export class UserCVsService {
         },
       );
     } catch {
-      await this.userCVRepo.update(cvId, {
-        parseStatus: CVParseStatus.FAILED,
-        parseErrorCode: 'QUEUE_ENQUEUE_FAILED',
-      });
+      await this.userCVRepo.update(
+        {
+          _id: cvId,
+          url: fileUrl,
+          contentVersion,
+          isDeleted: false,
+          deletedAt: IsNull(),
+        },
+        {
+          parseStatus: CVParseStatus.FAILED,
+          parseErrorCode: 'QUEUE_ENQUEUE_FAILED',
+        },
+      );
     }
   }
 
@@ -140,13 +160,23 @@ export class UserCVsService {
     consentVersion: string,
     policyHash: string,
   ): Promise<CandidateCvSnapshot> {
+    if (!isUUID(userId)) {
+      throw new BadRequestException('Invalid user id');
+    }
+    if (!isUUID(cvId)) {
+      throw new BadRequestException('Invalid CV id');
+    }
     const cv = await this.userCVRepo.findOne({
-      where: { _id: cvId, userId, isDeleted: false },
+      where: { _id: cvId, userId, isDeleted: false, deletedAt: IsNull() },
     });
     if (!cv) {
       throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
     }
-    if (cv.parseStatus !== CVParseStatus.READY || !cv.contentHash) {
+    if (
+      cv.parseStatus !== CVParseStatus.READY ||
+      typeof cv.contentHash !== 'string' ||
+      !cv.contentHash.trim()
+    ) {
       throw new ConflictException('CV chưa sẵn sàng để xử lý AI');
     }
     if (
@@ -157,7 +187,7 @@ export class UserCVsService {
         policyHash,
       ))
     ) {
-      throw new BadRequestException('Chưa có consent hợp lệ cho mục đích AI này');
+      throw new BadRequestException(AI_CV_CONSENT_ERROR_MESSAGES.INVALID_CONSENT);
     }
 
     return {
@@ -208,13 +238,44 @@ export class UserCVsService {
         { isPrimary: false },
       );
     }
-    await this.userCVRepo.update(id, {
+    const nextUrl = updateUserCVDto.url?.trim();
+    const sourceChanged =
+      nextUrl !== undefined && nextUrl !== cv.url && !updateUserCVDto.onlineCvId;
+    const updatePayload: Partial<UserCV> = {
       title: updateUserCVDto.title,
       description: updateUserCVDto.description,
       isPrimary: updateUserCVDto.isPrimary,
       updatedBy: { _id: user._id, email: user.email },
-    });
-    return this.userCVRepo.findOne({ where: { _id: cv._id } });
+    };
+
+    if (sourceChanged) {
+      const fileType = this.getUploadedFileType(nextUrl);
+      updatePayload.url = nextUrl;
+      updatePayload.fileType = fileType;
+      updatePayload.contentVersion = randomUUID();
+      updatePayload.parsedText = null;
+      updatePayload.contentHash = null;
+      updatePayload.skills = [];
+      updatePayload.education = [];
+      updatePayload.experience = [];
+      updatePayload.certificates = [];
+      updatePayload.parseStatus = CVParseStatus.PENDING;
+      updatePayload.parseErrorCode = null;
+      updatePayload.parsedAt = null;
+    }
+
+    await this.userCVRepo.update(id, updatePayload);
+    const updatedCV = await this.userCVRepo.findOne({ where: { _id: cv._id } });
+
+    if (sourceChanged && updatedCV && areQueueWorkersEnabled()) {
+      await this.enqueueParse(
+        updatedCV._id,
+        updatedCV.url,
+        updatedCV.contentVersion,
+      );
+    }
+
+    return updatedCV;
   }
 
   async setPrimary(id: string, user: IUser) {

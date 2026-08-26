@@ -10,7 +10,11 @@ import { existsSync } from 'fs';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bull';
 import { Subscriber } from 'src/subscribers/entities/subscriber.entity';
-import { Job } from 'src/jobs/entities/job.entity';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
+import { createNoopQueueProvider } from 'src/queues/queue-runtime';
+import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
+
+const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
@@ -41,13 +45,19 @@ import { Job } from 'src/jobs/entities/job.entity';
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([Subscriber, Job]),
-    BullModule.registerQueue({
-      name: 'mail-queue',
-    }),
+    TypeOrmModule.forFeature([Subscriber]),
+    ActiveJobsModule,
+    ...(queueWorkersEnabled
+      ? [BullModule.registerQueue({ name: 'mail-queue' })]
+      : []),
   ],
   controllers: [MailController],
-  providers: [MailService, MailProcessor],
-  exports: [MailService, BullModule],
+  providers: [
+    MailService,
+    ...(queueWorkersEnabled
+      ? [MailProcessor]
+      : [createNoopQueueProvider('mail-queue')]),
+  ],
+  exports: [MailService, ...(queueWorkersEnabled ? [BullModule] : [])],
 })
 export class MailModule {}

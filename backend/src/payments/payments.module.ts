@@ -8,6 +8,10 @@ import { PaymentsGateway } from './payments.gateway';
 import { UsersModule } from '../users/users.module';
 import { RedisModule } from '../redis/redis.module';
 import { MailModule } from '../mail/mail.module';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
+import { createNoopQueueProvider } from 'src/queues/queue-runtime';
+
+const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
@@ -17,7 +21,11 @@ import { MailModule } from '../mail/mail.module';
     MailModule,
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService, PaymentsGateway],
+  providers: [
+    PaymentsService,
+    PaymentsGateway,
+    ...(queueWorkersEnabled ? [] : [createNoopQueueProvider('mail-queue')]),
+  ],
   exports: [PaymentsService, PaymentsGateway],
 })
 export class PaymentsModule {}

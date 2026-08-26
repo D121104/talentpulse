@@ -24,6 +24,7 @@ import {
   NotificationTargetType,
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
+import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
 
 @Injectable()
 export class CompaniesService {
@@ -43,6 +44,8 @@ export class CompaniesService {
 
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
+
+    private readonly activeJobQueryService: ActiveJobQueryService,
   ) {}
 
 
@@ -723,9 +726,10 @@ export class CompaniesService {
       .getMany();
 
     const totalJobs = allCompanyJobs.length;
-    const activeJobs = allCompanyJobs.filter(
-      (job) => new Date(job.endDate) > now && job.isActive !== false,
-    ).length;
+    const activeJobs = await this.activeJobQueryService
+      .createActiveQuery(now)
+      .andWhere("job.company->>'_id' = :companyId", { companyId })
+      .getCount();
     const todayJobsPostedCount = allCompanyJobs.filter(
       (job) => new Date(job.createdAt) >= startOfToday,
     ).length;

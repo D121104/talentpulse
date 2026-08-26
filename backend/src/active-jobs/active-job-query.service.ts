@@ -81,8 +81,27 @@ export class ActiveJobQueryService {
     return this.applyActivePredicate(this.jobRepo.createQueryBuilder('job'), now);
   }
 
+  createNonDeletedQuery(): SelectQueryBuilder<Job> {
+    return this.jobRepo
+      .createQueryBuilder('job')
+      .where('job."isDeleted" = false')
+      .andWhere('job."deletedAt" IS NULL');
+  }
+
   async findActiveById(id: string, now = new Date()): Promise<Job | null> {
     return this.createActiveQuery(now)
+      .andWhere('job."_id" = :jobId', { jobId: id })
+      .getOne();
+  }
+
+  /**
+   * Loads a non-deleted job for authenticated internal workflows. Active
+   * dates are deliberately not part of this lookup: expired and scheduled
+   * jobs still need to be editable and their applications still need to be
+   * reviewable by authorized staff.
+   */
+  async findNonDeletedById(id: string): Promise<Job | null> {
+    return this.createNonDeletedQuery()
       .andWhere('job."_id" = :jobId', { jobId: id })
       .getOne();
   }

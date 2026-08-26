@@ -1,16 +1,16 @@
-import { IsMongoId, IsNotEmpty, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsUUID } from 'class-validator';
 
 export class CreateApplicationDto {
   @IsNotEmpty({ message: 'Vui lòng chọn CV!' })
-  @IsMongoId({ message: 'CV không hợp lệ' })
+  @IsUUID('4', { message: 'CV không hợp lệ' })
   cvId: string;
 
   @IsNotEmpty({ message: 'Vui lòng chọn công việc!' })
-  @IsMongoId({ message: 'Công việc không hợp lệ' })
+  @IsUUID('4', { message: 'Công việc không hợp lệ' })
   jobId: string;
 
   @IsNotEmpty({ message: 'Vui lòng chọn công ty!' })
-  @IsMongoId({ message: 'Công ty không hợp lệ' })
+  @IsUUID('4', { message: 'Công ty không hợp lệ' })
   companyId: string;
 
   @IsOptional()

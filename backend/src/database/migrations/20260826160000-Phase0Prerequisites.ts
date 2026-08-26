@@ -17,7 +17,7 @@ export class Phase0Prerequisites20260826160000 implements MigrationInterface {
       ALTER TABLE "user_cvs"
       ADD COLUMN IF NOT EXISTS "parseStatus" varchar(20) NOT NULL DEFAULT 'PENDING',
       ADD COLUMN IF NOT EXISTS "contentHash" varchar(64) NULL,
-      ADD COLUMN IF NOT EXISTS "parsedAt" TIMESTAMP NULL,
+       ADD COLUMN IF NOT EXISTS "parsedAt" TIMESTAMPTZ NULL,
       ADD COLUMN IF NOT EXISTS "parseErrorCode" varchar(80) NULL
     `);
     await queryRunner.query(`

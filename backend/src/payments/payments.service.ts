@@ -12,6 +12,7 @@ import { Repository, DataSource } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 import * as crypto from 'crypto';
 import {
   PaymentOrder,
@@ -108,6 +109,10 @@ export class PaymentsService implements OnModuleInit {
    * Khởi động service: quét đơn hết hạn và lập lịch timeout chính xác cho các đơn đang PENDING
    */
   async onModuleInit() {
+    if (!areQueueWorkersEnabled()) {
+      return;
+    }
+
     try {
       await this.expirePendingOrders();
 

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { validateEnvironment } from './config/environment.validation';
@@ -30,8 +31,10 @@ import { ActiveJobsModule } from './active-jobs/active-jobs.module';
 import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 import { PaymentsModule } from './payments/payments.module';
 import { CandidateAccessModule } from './candidate-access/candidate-access.module';
+import { areQueueWorkersEnabled } from './config/runtime-flags';
+import { createRedisConnectionOptions } from './redis/redis.module';
 
-const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
+const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
@@ -51,20 +54,22 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
     ]),
 
     // Schedule (Cron jobs)
-    ScheduleModule.forRoot(),
+    ...(queueWorkersEnabled ? [ScheduleModule.forRoot()] : []),
 
     // Bull Queue with Redis
-    BullModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        redis: {
-          host: configService.get<string>('REDIS_HOST') || 'localhost',
-          port: configService.get<number>('REDIS_PORT') || 6379,
-          password: configService.get<string>('REDIS_PASSWORD') || undefined,
-        },
-      }),
-      inject: [ConfigService],
-    }),
+    ...(queueWorkersEnabled
+      ? [
+          BullModule.forRootAsync({
+            imports: [ConfigModule],
+            useFactory: async (configService: ConfigService) => ({
+              redis: {
+                ...createRedisConnectionOptions(configService),
+              },
+            }),
+            inject: [ConfigService],
+          }),
+        ]
+      : []),
 
     // PostgreSQL with TypeORM
     TypeOrmModule.forRootAsync({

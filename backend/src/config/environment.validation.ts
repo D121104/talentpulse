@@ -6,12 +6,16 @@ export interface ServiceJwtConfig {
   keyId?: string;
 }
 
-function parseBoolean(value: unknown, fallback: boolean): boolean {
+function parseBoolean(
+  value: unknown,
+  fallback: boolean,
+  variableName: string,
+): boolean {
   if (value === undefined || value === null || value === '') return fallback;
   const normalized = String(value).trim().toLowerCase();
   if (normalized === 'true') return true;
   if (normalized === 'false') return false;
-  throw new Error('DB_SYNCHRONIZE must be true or false');
+  throw new Error(`${variableName} must be true or false`);
 }
 
 function parsePort(value: unknown): number {
@@ -32,11 +36,36 @@ export function validateEnvironment(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   const nodeEnv = String(config.NODE_ENV ?? 'development').trim().toLowerCase();
-  const synchronize = parseBoolean(config.DB_SYNCHRONIZE, nodeEnv !== 'production');
+  const synchronize = parseBoolean(
+    config.DB_SYNCHRONIZE,
+    nodeEnv !== 'production',
+    'DB_SYNCHRONIZE',
+  );
+  const redisEnabled = parseBoolean(config.REDIS_ENABLED, true, 'REDIS_ENABLED');
+  const runBackgroundJobs = parseBoolean(
+    config.RUN_BACKGROUND_JOBS,
+    true,
+    'RUN_BACKGROUND_JOBS',
+  );
   const port = parsePort(config.DB_PORT);
+  const consentVersion = String(
+    config.AI_CV_CONSENT_VERSION ?? 'phase0-v1',
+  ).trim();
+  const consentPolicyHash = String(
+    config.AI_CV_CONSENT_POLICY_HASH ?? '',
+  ).trim().toLowerCase();
 
   if (nodeEnv === 'production' && synchronize) {
     throw new Error('DB_SYNCHRONIZE must be false in production');
+  }
+
+  if (!/^\w[\w.-]{0,79}$/.test(consentVersion)) {
+    throw new Error(
+      'AI_CV_CONSENT_VERSION must be a simple version with at most 80 characters',
+    );
+  }
+  if (consentPolicyHash && !/^[a-f0-9]{64}$/.test(consentPolicyHash)) {
+    throw new Error('AI_CV_CONSENT_POLICY_HASH must be a SHA-256 hex digest');
   }
 
   const serviceAuthKeys = [
@@ -70,6 +99,12 @@ export function validateEnvironment(
     NODE_ENV: nodeEnv,
     DB_PORT: port,
     DB_SYNCHRONIZE: String(synchronize),
+    REDIS_ENABLED: String(redisEnabled),
+    RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
+    AI_CV_CONSENT_VERSION: consentVersion,
+    ...(consentPolicyHash
+      ? { AI_CV_CONSENT_POLICY_HASH: consentPolicyHash }
+      : {}),
   };
 }
 
