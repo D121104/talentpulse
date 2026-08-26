@@ -71,9 +71,9 @@ export default function FeaturedJobs() {
                       </div>
                     </div>
                     {job.hot && (
-                      <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-50 dark:bg-red-500/15 text-xs font-bold text-red-500">
-                        <Flame className="w-3 h-3" />
-                        {t('featuredJobs.hot')}
+                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gradient-to-r from-red-500 to-amber-500 text-white font-extrabold text-xs shadow-md shadow-red-500/25 animate-pulse tracking-wide select-none">
+                        <Flame className="w-3.5 h-3.5 fill-white" />
+                        <span>{t('featuredJobs.hot')} TOP</span>
                       </span>
                     )}
                   </div>

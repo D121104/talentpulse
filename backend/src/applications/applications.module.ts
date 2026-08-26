@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bull';
 import { ApplicationsService } from './applications.service';
 import { ApplicationsController } from './applications.controller';
 import { Application } from './entities/application.entity';
@@ -9,14 +10,19 @@ import { UserCVsModule } from 'src/usercvs/usercvs.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { AIMatchingModule } from 'src/ai-matching/ai-matching.module';
 import { JobsModule } from 'src/jobs/jobs.module';
+import { MailModule } from 'src/mail/mail.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Application, CVMatchResult]),
+    BullModule.registerQueue({
+      name: 'mail-queue',
+    }),
     UsersModule,
     UserCVsModule,
     NotificationsModule,
     AIMatchingModule,
+    MailModule,
     forwardRef(() => JobsModule),
   ],
   controllers: [ApplicationsController],

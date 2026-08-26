@@ -53,6 +53,13 @@ export class JobsController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.HR)
+  @Patch(':id/boost')
+  boostJob(@Param('id') id: string, @User() user: IUser) {
+    return this.jobsService.boostJob(id, user);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.HR)
   @Delete(':id')
   remove(@Param('id') id: string, @User() user: IUser) {
     return this.jobsService.remove(id, user);

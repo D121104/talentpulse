@@ -16,12 +16,11 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "package:lambda": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda.ps1",
-    "package:lambda-image": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda-image.ps1"
+    "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
+    "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
+    "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts"
   },
   "dependencies": {
-    "@codegenie/serverless-express": "^4.17.1",
     "@nestjs-modules/mailer": "^1.11.2",
     "@nestjs/bull": "^10.0.1",
     "@nestjs/cache-manager": "^2.2.2",
@@ -76,7 +75,6 @@
     "@nestjs/cli": "9.4.2",
     "@nestjs/schematics": "9.1.0",
     "@nestjs/testing": "9.0.0",
-    "@types/aws-lambda": "^8.10.162",
     "@types/bcryptjs": "^2.4.6",
     "@types/cache-manager": "^4.0.1",
     "@types/cookie-parser": "^1.4.7",

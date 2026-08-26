@@ -51,6 +51,19 @@ export const onlineCvApi = {
       body: { htmlContent, isPremium },
       accessToken,
     }),
+
+  setPrimary: (id: string, accessToken?: string | null) =>
+    apiRequest<OnlineCV>(`/online-cvs/${id}/set-primary`, {
+      method: 'PATCH',
+      accessToken,
+    }),
+
+  toggleSearchable: (id: string, isSearchable?: boolean, accessToken?: string | null) =>
+    apiRequest<{ _id: string; isSearchable: boolean; message: string }>(`/online-cvs/${id}/searchable`, {
+      method: 'PATCH',
+      body: { isSearchable },
+      accessToken,
+    }),
 };
 
 export const userCvApi = {
@@ -72,6 +85,13 @@ export const userCvApi = {
       accessToken,
     }),
 
+  toggleSearchable: (id: string, isSearchable?: boolean, accessToken?: string | null) =>
+    apiRequest<{ _id: string; isSearchable: boolean; message: string }>(`/user-cvs/${id}/searchable`, {
+      method: 'PATCH',
+      body: { isSearchable },
+      accessToken,
+    }),
+
   remove: (id: string, accessToken?: string | null) =>
     apiRequest<{ message: string }>(`/user-cvs/${id}`, {
       method: 'DELETE',
@@ -86,7 +106,6 @@ export const fileUploadApi = {
 
     const response = await fetch(`${API_URL}/files/upload`, {
       method: 'POST',
-      credentials: 'include',
       body: formData,
       headers: {
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
@@ -113,7 +132,6 @@ export const fileUploadApi = {
 
     const response = await fetch(`${API_URL}/files/upload-image`, {
       method: 'POST',
-      credentials: 'include',
       body: formData,
       headers: {
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),

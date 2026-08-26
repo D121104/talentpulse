@@ -8,6 +8,12 @@ import {
 } from 'typeorm';
 import { Role } from 'src/decorator/customize';
 
+export enum PremiumPlan {
+  FREE = 'FREE',
+  CANDIDATE_PREMIUM = 'CANDIDATE_PREMIUM',
+  HR_PREMIUM = 'HR_PREMIUM',
+}
+
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn('uuid')
@@ -40,6 +46,43 @@ export class User {
     default: Role.USER,
   })
   role: Role;
+
+  @Column({ default: false })
+  isPremium: boolean;
+
+  @Column({
+    type: 'enum',
+    enum: PremiumPlan,
+    default: PremiumPlan.FREE,
+  })
+  premiumPlan: PremiumPlan;
+
+  @Column({ type: 'timestamp', nullable: true })
+  premiumExpiresAt: Date;
+
+  @Column({ default: false })
+  isVerified: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  verifiedAt: Date;
+
+  @Column({ nullable: true })
+  verificationToken: string;
+
+  @Column({ type: 'timestamp', nullable: true })
+  lastBoostedAt: Date;
+
+  @Column({ type: 'timestamp', nullable: true })
+  boostExpiresAt: Date;
+
+  @Column({ default: true })
+  isJobSeeking: boolean;
+
+  @Column({ default: true })
+  isJobRecommendation: boolean;
+
+  @Column({ default: true })
+  allowRecruiterSearch: boolean;
 
   @Column({ nullable: true })
   refreshToken: string;

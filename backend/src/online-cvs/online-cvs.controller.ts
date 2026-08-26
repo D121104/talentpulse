@@ -58,6 +58,28 @@ export class OnlineCVsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Patch(':id/set-primary')
+  @ApiOperation({ summary: 'Set an online CV as primary' })
+  @ApiBearerAuth()
+  @ResponseMessage('Đặt CV chính thành công')
+  setPrimary(@Param('id') id: string, @User() user: IUser) {
+    return this.onlineCVsService.setPrimary(id, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/searchable')
+  @ApiOperation({ summary: 'Toggle recruiter search permission for online CV' })
+  @ApiBearerAuth()
+  @ResponseMessage('Cập nhật trạng thái cho phép NTD tìm kiếm thành công')
+  toggleSearchable(
+    @Param('id') id: string,
+    @Body('isSearchable') isSearchable: boolean,
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.toggleSearchable(id, user, isSearchable);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Patch(':id')
   @ApiOperation({ summary: 'Update online CV' })
   @ApiBearerAuth()
