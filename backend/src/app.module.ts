@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { validateEnvironment } from './config/environment.validation';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -25,6 +26,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
+import { ActiveJobsModule } from './active-jobs/active-jobs.module';
+import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 
 const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
 
@@ -34,6 +37,7 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      validate: validateEnvironment,
     }),
 
     // Throttle (Rate limiting)
@@ -78,8 +82,7 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
 
         autoLoadEntities: true,
 
-        synchronize:
-          configService.get<string>('DB_SYNCHRONIZE', 'true') === 'true',
+        synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
 
         ssl:
           process.env.NODE_ENV === 'production'
@@ -105,6 +108,8 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
     RedisModule,
     AIMatchingModule,
     OnlineCVsModule,
+    ActiveJobsModule,
+    AiCvConsentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -28,6 +28,7 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
+import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
 
 @Injectable()
 export class JobsService {
@@ -49,10 +50,12 @@ export class JobsService {
     private readonly notificationsService: NotificationsService,
 
     private readonly cvProcessingService: CVProcessingService,
+
+    private readonly activeJobQueryService: ActiveJobQueryService,
   ) {}
 
   async getAll() {
-    return await this.jobRepo.find({ where: { isDeleted: false } });
+    return await this.activeJobQueryService.createActiveQuery().getMany();
   }
 
   async getJobsByHr(user: IUser, qs: any) {
@@ -293,9 +296,7 @@ export class JobsService {
       const current = qs.current ? parseInt(qs.current) : 1;
       const skip = (current - 1) * limit;
 
-      const queryBuilder = this.jobRepo
-        .createQueryBuilder('job')
-        .where('job.isDeleted = :isDeleted', { isDeleted: false });
+      const queryBuilder = this.activeJobQueryService.createActiveQuery();
 
       if (currentUser && currentUser.company) {
         queryBuilder.andWhere("job.company->>'_id' = :companyId", {
@@ -305,8 +306,6 @@ export class JobsService {
         queryBuilder.andWhere("job.company->>'_id' = :companyId", {
           companyId: filter.companyId,
         });
-      } else {
-        queryBuilder.andWhere("(job.company->>'isActive')::boolean = true");
       }
 
       if (filter.name) {
@@ -385,9 +384,7 @@ export class JobsService {
     if (!names || names.length === 0) return [];
 
     // Check if any job skill array contains any of names (case-insensitive)
-    const queryBuilder = this.jobRepo
-      .createQueryBuilder('job')
-      .where('job.isDeleted = :isDeleted', { isDeleted: false });
+    const queryBuilder = this.activeJobQueryService.createActiveQuery();
 
     const conditions = names.map(
       (name, idx) =>
@@ -404,9 +401,7 @@ export class JobsService {
   }
 
   async findOne(id: string) {
-    const job = await this.jobRepo.findOne({
-      where: { _id: id, isDeleted: false },
-    });
+    const job = await this.activeJobQueryService.findActiveById(id);
 
     if (!job) {
       throw new NotFoundException('Job not found');
@@ -514,6 +509,6 @@ export class JobsService {
   }
 
   async countJobs() {
-    return await this.jobRepo.count({ where: { isDeleted: false } });
+    return await this.activeJobQueryService.createActiveQuery().getCount();
   }
 }

@@ -18,7 +18,11 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "package:lambda": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda.ps1",
-    "package:lambda-image": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda-image.ps1"
+    "package:lambda-image": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda-image.ps1",
+    "migration:show": "typeorm-ts-node-commonjs migration:show -d src/database/data-source.ts",
+    "migration:run": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
+    "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/database/data-source.ts"
   },
   "dependencies": {
     "@codegenie/serverless-express": "^4.17.1",
@@ -122,6 +126,9 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/$1"
+    }
   }
 }
