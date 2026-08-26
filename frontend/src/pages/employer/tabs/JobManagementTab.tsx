@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -508,66 +509,68 @@ export function JobManagementTab({
       )}
 
       {/* ================= PREMIUM UPGRADE PROMPT MODAL ================= */}
-      {showPremiumModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="relative w-full max-w-md rounded-3xl bg-white p-6 sm:p-8 shadow-2xl dark:bg-slate-900 border border-amber-200 dark:border-amber-800/80">
-            <button
-              type="button"
-              onClick={() => setShowPremiumModal(false)}
-              className="absolute right-4 top-4 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-lg shadow-amber-500/30 mb-5">
-              <Crown className="h-7 w-7" />
-            </div>
-
-            <h3 className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
-              Đặc Quyền HR Premium VIP
-            </h3>
-            <p className="mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              Tài khoản HR miễn phí chỉ có tối đa <strong>6 tin tuyển dụng hoạt động cùng lúc</strong> và không thể đẩy TOP. Nâng cấp ngay gói <strong>HR Premium</strong> để sở hữu toàn bộ đặc quyền:
-            </p>
-
-            <div className="mt-5 space-y-3 rounded-2xl bg-amber-50/70 p-4 border border-amber-200/70 dark:bg-amber-950/40 dark:border-amber-800/60">
-              <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
-                <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                <span><strong>Đẩy TOP không giới hạn:</strong> Đưa tin tuyển dụng lên vị trí #1 trang tìm kiếm việc làm</span>
-              </div>
-              <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
-                <Zap className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                <span><strong>Gắn nhãn HOT nổi bật:</strong> Thu hút gấp 3 lần ứng viên xuất sắc ứng tuyển</span>
-              </div>
-              <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
-                <Sparkles className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                <span><strong>Đăng tin không giới hạn:</strong> Mở rộng quy mô tuyển dụng không bị giới hạn 6 tin</span>
-              </div>
-            </div>
-
-            <div className="mt-6 flex items-center justify-end gap-3">
+      {showPremiumModal &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+            <div className="relative w-full max-w-md rounded-3xl bg-white p-6 sm:p-8 shadow-2xl dark:bg-slate-900 border border-amber-200 dark:border-amber-800/80">
               <button
                 type="button"
                 onClick={() => setShowPremiumModal(false)}
-                className="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                className="absolute right-4 top-4 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
               >
-                Để sau
+                <X className="h-5 w-5" />
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowPremiumModal(false);
-                  onNavigateTab('premium');
-                }}
-                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 px-5 py-2.5 text-xs font-black text-white shadow-lg shadow-amber-500/25 hover:from-amber-600 hover:to-orange-600 cursor-pointer transition active:scale-95"
-              >
-                <span>Nâng cấp ngay</span>
-                <ArrowRight className="h-4 w-4" />
-              </button>
+
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-lg shadow-amber-500/30 mb-5">
+                <Crown className="h-7 w-7" />
+              </div>
+
+              <h3 className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
+                Đặc Quyền HR Premium VIP
+              </h3>
+              <p className="mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                Tài khoản HR miễn phí chỉ có tối đa <strong>6 tin tuyển dụng hoạt động cùng lúc</strong> và không thể đẩy TOP. Nâng cấp ngay gói <strong>HR Premium</strong> để sở hữu toàn bộ đặc quyền:
+              </p>
+
+              <div className="mt-5 space-y-3 rounded-2xl bg-amber-50/70 p-4 border border-amber-200/70 dark:bg-amber-950/40 dark:border-amber-800/60">
+                <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
+                  <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <span><strong>Đẩy TOP không giới hạn:</strong> Đưa tin tuyển dụng lên vị trí #1 trang tìm kiếm việc làm</span>
+                </div>
+                <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
+                  <Zap className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <span><strong>Gắn nhãn HOT nổi bật:</strong> Thu hút gấp 3 lần ứng viên xuất sắc ứng tuyển</span>
+                </div>
+                <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
+                  <Sparkles className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <span><strong>Đăng tin không giới hạn:</strong> Mở rộng quy mô tuyển dụng không bị giới hạn 6 tin</span>
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowPremiumModal(false)}
+                  className="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Để sau
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPremiumModal(false);
+                    onNavigateTab('premium');
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 px-5 py-2.5 text-xs font-black text-white shadow-lg shadow-amber-500/25 hover:from-amber-600 hover:to-orange-600 cursor-pointer transition active:scale-95"
+                >
+                  <span>Nâng cấp ngay</span>
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

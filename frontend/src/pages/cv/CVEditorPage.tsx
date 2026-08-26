@@ -76,57 +76,54 @@ export default function CVEditorPage() {
   const [lineSpacing, setLineSpacing] = useState<number>(1.3);
 
   // Form Fields
-  const [fullName, setFullName] = useState<string>(user?.name || 'Trần Quốc An');
-  const [position, setPosition] = useState<string>('Vị trí ứng tuyển');
-  const [phone, setPhone] = useState<string>('0123 456 789');
-  const [email, setEmail] = useState<string>(user?.email || 'email@example.com');
-  const [link, setLink] = useState<string>('linkedin.com/in/username');
-  const [address, setAddress] = useState<string>('Hà Nội, Việt Nam');
-  const [careerObjective, setCareerObjective] = useState<string>(
-    'Mục tiêu nghề nghiệp của bạn, bao gồm mục tiêu ngắn hạn và dài hạn',
-  );
+  const [fullName, setFullName] = useState<string>(user?.name || '');
+  const [position, setPosition] = useState<string>('');
+  const [phone, setPhone] = useState<string>('');
+  const [email, setEmail] = useState<string>(user?.email || '');
+  const [link, setLink] = useState<string>('');
+  const [address, setAddress] = useState<string>(user?.address || '');
+  const [careerObjective, setCareerObjective] = useState<string>('');
 
   const [education, setEducation] = useState<EducationEntry[]>([
     {
-      schoolName: 'Tên trường học',
-      major: 'Ngành học / Môn học',
-      startDate: 'Bắt đầu',
-      endDate: 'Kết thúc',
-      description: 'Mô tả quá trình học tập hoặc thành tích của bạn',
+      schoolName: '',
+      major: '',
+      startDate: '',
+      endDate: '',
+      description: '',
     },
   ]);
 
   const [workExperience, setWorkExperience] = useState<WorkExperienceEntry[]>([
     {
-      companyName: 'Tên công ty',
-      position: 'Vị trí công việc',
-      startDate: 'Bắt đầu',
-      endDate: 'Kết thúc',
-      description: 'Mô tả kinh nghiệm làm việc của bạn',
+      companyName: '',
+      position: '',
+      startDate: '',
+      endDate: '',
+      description: '',
     },
   ]);
 
   const [skills, setSkills] = useState<SkillEntry[]>([
-    { name: 'Tên kỹ năng', description: 'Mô tả kỹ năng' },
-    { name: 'Kỹ năng chuyên môn', description: 'Mức độ thành thạo' },
+    { name: '', description: '' },
   ]);
 
   const [activities, setActivities] = useState<ActivityEntry[]>([
     {
-      organizationName: 'Tên tổ chức',
-      position: 'Vị trí của bạn',
-      startDate: 'Bắt đầu',
-      endDate: 'Kết thúc',
-      description: 'Mô tả hoạt động',
+      organizationName: '',
+      position: '',
+      startDate: '',
+      endDate: '',
+      description: '',
     },
   ]);
 
   const [certificates, setCertificates] = useState<CertificateEntry[]>([
-    { name: 'Tên chứng chỉ', date: 'Năm' },
+    { name: '', date: '' },
   ]);
 
   const [awards, setAwards] = useState<AwardEntry[]>([
-    { name: 'Tên giải thưởng', date: 'Năm' },
+    { name: '', date: '' },
   ]);
 
   // Section Visibility
@@ -455,18 +452,22 @@ export default function CVEditorPage() {
         link: link.trim() || undefined,
         address: address.trim() || undefined,
         careerObjective: visibleSections.objective ? careerObjective.trim() : undefined,
-        education: visibleSections.education ? education.filter((e) => e.schoolName) : [],
-        workExperience: visibleSections.experience
-          ? workExperience.filter((w) => w.companyName)
+        education: visibleSections.education
+          ? education.filter((e) => e.schoolName?.trim() || e.major?.trim())
           : [],
-        skills: visibleSections.skills ? skills.filter((s) => s.name) : [],
+        workExperience: visibleSections.experience
+          ? workExperience.filter((w) => w.companyName?.trim() || w.position?.trim())
+          : [],
+        skills: visibleSections.skills
+          ? skills.filter((s) => s.name?.trim() || s.description?.trim())
+          : [],
         activities: visibleSections.activities
-          ? activities.filter((a) => a.organizationName)
+          ? activities.filter((a) => a.organizationName?.trim() || a.position?.trim())
           : [],
         certificates: visibleSections.certificates
-          ? certificates.filter((c) => c.name)
+          ? certificates.filter((c) => c.name?.trim())
           : [],
-        awards: visibleSections.awards ? awards.filter((a) => a.name) : [],
+        awards: visibleSections.awards ? awards.filter((a) => a.name?.trim()) : [],
         sectionOrder,
         fontFamily: fontFamilyId,
         themeColor: themeColorId,

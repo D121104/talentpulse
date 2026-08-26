@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -522,10 +523,11 @@ export function CandidateManagementTab({
       )}
 
       {/* 4. Candidate Full CV Detail Modal with 3 Assessment Actions */}
-      <AnimatePresence>
-        {viewingApp && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs overflow-y-auto">
-            <motion.div
+      {createPortal(
+        <AnimatePresence>
+          {viewingApp && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs overflow-y-auto">
+              <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -679,7 +681,7 @@ export function CandidateManagementTab({
                     <button
                       type="button"
                       onClick={() => setViewingApp(null)}
-                      className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 cursor-pointer"
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
                     >
                       {t('employer.jobsTab.cancelBtn')}
                     </button>
@@ -689,13 +691,16 @@ export function CandidateManagementTab({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+    )}
 
       {/* 5. AI Ranking Modal */}
-      <AnimatePresence>
-        {isAiRankModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs overflow-y-auto">
-            <motion.div
+      {createPortal(
+        <AnimatePresence>
+          {isAiRankModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs overflow-y-auto">
+              <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -806,13 +811,16 @@ export function CandidateManagementTab({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+    )}
 
       {/* 6. Interview Modal */}
-      <AnimatePresence>
-        {isInterviewModalOpen && interviewApp && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs overflow-y-auto">
-            <motion.div
+      {createPortal(
+        <AnimatePresence>
+          {isInterviewModalOpen && interviewApp && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs overflow-y-auto">
+              <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -886,7 +894,7 @@ export function CandidateManagementTab({
                   <button
                     type="button"
                     onClick={() => setIsInterviewModalOpen(false)}
-                    className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 cursor-pointer"
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
                   >
                     {t('employer.jobsTab.cancelBtn')}
                   </button>
@@ -902,7 +910,9 @@ export function CandidateManagementTab({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+    )}
     </div>
   );
 }

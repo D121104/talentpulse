@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   ExternalLink,
@@ -154,7 +155,7 @@ export const PaymentWaitingModal: React.FC<PaymentWaitingModalProps> = ({
     window.location.reload();
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-fade-in">
       {/* Backdrop with strong blur */}
       <div
@@ -412,6 +413,7 @@ export const PaymentWaitingModal: React.FC<PaymentWaitingModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

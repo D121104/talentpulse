@@ -605,7 +605,7 @@ export class UsersService {
   /**
    * Đẩy Top hồ sơ ứng viên (Profile Boosting)
    * - Candidate Premium: 1 lần / ngày (cooldown 24h, boost 24h)
-   * - Đã Xác Thực: 1 lần / tuần (cooldown 7 ngày, boost 12h)
+   * - Đã Xác Thực (Non-Premium): 1 lần / tháng (cooldown 30 ngày, boost 24h)
    * - Thường (chưa xác thực): Bị chặn
    */
   async boostProfile(userId: string) {
@@ -623,18 +623,18 @@ export class UsersService {
 
     if (!isPremium && !isVerified) {
       throw new ForbiddenException(
-        'Tính năng Đẩy Top hồ sơ yêu cầu tài khoản Đã Xác Thực (1 lần/tuần) hoặc Candidate Premium (1 lần/ngày). Vui lòng xác thực email hoặc nâng cấp gói Premium.',
+        'Tính năng Đẩy Top hồ sơ yêu cầu tài khoản Đã Xác Thực (1 lần/tháng) hoặc Candidate Premium (1 lần/ngày). Vui lòng xác thực email hoặc nâng cấp gói Premium.',
       );
     }
 
     const now = Date.now();
     const cooldownMs = isPremium
       ? 24 * 60 * 60 * 1000 // 24 hours for Premium
-      : 7 * 24 * 60 * 60 * 1000; // 7 days for Verified
+      : 30 * 24 * 60 * 60 * 1000; // 30 days (1 month) for Non-Premium / Verified
 
     const boostDurationMs = isPremium
       ? 24 * 60 * 60 * 1000 // 24 hours boost for Premium
-      : 12 * 60 * 60 * 1000; // 12 hours boost for Verified
+      : 24 * 60 * 60 * 1000; // 24 hours boost for Non-Premium / Verified
 
     if (user.lastBoostedAt) {
       const elapsedMs = now - new Date(user.lastBoostedAt).getTime();
@@ -685,7 +685,7 @@ export class UsersService {
     const boostLimitText = isPremium
       ? '1 lần / ngày (Ưu tiên Top 1 - 24 giờ)'
       : isVerified
-      ? '1 lần / tuần (Hiệu lực 12 giờ)'
+      ? '1 lần / tháng (Hiệu lực 24 giờ)'
       : 'Không khả dụng (Cần xác thực email hoặc mua gói Premium)';
 
     const now = Date.now();
@@ -700,7 +700,7 @@ export class UsersService {
     if (isPremium || isVerified) {
       const cooldownMs = isPremium
         ? 24 * 60 * 60 * 1000
-        : 7 * 24 * 60 * 60 * 1000;
+        : 30 * 24 * 60 * 60 * 1000;
 
       if (!user.lastBoostedAt) {
         canBoost = true;

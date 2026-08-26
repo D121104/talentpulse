@@ -376,11 +376,17 @@ export function RichTextEditor({
                   editor.chain().focus().setFontFamily(val).run();
                 }
               }}
-              className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-2xs hover:bg-slate-50 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+              className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-2xs hover:bg-slate-100 hover:text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer transition-colors"
             >
-              <option value="default">Phông chữ</option>
+              <option value="default" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+                Phông chữ
+              </option>
               {FONT_FAMILIES.map((font) => (
-                <option key={font.value} value={font.value}>
+                <option
+                  key={font.value}
+                  value={font.value}
+                  className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200"
+                >
                   {font.name}
                 </option>
               ))}
@@ -400,11 +406,17 @@ export function RichTextEditor({
                 (editor.chain().focus() as any).setFontSize(val).run();
               }
             }}
-            className="h-8 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow-2xs hover:bg-slate-50 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+            className="h-8 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow-2xs hover:bg-slate-100 hover:text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer transition-colors"
           >
-            <option value="default">Cỡ chữ</option>
+            <option value="default" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+              Cỡ chữ
+            </option>
             {FONT_SIZES.map((size) => (
-              <option key={size.value} value={size.value}>
+              <option
+                key={size.value}
+                value={size.value}
+                className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200"
+              >
                 {size.name}
               </option>
             ))}
@@ -425,14 +437,26 @@ export function RichTextEditor({
               else if (val === 'quote') editor.chain().focus().toggleBlockquote().run();
               else if (val === 'codeBlock') editor.chain().focus().toggleCodeBlock().run();
             }}
-            className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+            className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 hover:text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer transition-colors"
           >
-            <option value="p">Đoạn văn (Normal)</option>
-            <option value="h1">Tiêu đề lớn (H1)</option>
-            <option value="h2">Tiêu đề vừa (H2)</option>
-            <option value="h3">Tiêu đề nhỏ (H3)</option>
-            <option value="quote">Trích dẫn (Quote)</option>
-            <option value="codeBlock">Khối mã nguồn (Code)</option>
+            <option value="p" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+              Đoạn văn (Normal)
+            </option>
+            <option value="h1" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+              Tiêu đề lớn (H1)
+            </option>
+            <option value="h2" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+              Tiêu đề vừa (H2)
+            </option>
+            <option value="h3" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+              Tiêu đề nhỏ (H3)
+            </option>
+            <option value="quote" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+              Trích dẫn (Quote)
+            </option>
+            <option value="codeBlock" className="bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-200">
+              Khối mã nguồn (Code)
+            </option>
           </select>
         </div>
 
@@ -512,7 +536,7 @@ export function RichTextEditor({
                 setShowHighlightPicker(false);
                 setShowTableMenu(false);
               }}
-              className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
+              className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white transition cursor-pointer"
             >
               <Palette className="h-4 w-4 text-primary" />
               <ChevronDown className="h-3 w-3 opacity-60" />
@@ -560,7 +584,7 @@ export function RichTextEditor({
                 setShowColorPicker(false);
                 setShowTableMenu(false);
               }}
-              className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
+              className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white transition cursor-pointer"
             >
               <Highlighter className="h-4 w-4 text-amber-500" />
               <ChevronDown className="h-3 w-3 opacity-60" />
@@ -606,7 +630,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive({ textAlign: 'left' })
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <AlignLeft className="h-4 w-4" />
@@ -618,7 +642,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive({ textAlign: 'center' })
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <AlignCenter className="h-4 w-4" />
@@ -630,7 +654,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive({ textAlign: 'right' })
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <AlignRight className="h-4 w-4" />
@@ -642,7 +666,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive({ textAlign: 'justify' })
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <AlignJustify className="h-4 w-4" />
@@ -658,7 +682,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive('bulletList')
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <List className="h-4 w-4" />
@@ -670,7 +694,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive('orderedList')
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <ListOrdered className="h-4 w-4" />
@@ -682,7 +706,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive('blockquote')
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <Quote className="h-4 w-4" />
@@ -691,7 +715,7 @@ export function RichTextEditor({
             type="button"
             title="Đường kẻ ngang phân cách"
             onClick={() => editor.chain().focus().setHorizontalRule().run()}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white transition cursor-pointer"
           >
             <Minus className="h-4 w-4" />
           </button>
@@ -707,7 +731,7 @@ export function RichTextEditor({
             className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs transition cursor-pointer ${
               editor.isActive('link')
                 ? 'bg-primary text-white'
-                : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <LinkIcon className="h-4 w-4" />
@@ -726,7 +750,7 @@ export function RichTextEditor({
               className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold transition cursor-pointer ${
                 editor.isActive('table')
                   ? 'bg-primary/20 text-primary dark:bg-primary/30'
-                  : 'text-slate-700 hover:bg-slate-200/70 dark:text-slate-300 dark:hover:bg-slate-700'
+                  : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
               }`}
             >
               <TableIcon className="h-4 w-4" />
@@ -747,7 +771,7 @@ export function RichTextEditor({
                           .run();
                         setShowTableMenu(false);
                       }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
                     >
                       <Plus className="h-3.5 w-3.5 text-primary" />
                       <span>Chèn bảng 3x3</span>
@@ -760,7 +784,7 @@ export function RichTextEditor({
                           editor.chain().focus().addRowBefore().run();
                           setShowTableMenu(false);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
                       >
                         <Rows3 className="h-3.5 w-3.5 text-emerald-600" />
                         <span>Thêm hàng phía trên</span>
@@ -771,7 +795,7 @@ export function RichTextEditor({
                           editor.chain().focus().addRowAfter().run();
                           setShowTableMenu(false);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
                       >
                         <Rows3 className="h-3.5 w-3.5 text-emerald-600" />
                         <span>Thêm hàng phía dưới</span>
@@ -782,7 +806,7 @@ export function RichTextEditor({
                           editor.chain().focus().addColumnBefore().run();
                           setShowTableMenu(false);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
                       >
                         <Columns3 className="h-3.5 w-3.5 text-blue-600" />
                         <span>Thêm cột bên trái</span>
@@ -793,7 +817,7 @@ export function RichTextEditor({
                           editor.chain().focus().addColumnAfter().run();
                           setShowTableMenu(false);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
                       >
                         <Columns3 className="h-3.5 w-3.5 text-blue-600" />
                         <span>Thêm cột bên phải</span>
@@ -805,7 +829,7 @@ export function RichTextEditor({
                           editor.chain().focus().deleteRow().run();
                           setShowTableMenu(false);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40 cursor-pointer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         <span>Xóa hàng hiện tại</span>
@@ -816,7 +840,7 @@ export function RichTextEditor({
                           editor.chain().focus().deleteColumn().run();
                           setShowTableMenu(false);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40 cursor-pointer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         <span>Xóa cột hiện tại</span>
@@ -827,7 +851,7 @@ export function RichTextEditor({
                           editor.chain().focus().deleteTable().run();
                           setShowTableMenu(false);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-bold text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40 cursor-pointer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         <span>Xóa toàn bộ bảng</span>
@@ -857,7 +881,7 @@ export function RichTextEditor({
             className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-bold transition cursor-pointer ${
               isHtmlMode
                 ? 'bg-amber-500 text-white shadow-xs'
-                : 'text-slate-600 hover:bg-slate-200/70 dark:text-slate-400 dark:hover:bg-slate-700'
+                : 'text-slate-600 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-white'
             }`}
           >
             <Code2 className="h-4 w-4" />

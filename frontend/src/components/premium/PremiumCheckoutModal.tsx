@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Crown,
@@ -113,7 +114,7 @@ export const PremiumCheckoutModal: React.FC<PremiumCheckoutModalProps> = ({
     }
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
       {/* Backdrop */}
       <div
@@ -319,6 +320,7 @@ export const PremiumCheckoutModal: React.FC<PremiumCheckoutModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

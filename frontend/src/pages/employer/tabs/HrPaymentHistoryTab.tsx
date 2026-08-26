@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../../../auth/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { paymentApi, PaymentOrder, PaymentStatus } from '../../../lib/paymentApi';
@@ -381,98 +382,100 @@ export const HrPaymentHistoryTab: React.FC = () => {
       </div>
 
       {/* Invoice Detail Modal */}
-      {selectedOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-          <div
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm"
-            onClick={() => setSelectedOrder(null)}
-          />
+      {selectedOrder &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <div
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm"
+              onClick={() => setSelectedOrder(null)}
+            />
 
-          <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-gradient-to-r from-slate-900 to-primary p-5 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <Receipt className="h-5 w-5 text-amber-300" />
-                <h3 className="text-base font-black">Hóa Đơn Điện Tử #{selectedOrder.orderCode}</h3>
-              </div>
-              <button
-                onClick={() => setSelectedOrder(null)}
-                className="rounded-full p-1.5 text-white/70 hover:bg-white/10"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 text-xs">
-              <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60">
-                <span className="font-bold text-slate-500">Trạng thái:</span>
-                <div>{renderStatusBadge(selectedOrder.status, selectedOrder.expiresAt)}</div>
+            <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in-95 duration-150">
+              <div className="bg-gradient-to-r from-slate-900 to-primary p-5 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <Receipt className="h-5 w-5 text-amber-300" />
+                  <h3 className="text-base font-black">Hóa Đơn Điện Tử #{selectedOrder.orderCode}</h3>
+                </div>
+                <button
+                  onClick={() => setSelectedOrder(null)}
+                  className="rounded-full p-1.5 text-white/70 hover:bg-white/10"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
 
-              <div className="space-y-2 border-b border-dashed border-slate-200 dark:border-slate-800 pb-3">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Gói dịch vụ:</span>
-                  <span className="font-bold">HR Premium Enterprise</span>
+              <div className="p-5 space-y-4 text-xs">
+                <div className="flex justify-between items-center p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60">
+                  <span className="font-bold text-slate-500">Trạng thái:</span>
+                  <div>{renderStatusBadge(selectedOrder.status, selectedOrder.expiresAt)}</div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Chu kỳ:</span>
-                  <span>{getCycleLabel(selectedOrder.billingCycle)} ({selectedOrder.durationDays} ngày)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Ngày tạo:</span>
-                  <span>{formatDateTime(selectedOrder.createdAt)}</span>
-                </div>
-                {selectedOrder.paidAt && (
+
+                <div className="space-y-2 border-b border-dashed border-slate-200 dark:border-slate-800 pb-3">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Ngày thanh toán:</span>
-                    <span className="font-bold text-emerald-600">{formatDateTime(selectedOrder.paidAt)}</span>
+                    <span className="text-slate-500">Gói dịch vụ:</span>
+                    <span className="font-bold">HR Premium Enterprise</span>
                   </div>
-                )}
-                {selectedOrder.transactionReference && (
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Mã giao dịch:</span>
-                    <span className="font-mono">{selectedOrder.transactionReference}</span>
+                    <span className="text-slate-500">Chu kỳ:</span>
+                    <span>{getCycleLabel(selectedOrder.billingCycle)} ({selectedOrder.durationDays} ngày)</span>
                   </div>
-                )}
-              </div>
-
-              {selectedOrder.vatInvoiceRequested && (
-                <div className="rounded-xl bg-blue-50/50 dark:bg-blue-900/10 p-3 border border-blue-100 dark:border-blue-900/30 space-y-1">
-                  <span className="font-bold text-blue-900 dark:text-blue-300 block">Thông tin xuất hóa đơn VAT:</span>
-                  <p className="text-slate-700 dark:text-slate-300"><strong>Công ty:</strong> {selectedOrder.vatCompanyName}</p>
-                  <p className="text-slate-700 dark:text-slate-300"><strong>MST:</strong> {selectedOrder.vatTaxCode}</p>
-                  {selectedOrder.vatAddress && (
-                    <p className="text-slate-700 dark:text-slate-300"><strong>Địa chỉ:</strong> {selectedOrder.vatAddress}</p>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Ngày tạo:</span>
+                    <span>{formatDateTime(selectedOrder.createdAt)}</span>
+                  </div>
+                  {selectedOrder.paidAt && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Ngày thanh toán:</span>
+                      <span className="font-bold text-emerald-600">{formatDateTime(selectedOrder.paidAt)}</span>
+                    </div>
+                  )}
+                  {selectedOrder.transactionReference && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Mã giao dịch:</span>
+                      <span className="font-mono">{selectedOrder.transactionReference}</span>
+                    </div>
                   )}
                 </div>
-              )}
 
-              <div className="flex justify-between items-center text-sm font-black pt-1">
-                <span>Tổng thanh toán:</span>
-                <span className="text-lg text-primary">{Number(selectedOrder.amount).toLocaleString('vi-VN')} đ</span>
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  onClick={() => window.print()}
-                  className="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-bold text-slate-700 dark:text-slate-200"
-                >
-                  In hóa đơn
-                </button>
-                {selectedOrder.status === 'PENDING' && selectedOrder.checkoutUrl && (
-                  <a
-                    href={selectedOrder.checkoutUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex-1 py-2.5 rounded-xl bg-primary font-bold text-white text-center"
-                  >
-                    Thanh toán ngay
-                  </a>
+                {selectedOrder.vatInvoiceRequested && (
+                  <div className="rounded-xl bg-blue-50/50 dark:bg-blue-900/10 p-3 border border-blue-100 dark:border-blue-900/30 space-y-1">
+                    <span className="font-bold text-blue-900 dark:text-blue-300 block">Thông tin xuất hóa đơn VAT:</span>
+                    <p className="text-slate-700 dark:text-slate-300"><strong>Công ty:</strong> {selectedOrder.vatCompanyName}</p>
+                    <p className="text-slate-700 dark:text-slate-300"><strong>MST:</strong> {selectedOrder.vatTaxCode}</p>
+                    {selectedOrder.vatAddress && (
+                      <p className="text-slate-700 dark:text-slate-300"><strong>Địa chỉ:</strong> {selectedOrder.vatAddress}</p>
+                    )}
+                  </div>
                 )}
+
+                <div className="flex justify-between items-center text-sm font-black pt-1">
+                  <span>Tổng thanh toán:</span>
+                  <span className="text-lg text-primary">{Number(selectedOrder.amount).toLocaleString('vi-VN')} đ</span>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    In hóa đơn
+                  </button>
+                  {selectedOrder.status === 'PENDING' && selectedOrder.checkoutUrl && (
+                    <a
+                      href={selectedOrder.checkoutUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex-1 py-2.5 rounded-xl bg-primary font-bold text-white text-center"
+                    >
+                      Thanh toán ngay
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

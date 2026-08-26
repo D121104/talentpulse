@@ -101,7 +101,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
     {
       category: '2. Nâng cao Hiển thị & Độ uy tín',
       features: [
-        { name: 'Ưu tiên đẩy Top hiển thị với NTD', free: false, verified: '1 lần/tuần', premium: '1 lần/ngày (Top 1 Search)' },
+        { name: 'Ưu tiên đẩy Top hiển thị với NTD', free: false, verified: '1 lần/tháng', premium: '1 lần/ngày (Top 1 Search)' },
         { name: 'Biểu tượng tích xanh xác minh', free: false, verified: true, premium: true },
         { name: 'Sử dụng 100% mẫu CV Cao Cấp', free: false, verified: false, premium: true },
         { name: 'Sử dụng mẫu Cover Letter chuẩn Pro', free: false, verified: false, premium: true },
@@ -317,7 +317,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-                <span>{isCandidate ? 'Đẩy Top hồ sơ 1 lần/tuần' : 'Ưu tiên hiển thị tin 1 lần/tuần'}</span>
+                <span>{isCandidate ? 'Đẩy Top hồ sơ 1 lần/tháng' : 'Ưu tiên hiển thị tin 1 lần/tháng'}</span>
               </li>
               <li className="flex items-center gap-2 text-slate-400">
                 <CloseIcon className="h-4 w-4 text-slate-300 dark:text-slate-600 shrink-0" />

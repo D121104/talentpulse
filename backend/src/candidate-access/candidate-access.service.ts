@@ -168,6 +168,131 @@ function parseExperienceStats(
   return { years: computedYears, placesCount, summary };
 }
 
+export function extractCandidateSkills(skillsData: any): string[] {
+  if (!Array.isArray(skillsData) || skillsData.length === 0) {
+    return [];
+  }
+
+  const GENERIC_SKILL_HEADERS = new Set([
+    'tên kỹ năng',
+    'kỹ năng',
+    'kĩ năng',
+    'kỹ năng chuyên môn',
+    'kỹ năng mềm',
+    'kỹ năng khác',
+    'kỹ năng chính',
+    'kỹ năng phụ',
+    'mô tả kỹ năng',
+    'mức độ thành thạo',
+    'chi tiết',
+    'skill',
+    'skills',
+    'skill name',
+    'skill description',
+    'technical skills',
+    'professional skills',
+    'soft skills',
+    'hard skills',
+    'other skills',
+    'competencies',
+    'tools & technologies',
+  ]);
+
+  const PROFICIENCY_NOISE = new Set([
+    'thành thạo',
+    'cơ bản',
+    'nâng cao',
+    'chuyên sâu',
+    'tốt',
+    'khá',
+    'xuất sắc',
+    'mới bắt đầu',
+    'đang học',
+    'mức độ thành thạo',
+    'mô tả kỹ năng',
+    'chi tiết',
+    'beginner',
+    'intermediate',
+    'advanced',
+    'expert',
+    'proficient',
+    'good',
+    'fluent',
+    'basic',
+    'senior',
+    'junior',
+  ]);
+
+  const extracted: string[] = [];
+  const seenLower = new Set<string>();
+
+  const addSkill = (raw: string) => {
+    if (!raw) return;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.length < 2 || trimmed.length > 50) return;
+    const lower = trimmed.toLowerCase();
+
+    // Skip generic placeholder words or proficiency ratings
+    if (GENERIC_SKILL_HEADERS.has(lower) || PROFICIENCY_NOISE.has(lower)) {
+      return;
+    }
+    // Skip duration text (e.g. "2 năm", "3 years", "6 tháng")
+    if (/^\d+\s*(năm|tháng|year|years|month|months)/i.test(trimmed)) {
+      return;
+    }
+
+    if (!seenLower.has(lower)) {
+      seenLower.add(lower);
+      extracted.push(trimmed);
+    }
+  };
+
+  for (const item of skillsData) {
+    if (typeof item === 'string') {
+      const tokens = item.split(/[,;\/•|\n]+/).map((t) => t.trim()).filter(Boolean);
+      if (tokens.length > 1) {
+        tokens.forEach(addSkill);
+      } else {
+        addSkill(item);
+      }
+    } else if (typeof item === 'object' && item !== null) {
+      const name = (item.name || '').trim();
+      const desc = (item.description || '').trim();
+      const nameLower = name.toLowerCase();
+
+      // Check if description has comma/semicolon/bullet-separated skills
+      const descTokens = desc
+        .split(/[,;\/•|\n]+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      const hasMultipleDescSkills = descTokens.length > 1;
+
+      // If name is NOT a generic placeholder/header, add it
+      if (name && !GENERIC_SKILL_HEADERS.has(nameLower)) {
+        addSkill(name);
+      }
+
+      // If description contains skills, extract tokens
+      if (desc) {
+        if (hasMultipleDescSkills) {
+          descTokens.forEach(addSkill);
+        } else {
+          const descLower = desc.toLowerCase();
+          if (
+            !PROFICIENCY_NOISE.has(descLower) &&
+            !/^\d+\s*(năm|tháng|year|years|month|months)/i.test(desc)
+          ) {
+            addSkill(desc);
+          }
+        }
+      }
+    }
+  }
+
+  return extracted;
+}
+
 @Injectable()
 export class CandidateAccessService {
   private readonly logger = new Logger(CandidateAccessService.name);
@@ -407,7 +532,7 @@ export class CandidateAccessService {
       if (skillTokens.length > 0) {
         const skillConds = skillTokens.map(
           (sk, idx) =>
-            `(cv.skills::text ILIKE :online_sk_${idx} OR cv.careerObjective ILIKE :online_sk_${idx})`,
+            `(cv.skills::text ILIKE :online_sk_${idx} OR cv.careerObjective ILIKE :online_sk_${idx} OR cv.position ILIKE :online_sk_${idx} OR cv.title ILIKE :online_sk_${idx})`,
         );
         const params: Record<string, string> = {};
         skillTokens.forEach((sk, idx) => {
@@ -499,11 +624,7 @@ export class CandidateAccessService {
       );
       const isUnlocked = unlockedOnlineCvIds.has(`${candidate._id}_${cv._id}`);
 
-      const skills = Array.isArray(cv.skills)
-        ? cv.skills
-            .map((s: any) => (typeof s === 'string' ? s : s?.name || ''))
-            .filter(Boolean)
-        : [];
+      const skills = extractCandidateSkills(cv.skills);
 
       const expStats = parseExperienceStats(cv.workExperience || []);
       const title = cv.position || cv.title || 'Ứng viên tiềm năng';
@@ -518,7 +639,7 @@ export class CandidateAccessService {
       publicResults.push({
         candidateUserId: candidate._id,
         name: cv.fullName || candidate.name || 'Ứng viên',
-        avatar: candidate.avatar || null,
+        avatar: candidate.avatar || cv.avatar || null,
         title,
         skills,
         location: cv.address || candidate.address || 'Toàn quốc',
@@ -548,7 +669,7 @@ export class CandidateAccessService {
       );
       const isUnlocked = unlockedUserCvIds.has(`${candidate._id}_${cv._id}`);
 
-      const skills = Array.isArray(cv.skills) ? cv.skills.filter(Boolean) : [];
+      const skills = extractCandidateSkills(cv.skills);
       const expStats = parseExperienceStats(
         cv.experience || [],
         cv.parsedText || '',

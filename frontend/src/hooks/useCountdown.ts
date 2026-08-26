@@ -9,8 +9,8 @@ export interface UseCountdownReturn {
   isExpired: boolean;
 }
 
-export function useCountdown(targetDate?: string | Date | null): UseCountdownReturn {
-  const calculateRemaining = () => {
+export function useCountdown(targetDate?: string | Date | number | null): UseCountdownReturn {
+  const calculateRemaining = (): UseCountdownReturn => {
     if (!targetDate) {
       // No target date = countdown not started yet, NOT expired
       return {
@@ -35,21 +35,30 @@ export function useCountdown(targetDate?: string | Date | null): UseCountdownRet
     }
 
     const targetTime = parsed.getTime();
-
     const now = Date.now();
-    const remainingMs = Math.max(0, targetTime - now);
+    const remainingMs = targetTime - now;
+
+    if (remainingMs <= 0) {
+      return {
+        minutes: 0,
+        seconds: 0,
+        totalSeconds: 0,
+        formatted: '00:00',
+        isExpired: true,
+      };
+    }
+
     const totalSeconds = Math.floor(remainingMs / 1000);
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     const formatted = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-    const isExpired = totalSeconds <= 0;
 
     return {
       minutes,
       seconds,
       totalSeconds,
       formatted,
-      isExpired,
+      isExpired: false,
     };
   };
 

@@ -9,13 +9,16 @@ import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { v4 as uuidv4 } from 'uuid';
-import { types } from 'pg';
+import { types, defaults } from 'pg';
 import { AppModule } from './app.module';
 
-// Configure PostgreSQL type parsers for TIMESTAMP (OID 1114) and TIMESTAMPTZ (OID 1184)
-// TypeORM writes JavaScript Date objects to PostgreSQL as UTC strings ('YYYY-MM-DD HH:mm:ss.ms').
-// Without this parser, node-pg interprets TIMESTAMP WITHOUT TIME ZONE as local time,
-// which causes a double-offset shift when serialized to ISO JSON (e.g. subtracting 7 hours in GMT+7).
+// Configure PostgreSQL type parsers and date input behavior
+// 1. Force pg to format JS Date parameter values as UTC strings ('YYYY-MM-DD HH:mm:ss.ms +00:00')
+//    instead of local timezone strings, preventing PostgreSQL from stripping timezone and storing local clock time.
+defaults.parseInputDatesAsUTC = true;
+
+// 2. Configure PostgreSQL type parsers for TIMESTAMP (OID 1114) and TIMESTAMPTZ (OID 1184)
+//    Ensure TIMESTAMP WITHOUT TIME ZONE is parsed as UTC by appending 'Z', preventing double-offset shifts in GMT+7.
 types.setTypeParser(1114, (stringValue: string) => {
   if (!stringValue) return null;
   const isoStr = stringValue.includes('T') ? stringValue : stringValue.replace(' ', 'T');
