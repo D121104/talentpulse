@@ -9,6 +9,7 @@ import { RedisModule } from 'src/redis/redis.module';
 import { UsersModule } from 'src/users/users.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { AIMatchingModule } from 'src/ai-matching/ai-matching.module';
+import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AIMatchingModule } from 'src/ai-matching/ai-matching.module';
     RedisModule,
     NotificationsModule,
     AIMatchingModule,
+    ActiveJobsModule,
     forwardRef(() => UsersModule),
   ],
   controllers: [JobsController],

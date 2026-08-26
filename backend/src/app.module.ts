@@ -1,5 +1,7 @@
+import 'dotenv/config';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { validateEnvironment } from './config/environment.validation';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -25,8 +27,14 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
+import { ActiveJobsModule } from './active-jobs/active-jobs.module';
+import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 import { PaymentsModule } from './payments/payments.module';
 import { CandidateAccessModule } from './candidate-access/candidate-access.module';
+import { areQueueWorkersEnabled } from './config/runtime-flags';
+import { createRedisConnectionOptions } from './redis/redis.module';
+
+const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
@@ -34,6 +42,7 @@ import { CandidateAccessModule } from './candidate-access/candidate-access.modul
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      validate: validateEnvironment,
     }),
 
     // Throttle (Rate limiting)
@@ -45,20 +54,22 @@ import { CandidateAccessModule } from './candidate-access/candidate-access.modul
     ]),
 
     // Schedule (Cron jobs)
-    ScheduleModule.forRoot(),
+    ...(queueWorkersEnabled ? [ScheduleModule.forRoot()] : []),
 
     // Bull Queue with Redis
-    BullModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        redis: {
-          host: configService.get<string>('REDIS_HOST') || 'localhost',
-          port: configService.get<number>('REDIS_PORT') || 6379,
-          password: configService.get<string>('REDIS_PASSWORD') || undefined,
-        },
-      }),
-      inject: [ConfigService],
-    }),
+    ...(queueWorkersEnabled
+      ? [
+          BullModule.forRootAsync({
+            imports: [ConfigModule],
+            useFactory: async (configService: ConfigService) => ({
+              redis: {
+                ...createRedisConnectionOptions(configService),
+              },
+            }),
+            inject: [ConfigService],
+          }),
+        ]
+      : []),
 
     // PostgreSQL with TypeORM
     TypeOrmModule.forRootAsync({
@@ -72,7 +83,14 @@ import { CandidateAccessModule } from './candidate-access/candidate-access.modul
         database: configService.get<string>('DB_DATABASE', 'recruitment_db'),
         autoLoadEntities: true,
         synchronize:
-          configService.get<string>('DB_SYNCHRONIZE', 'true') === 'true',
+          configService.get<string>(
+            'DB_SYNCHRONIZE',
+            process.env.NODE_ENV === 'production' ? 'false' : 'true',
+          ) === 'true',
+        ssl:
+          process.env.NODE_ENV === 'production'
+            ? { rejectUnauthorized: false }
+            : false,
       }),
       inject: [ConfigService],
     }),
@@ -94,6 +112,8 @@ import { CandidateAccessModule } from './candidate-access/candidate-access.modul
     RedisModule,
     AIMatchingModule,
     OnlineCVsModule,
+    ActiveJobsModule,
+    AiCvConsentsModule,
     PaymentsModule,
     CandidateAccessModule,
   ],

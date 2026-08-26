@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import axios from 'axios';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 
 // Dynamic import for @xenova/transformers (ESM module)
 let pipeline: any;
@@ -17,11 +18,20 @@ export class AIMatchingService implements OnModuleInit {
   private modelLoadPromise: Promise<void> | null = null;
 
   async onModuleInit() {
-    // Preload the model on startup
-    this.loadModel();
-    // Load pdf-parse and mammoth dynamically
-    this.loadPdfParser();
-    this.loadMammoth();
+    // Queue workers are the only startup path that needs the embedding model
+    // and document parsers. Avoid downloading Xenova in API-only runtimes.
+    if (!areQueueWorkersEnabled()) {
+      this.logger.log('Background workers disabled; skipping AI model preload');
+      return;
+    }
+
+    // Preload the model and parsers for the CV worker.
+    void this.loadModel().catch(() => {
+      // loadModel logs the provider-specific failure; keep startup from
+      // producing an unhandled promise rejection.
+    });
+    void this.loadPdfParser();
+    void this.loadMammoth();
   }
 
   /**
@@ -84,7 +94,7 @@ export class AIMatchingService implements OnModuleInit {
         );
         this.logger.log('AI embedding model loaded successfully');
       } catch (error) {
-        this.logger.error('Failed to load AI model:', error);
+        this.logger.error('Failed to load AI model');
         throw error;
       } finally {
         this.isModelLoading = false;
@@ -99,7 +109,7 @@ export class AIMatchingService implements OnModuleInit {
    */
   async extractTextFromPdf(pdfUrl: string): Promise<string> {
     try {
-      this.logger.log(`Extracting text from PDF: ${pdfUrl}`);
+      this.logger.log('Extracting text from PDF');
 
       if (!pdfParse) {
         this.logger.log('pdfParse not loaded, attempting to load...');
@@ -110,10 +120,10 @@ export class AIMatchingService implements OnModuleInit {
         }
       }
 
-      this.logger.log(`pdfParse type: ${typeof pdfParse}`);
+      
 
       // Download PDF file
-      this.logger.log('Downloading PDF...');
+      this.logger.log('Downloading PDF');
       const response = await axios.get(pdfUrl, {
         responseType: 'arraybuffer',
         timeout: 30000,
@@ -124,18 +134,13 @@ export class AIMatchingService implements OnModuleInit {
       );
 
       const pdfBuffer = Buffer.from(response.data);
-      this.logger.log('Parsing PDF...');
+      this.logger.log('Parsing PDF');
       const data = await pdfParse(pdfBuffer);
 
       const extractedText = data.text.trim();
       this.logger.log(`Extracted ${extractedText.length} characters from PDF`);
 
-      // Log first 200 chars for debugging
-      if (extractedText.length > 0) {
-        this.logger.log(
-          `PDF text preview: ${extractedText.substring(0, 200)}...`,
-        );
-      } else {
+      if (extractedText.length === 0) {
         this.logger.warn(
           'PDF has no extractable text - may be image-based PDF',
         );
@@ -143,7 +148,7 @@ export class AIMatchingService implements OnModuleInit {
 
       return extractedText;
     } catch (error) {
-      this.logger.error(`PDF extraction failed for ${pdfUrl}:`, error);
+      this.logger.error('PDF extraction failed');
       return '';
     }
   }
@@ -153,7 +158,7 @@ export class AIMatchingService implements OnModuleInit {
    */
   async extractTextFromDocx(docxUrl: string): Promise<string> {
     try {
-      this.logger.log(`Extracting text from DOCX: ${docxUrl}`);
+      this.logger.log('Extracting text from DOCX');
 
       if (!mammoth) {
         await this.loadMammoth();
@@ -176,7 +181,7 @@ export class AIMatchingService implements OnModuleInit {
       this.logger.log(`Extracted ${extractedText.length} characters from DOCX`);
       return extractedText;
     } catch (error) {
-      this.logger.error(`DOCX extraction failed for ${docxUrl}:`, error);
+      this.logger.error('DOCX extraction failed');
       return '';
     }
   }
@@ -185,7 +190,7 @@ export class AIMatchingService implements OnModuleInit {
    * Extract text from uploaded file (PDF or DOCX)
    */
   async extractTextFromFile(fileUrl: string): Promise<string> {
-    this.logger.log(`Processing CV URL: ${fileUrl}`);
+    
 
     const cleanUrl = fileUrl.split('?')[0].split('#')[0].toLowerCase();
 
@@ -195,7 +200,7 @@ export class AIMatchingService implements OnModuleInit {
       return this.extractTextFromDocx(fileUrl);
     }
 
-    this.logger.warn(`Unsupported file type: ${fileUrl}`);
+    this.logger.warn('Unsupported CV file type');
     return '';
   }
 
@@ -369,7 +374,7 @@ export class AIMatchingService implements OnModuleInit {
       // Convert to array
       return Array.from(output.data);
     } catch (error) {
-      this.logger.error('Embedding generation failed:', error);
+      this.logger.error('Embedding generation failed');
       return [];
     }
   }
@@ -611,3 +616,5 @@ export class AIMatchingService implements OnModuleInit {
     };
   }
 }
+
+

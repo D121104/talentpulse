@@ -16,11 +16,19 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "package:lambda": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda.ps1",
+    "package:lambda-image": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda-image.ps1",
+    "migration:show": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/database/data-source.ts",
+    "migration:run": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d src/database/data-source.ts",
+    "migration:revert": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d src/database/data-source.ts",
+    "migration:generate": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d src/database/data-source.ts",
     "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
     "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
     "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts"
   },
   "dependencies": {
+    "@codegenie/serverless-express": "^4.17.1",
     "@nestjs-modules/mailer": "^1.11.2",
     "@nestjs/bull": "^10.0.1",
     "@nestjs/cache-manager": "^2.2.2",
@@ -120,6 +128,9 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/$1"
+    }
   }
 }

@@ -3,9 +3,9 @@ import { MailerService } from '@nestjs-modules/mailer';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Subscriber } from 'src/subscribers/entities/subscriber.entity';
-import { Job } from 'src/jobs/entities/job.entity';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ApplicationStatus } from 'src/applications/entities/application.entity';
+import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
 
 @Injectable()
 export class MailService {
@@ -16,8 +16,7 @@ export class MailService {
     private readonly mailerService: MailerService,
     @InjectRepository(Subscriber)
     private readonly subscriberRepo: Repository<Subscriber>,
-    @InjectRepository(Job)
-    private readonly jobRepo: Repository<Job>,
+    private readonly activeJobQueryService: ActiveJobQueryService,
   ) {}
 
   // Send OTP verification email to user
@@ -203,11 +202,7 @@ export class MailService {
     );
 
     const now = new Date();
-    const queryBuilder = this.jobRepo
-      .createQueryBuilder('job')
-      .where('job.isActive = :isActive', { isActive: true })
-      .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('job.endDate > :now', { now });
+    const queryBuilder = this.activeJobQueryService.createActiveQuery(now);
 
     const conditions = skillNames.map(
       (name, idx) =>
@@ -256,11 +251,7 @@ export class MailService {
       if (skillNames.length === 0) continue;
 
       const now = new Date();
-      const queryBuilder = this.jobRepo
-        .createQueryBuilder('job')
-        .where('job.isActive = :isActive', { isActive: true })
-        .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('job.endDate > :now', { now });
+      const queryBuilder = this.activeJobQueryService.createActiveQuery(now);
 
       const conditions = skillNames.map(
         (name, idx) =>

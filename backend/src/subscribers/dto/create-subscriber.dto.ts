@@ -3,12 +3,12 @@ import {
   IsArray,
   IsOptional,
   IsBoolean,
-  IsMongoId,
+  IsUUID,
 } from 'class-validator';
 
 export class CreateSubscriberDto {
   @IsOptional()
-  @IsMongoId()
+  @IsUUID('4')
   userId?: string;
 
   @IsNotEmpty({ message: 'Email is required' })

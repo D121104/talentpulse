@@ -68,6 +68,7 @@ graphify-out/
 # Local plans and planning notes
 *PLAN*.md
 *plan*.md
+plans/
 
 # TypeScript and lint caches
 *.tsbuildinfo

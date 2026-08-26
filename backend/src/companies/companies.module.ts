@@ -9,6 +9,7 @@ import { Application } from 'src/applications/entities/application.entity';
 import { UsersModule } from 'src/users/users.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
+import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
     RedisModule,
     forwardRef(() => UsersModule),
     NotificationsModule,
+    ActiveJobsModule,
   ],
   controllers: [CompaniesController],
   providers: [CompaniesService],

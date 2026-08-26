@@ -299,6 +299,8 @@ export class ApplicationsService implements OnModuleInit {
 
   // Get applications by job (for HR to review)
   async findByJob(jobId: string, qs: any, user: IUser) {
+    const job = await this.jobsService.findOneForInternal(jobId);
+
     if (user.role === Role.HR) {
       const userInfo = await this.usersService.findOne(user._id);
       if (!userInfo.company || !userInfo.company._id) {
@@ -312,8 +314,7 @@ export class ApplicationsService implements OnModuleInit {
           result: [],
         };
       }
-      const job = await this.jobsService.findOne(jobId);
-      if (!job || job.company?._id?.toString() !== userInfo.company._id.toString()) {
+      if (job.company?._id?.toString() !== userInfo.company._id.toString()) {
         throw new BadRequestException('Bạn không có quyền xem ứng viên của công việc này');
       }
     }
@@ -706,7 +707,7 @@ export class ApplicationsService implements OnModuleInit {
     topN = 10,
     user: IUser,
   ): Promise<IAIRankingResponse> {
-    const job = await this.jobsService.findOne(jobId);
+    const job = await this.jobsService.findOneForInternal(jobId);
     if (!job) {
       throw new NotFoundException('Công việc không tồn tại');
     }
@@ -798,7 +799,7 @@ export class ApplicationsService implements OnModuleInit {
     },
     user: IUser,
   ) {
-    const job = await this.jobsService.findOne(jobId);
+    const job = await this.jobsService.findOneForInternal(jobId);
     if (!job) {
       throw new NotFoundException('Công việc không tồn tại');
     }

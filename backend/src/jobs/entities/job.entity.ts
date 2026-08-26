@@ -35,7 +35,7 @@ export class Job {
   @Column({ nullable: true })
   level: string;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   startDate: Date;
 
   @Column({ type: 'int', nullable: true })
@@ -44,7 +44,7 @@ export class Job {
   @Column({ nullable: true })
   location: string;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   endDate: Date;
 
   @Column({ default: true })

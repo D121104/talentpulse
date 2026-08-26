@@ -11,13 +11,17 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
 import { AIMatchingModule } from 'src/ai-matching/ai-matching.module';
 import { JobsModule } from 'src/jobs/jobs.module';
 import { MailModule } from 'src/mail/mail.module';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
+import { createNoopQueueProvider } from 'src/queues/queue-runtime';
+
+const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Application, CVMatchResult]),
-    BullModule.registerQueue({
-      name: 'mail-queue',
-    }),
+    ...(queueWorkersEnabled
+      ? [BullModule.registerQueue({ name: 'mail-queue' })]
+      : []),
     UsersModule,
     UserCVsModule,
     NotificationsModule,
@@ -26,7 +30,10 @@ import { MailModule } from 'src/mail/mail.module';
     forwardRef(() => JobsModule),
   ],
   controllers: [ApplicationsController],
-  providers: [ApplicationsService],
+  providers: [
+    ApplicationsService,
+    ...(queueWorkersEnabled ? [] : [createNoopQueueProvider('mail-queue')]),
+  ],
   exports: [ApplicationsService],
 })
 export class ApplicationsModule {}

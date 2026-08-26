@@ -2,7 +2,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsBoolean,
-  IsMongoId,
+  IsUUID,
   IsArray,
   IsString,
   IsEnum,
@@ -23,11 +23,11 @@ export class CreateUserCVDto {
   isPrimary?: boolean;
 
   @IsOptional()
-  @IsMongoId()
+  @IsUUID('4')
   onlineCvId?: string; // Reference to online CV if created via online builder
 
   @IsOptional()
-  @IsEnum(['pdf', 'docx', 'online'])
+  @IsEnum(['pdf', 'doc', 'docx', 'online'])
   fileType?: string;
 
   @IsOptional()
