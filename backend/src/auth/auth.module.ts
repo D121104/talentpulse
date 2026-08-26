@@ -13,6 +13,7 @@ import { User } from 'src/users/entities/user.entity';
 import { GoogleStrategy } from './passport/google.strategy';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { RedisModule } from 'src/redis/redis.module';
+import { MailModule } from 'src/mail/mail.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { RedisModule } from 'src/redis/redis.module';
     PassportModule,
     NotificationsModule,
     RedisModule,
+    MailModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

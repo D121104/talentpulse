@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsNotEmpty,
@@ -133,6 +134,11 @@ export class CreateOnlineCVDto {
   @IsEnum(['template1', 'template2'])
   templateType: string;
 
+  @ApiPropertyOptional({ description: 'Tên / Tiêu đề của CV (vd: CV - Senior Developer)' })
+  @IsOptional()
+  @IsString()
+  title?: string;
+
   @ApiProperty()
   @IsNotEmpty()
   @IsString()
@@ -244,4 +250,14 @@ export class CreateOnlineCVDto {
   @IsOptional()
   @IsString()
   htmlContent?: string;
+
+  @ApiPropertyOptional({ description: 'Cho phép Nhà Tuyển Dụng tìm kiếm CV này', default: true })
+  @IsOptional()
+  @IsBoolean()
+  isSearchable?: boolean;
+
+  @ApiPropertyOptional({ description: 'Đặt làm CV chính', default: false })
+  @IsOptional()
+  @IsBoolean()
+  isPrimary?: boolean;
 }

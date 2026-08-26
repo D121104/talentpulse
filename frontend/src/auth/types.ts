@@ -10,6 +10,16 @@ export interface AuthUser {
   address?: string;
   avatar?: string;
   isApproved?: boolean;
+  isPremium?: boolean;
+  premiumPlan?: string;
+  premiumExpiresAt?: string;
+  isVerified?: boolean;
+  verifiedAt?: string;
+  lastBoostedAt?: string;
+  boostExpiresAt?: string;
+  isJobSeeking?: boolean;
+  isJobRecommendation?: boolean;
+  allowRecruiterSearch?: boolean;
   company?: {
     _id: string;
     name: string;

@@ -49,4 +49,8 @@ export class CreateUserCVDto {
   @IsOptional()
   @IsArray()
   certificates?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  isSearchable?: boolean;
 }

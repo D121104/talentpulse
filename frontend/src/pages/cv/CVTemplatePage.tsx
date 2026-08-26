@@ -14,11 +14,15 @@ import {
   SlidersHorizontal,
   Bot,
   ChevronDown,
+  Crown,
 } from 'lucide-react';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import { CVPreviewCanvas } from '../../components/cv/CVPreviewCanvas';
 import { MobileNoticeModal } from '../../components/cv/MobileNoticeModal';
+import { useAuth } from '../../auth/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { onlineCvApi } from '../../lib/cvApi';
 import type { CVTemplateType } from '../../lib/cvTypes';
 
 interface TemplateItem {
@@ -29,6 +33,7 @@ interface TemplateItem {
   tags: string[];
   colors: string[];
   recommendedRole: string;
+  isPremium?: boolean;
 }
 
 const TEMPLATES: TemplateItem[] = [
@@ -40,6 +45,7 @@ const TEMPLATES: TemplateItem[] = [
     tags: ['ATS', 'Đơn giản'],
     colors: ['#0F172A', '#2563EB', '#475569', '#DC2626', '#0D9488'],
     recommendedRole: 'Phù hợp mọi ngành nghề & hệ thống ATS',
+    isPremium: false,
   },
   {
     id: 'template1',
@@ -49,24 +55,27 @@ const TEMPLATES: TemplateItem[] = [
     tags: ['ATS', 'Đơn giản', 'Chuyên nghiệp'],
     colors: ['#475569', '#2563EB', '#0F172A', '#0D9488', '#991B1B'],
     recommendedRole: 'Dành cho sinh viên mới tốt nghiệp hoặc thực tập sinh',
+    isPremium: false,
   },
   {
     id: 'template2',
-    title: 'Thanh lịch',
+    title: 'Thanh lịch (Executive 2 Cột)',
     subtitle: 'Bố cục 2 cột thanh lịch với dòng thời gian tinh tế',
     category: 'professional',
-    tags: ['ATS', 'Đơn giản', 'Hiện đại'],
+    tags: ['PREMIUM', 'Hiện đại', 'Chuyên nghiệp'],
     colors: ['#DC2626', '#2563EB', '#0F172A', '#0D9488', '#4F46E5'],
     recommendedRole: 'Phù hợp Quản lý, Marketing, HR & Kinh doanh',
+    isPremium: true,
   },
   {
     id: 'template2',
-    title: 'Hiện đại (Modern Timeline)',
+    title: 'Hiện đại (Modern Timeline Pro)',
     subtitle: 'Đường phân cách trực quan nổi bật các mốc sự nghiệp',
     category: 'modern',
-    tags: ['Hiện đại', 'Chuyên nghiệp', 'Ấn tượng'],
+    tags: ['PREMIUM', 'Hiện đại', 'Ấn tượng'],
     colors: ['#2563EB', '#0D9488', '#4F46E5', '#0F172A', '#991B1B'],
     recommendedRole: 'Dành cho Lập trình viên, Designer & Project Manager',
+    isPremium: true,
   },
   {
     id: 'template1',
@@ -76,6 +85,7 @@ const TEMPLATES: TemplateItem[] = [
     tags: ['ATS', 'Kỹ thuật', 'Chuyên nghiệp'],
     colors: ['#2563EB', '#0F172A', '#0D9488', '#475569', '#DC2626'],
     recommendedRole: 'Software Engineer, Data Engineer, DevOps & QA',
+    isPremium: false,
   },
   {
     id: 'template1',
@@ -85,6 +95,7 @@ const TEMPLATES: TemplateItem[] = [
     tags: ['Harvard', 'Đơn giản', 'Trang trọng'],
     colors: ['#0F172A', '#991B1B', '#2563EB', '#475569', '#0D9488'],
     recommendedRole: 'Dành cho Luật, Tài chính, Tư vấn & Học thuật',
+    isPremium: false,
   },
 ];
 
@@ -150,26 +161,22 @@ const SAMPLE_PREVIEW_DATA = {
 };
 
 export default function CVTemplatePage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
+  const { user, accessToken } = useAuth();
+  const toast = useToast();
 
   const [activeCategory, setActiveCategory] = useState<string>('all');
-  const [selectedLanguage, setSelectedLanguage] = useState<'vi' | 'en'>(
-    (i18n.language as 'vi' | 'en') || 'vi',
-  );
+  const [selectedLanguage, setSelectedLanguage] = useState<'vi' | 'en'>('vi');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedColorMap, setSelectedColorMap] = useState<Record<string, string>>({});
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedColorMap, setSelectedColorMap] = useState<Record<string, string>>({
-    '0': '#0F172A',
-    '1': '#475569',
-    '2': '#DC2626',
-    '3': '#2563EB',
-    '4': '#2563EB',
-    '5': '#0F172A',
-  });
-
   const [isMobileNoticeOpen, setIsMobileNoticeOpen] = useState(false);
+  const [currentCvCount, setCurrentCvCount] = useState<number>(0);
   const [isMobileScreen, setIsMobileScreen] = useState(false);
+
+  const isUserPremium = Boolean(user?.isPremium);
+  const maxLimit = isUserPremium ? 9999 : user?.isVerified ? 6 : 3;
 
   useEffect(() => {
     const checkScreen = () => {
@@ -179,6 +186,17 @@ export default function CVTemplatePage() {
     window.addEventListener('resize', checkScreen);
     return () => window.removeEventListener('resize', checkScreen);
   }, []);
+
+  useEffect(() => {
+    if (accessToken) {
+      onlineCvApi
+        .findAll(accessToken)
+        .then((cvs) => {
+          setCurrentCvCount(cvs?.length || 0);
+        })
+        .catch(() => {});
+    }
+  }, [accessToken]);
 
   const categories = [
     { id: 'all', label: t('cv.allCategories', 'Tất cả'), icon: LayoutGrid },
@@ -190,12 +208,39 @@ export default function CVTemplatePage() {
     { id: 'ats', label: t('cv.atsCategory', 'ATS'), icon: FileText },
   ];
 
-  const handleUseTemplate = (templateId: CVTemplateType) => {
+  const handleUseTemplate = (template: TemplateItem) => {
     if (isMobileScreen) {
       setIsMobileNoticeOpen(true);
       return;
     }
-    navigate(`/cv-editor/new?template=${templateId}`);
+
+    // 1. Check CV limit
+    if (!isUserPremium && currentCvCount >= maxLimit) {
+      toast.error(
+        `Đạt giới hạn ${maxLimit} CV`,
+        user?.isVerified
+          ? 'Vui lòng nâng cấp gói Candidate Premium để tạo không giới hạn CV.'
+          : 'Vui lòng xác thực tài khoản qua email (nhận 6 CV) hoặc nâng cấp Premium.',
+      );
+      return;
+    }
+
+    // 2. Check Premium template lock
+    if (template.isPremium && !isUserPremium) {
+      toast.info(
+        'Mẫu CV Cao Cấp (Premium)',
+        'Mẫu CV này chỉ dành cho tài khoản Candidate Premium. Vui lòng nâng cấp để sử dụng 100% mẫu CV Cao Cấp.',
+      );
+      navigate('/premium');
+      return;
+    }
+
+    navigate(`/cv-editor/new?template=${template.id}`, {
+      state: {
+        templateType: template.id,
+        cvLanguage: selectedLanguage,
+      },
+    });
   };
 
   const filteredTemplates = TEMPLATES.filter((tpl) => {
@@ -384,44 +429,65 @@ export default function CVTemplatePage() {
                     </div>
 
                     {/* Hover Overlay with Action Button */}
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/60 p-6 opacity-0 backdrop-blur-[2px] transition-all duration-200 group-hover:opacity-100">
-                      <button
-                        type="button"
-                        onClick={() => handleUseTemplate(template.id)}
-                        className="flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-xs sm:text-sm font-extrabold text-white shadow-2xl shadow-primary/40 transition hover:bg-primary-dark hover:scale-105 active:scale-95 cursor-pointer"
-                      >
-                        <FileText className="h-4 w-4" />
-                        <span>{t('cv.useTemplateBtn', 'Dùng mẫu này')}</span>
-                      </button>
-                      <p className="mt-2 text-[11px] font-semibold text-white/80">
-                        {t('cv.editInBrowser', 'Chỉnh sửa trực tiếp trên trình duyệt')}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/65 p-6 opacity-0 backdrop-blur-[2px] transition-all duration-200 group-hover:opacity-100">
+                      {template.isPremium && !isUserPremium ? (
+                        <button
+                          type="button"
+                          onClick={() => handleUseTemplate(template)}
+                          className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-3 text-xs sm:text-sm font-extrabold text-white shadow-2xl shadow-amber-500/40 transition hover:from-amber-600 hover:to-amber-700 hover:scale-105 active:scale-95 cursor-pointer"
+                        >
+                          <Crown className="h-4 w-4" />
+                          <span>Mở Khóa Premium Để Dùng</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleUseTemplate(template)}
+                          className="flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-xs sm:text-sm font-extrabold text-white shadow-2xl shadow-primary/40 transition hover:bg-primary-dark hover:scale-105 active:scale-95 cursor-pointer"
+                        >
+                          <FileText className="h-4 w-4" />
+                          <span>{t('cv.useTemplateBtn', 'Dùng mẫu này')}</span>
+                        </button>
+                      )}
+                      <p className="mt-2 text-[11px] font-semibold text-white/80 text-center">
+                        {template.isPremium && !isUserPremium
+                          ? 'Đặc quyền gói Candidate Premium'
+                          : t('cv.editInBrowser', 'Chỉnh sửa trực tiếp trên trình duyệt')}
                       </p>
                     </div>
                   </div>
 
                   {/* Card Bottom Meta (Color Dots, Title, Tags matching screenshot) */}
                   <div className="mt-3.5 flex flex-col flex-1 justify-between">
-                    {/* Color Swatch Dots */}
-                    <div className="flex items-center gap-1.5 mb-2">
-                      {template.colors.map((color, cIdx) => (
-                        <button
-                          key={cIdx}
-                          type="button"
-                          onClick={() =>
-                            setSelectedColorMap((prev) => ({
-                              ...prev,
-                              [String(index)]: color,
-                            }))
-                          }
-                          className={`h-4.5 w-4.5 rounded-full transition-all cursor-pointer ${
-                            activeColor === color
-                              ? 'ring-2 ring-primary ring-offset-2 scale-110'
-                              : 'hover:scale-110 opacity-75 hover:opacity-100'
-                          }`}
-                          style={{ backgroundColor: color }}
-                          aria-label={`Color ${color}`}
-                        />
-                      ))}
+                    {/* Color Swatch Dots & VIP Badge */}
+                    <div className="flex items-center justify-between gap-1.5 mb-2">
+                      <div className="flex items-center gap-1.5">
+                        {template.colors.map((color, cIdx) => (
+                          <button
+                            key={cIdx}
+                            type="button"
+                            onClick={() =>
+                              setSelectedColorMap((prev) => ({
+                                ...prev,
+                                [String(index)]: color,
+                              }))
+                            }
+                            className={`h-4.5 w-4.5 rounded-full transition-all cursor-pointer ${
+                              activeColor === color
+                                ? 'ring-2 ring-primary ring-offset-2 scale-110'
+                                : 'hover:scale-110 opacity-75 hover:opacity-100'
+                            }`}
+                            style={{ backgroundColor: color }}
+                            aria-label={`Color ${color}`}
+                          />
+                        ))}
+                      </div>
+
+                      {template.isPremium && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-black text-amber-700 dark:text-amber-300 shadow-xs">
+                          <Crown className="h-3 w-3" /> PREMIUM
+                        </span>
+                      )}
                     </div>
 
                     {/* Title */}

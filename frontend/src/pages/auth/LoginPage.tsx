@@ -7,7 +7,10 @@ import { ApiError, getGoogleLoginUrl } from '../../lib/api';
 import { useAuth } from '../../auth/AuthContext';
 
 function getDestination(user: { role: string; isApproved?: boolean }) {
-  return user.role === 'HR' && !user.isApproved ? '/pending-approval' : '/dashboard';
+  if (user.role === 'HR') {
+    return !user.isApproved ? '/pending-approval' : '/dashboard';
+  }
+  return '/';
 }
 
 export default function LoginPage() {

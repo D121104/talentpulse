@@ -46,6 +46,12 @@ export class Company {
   isActive: boolean;
 
   @Column({ default: false })
+  isPremium: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  premiumExpiresAt: Date;
+
+  @Column({ default: false })
   isDeleted: boolean;
 
   @Column({ type: 'jsonb', nullable: true })

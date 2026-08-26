@@ -25,8 +25,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
-
-const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
+import { PaymentsModule } from './payments/payments.module';
+import { CandidateAccessModule } from './candidate-access/candidate-access.module';
 
 @Module({
   imports: [
@@ -44,8 +44,8 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
       },
     ]),
 
-    // Lambda executions are short lived, so cron jobs run in a separate worker.
-    ...(runBackgroundJobs ? [ScheduleModule.forRoot()] : []),
+    // Schedule (Cron jobs)
+    ScheduleModule.forRoot(),
 
     // Bull Queue with Redis
     BullModule.forRootAsync({
@@ -55,10 +55,6 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
           host: configService.get<string>('REDIS_HOST') || 'localhost',
           port: configService.get<number>('REDIS_PORT') || 6379,
           password: configService.get<string>('REDIS_PASSWORD') || undefined,
-          tls:
-            configService.get<string>('REDIS_TLS') === 'true'
-              ? {}
-              : undefined,
         },
       }),
       inject: [ConfigService],
@@ -67,7 +63,6 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
     // PostgreSQL with TypeORM
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      inject: [ConfigService],
       useFactory: async (configService: ConfigService) => ({
         type: 'postgres',
         host: configService.get<string>('DB_HOST', 'localhost'),
@@ -75,17 +70,11 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres123'),
         database: configService.get<string>('DB_DATABASE', 'recruitment_db'),
-
         autoLoadEntities: true,
-
         synchronize:
           configService.get<string>('DB_SYNCHRONIZE', 'true') === 'true',
-
-        ssl:
-          process.env.NODE_ENV === 'production'
-            ? { rejectUnauthorized: false }
-            : false,
       }),
+      inject: [ConfigService],
     }),
 
     // Feature modules
@@ -105,6 +94,8 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
     RedisModule,
     AIMatchingModule,
     OnlineCVsModule,
+    PaymentsModule,
+    CandidateAccessModule,
   ],
   controllers: [AppController],
   providers: [AppService],

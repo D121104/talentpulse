@@ -18,6 +18,7 @@ import { UpdateJobDto } from './dto/update-job.dto';
 import { Job } from './entities/job.entity';
 import aqp from 'api-query-params';
 import { IUser } from 'src/users/users.interface';
+import { Role } from 'src/decorator/customize';
 import { UsersService } from 'src/users/users.service';
 import { RedisService } from 'src/redis/redis.service';
 import { Company } from 'src/companies/entities/company.entity';
@@ -96,7 +97,10 @@ export class JobsService {
         );
       }
     } else {
-      queryBuilder.orderBy('job.createdAt', 'DESC');
+      queryBuilder
+        .orderBy('job.isHot', 'DESC')
+        .addOrderBy('job.boostedAt', 'DESC', 'NULLS LAST')
+        .addOrderBy('job.createdAt', 'DESC');
     }
 
     const [jobs, totalRecord] = await queryBuilder
@@ -175,7 +179,10 @@ export class JobsService {
         );
       }
     } else {
-      queryBuilder.orderBy('job.createdAt', 'DESC');
+      queryBuilder
+        .orderBy('job.isHot', 'DESC')
+        .addOrderBy('job.boostedAt', 'DESC', 'NULLS LAST')
+        .addOrderBy('job.createdAt', 'DESC');
     }
 
     const [jobs, totalRecord] = await queryBuilder
@@ -231,6 +238,27 @@ export class JobsService {
 
     if (!company.isActive) {
       throw new BadRequestException('Company is not active');
+    }
+
+    // Enforce active jobs limit (6 concurrent active jobs for Standard Free HR, unlimited for HR Premium & Admin)
+    const isHrPrem = this.usersService.isHrPremium(userInDb);
+    const maxActiveJobs = this.usersService.getUserMaxActiveJobs(userInDb);
+
+    if (!isHrPrem && user.role !== Role.ADMIN) {
+      const now = new Date();
+      const activeJobsCount = await this.jobRepo
+        .createQueryBuilder('job')
+        .where("job.company->>'_id' = :companyId", { companyId: company._id })
+        .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('job.isActive = :isActive', { isActive: true })
+        .andWhere('job.endDate > :now', { now })
+        .getCount();
+
+      if (activeJobsCount >= maxActiveJobs) {
+        throw new BadRequestException(
+          `Tài khoản HR miễn phí chỉ được có tối đa ${maxActiveJobs} tin tuyển dụng đang hoạt động cùng lúc (còn hạn tuyển dụng và chưa bị xóa). Vui lòng đóng/xóa bớt tin cũ hoặc nâng cấp gói HR Premium để đăng tin không giới hạn!`,
+        );
+      }
     }
 
     createJobDto.company = {
@@ -357,7 +385,10 @@ export class JobsService {
           );
         }
       } else {
-        queryBuilder.orderBy('job.createdAt', 'DESC');
+        queryBuilder
+          .orderBy('job.isHot', 'DESC')
+          .addOrderBy('job.boostedAt', 'DESC', 'NULLS LAST')
+          .addOrderBy('job.createdAt', 'DESC');
       }
 
       const [jobs, totalRecord] = await queryBuilder
@@ -511,6 +542,51 @@ export class JobsService {
 
     await this.redisService.invalidateJobsCache();
     return await this.jobRepo.softDelete(id);
+  }
+
+  async boostJob(id: string, user: IUser) {
+    const userInDb = await this.usersService.findOneByEmail(user.email);
+    if (!userInDb) {
+      throw new NotFoundException('User not found');
+    }
+
+    const isHrPrem = this.usersService.isHrPremium(userInDb);
+    if (!isHrPrem && user.role !== Role.ADMIN) {
+      throw new BadRequestException(
+        'Tính năng đẩy TOP tin tuyển dụng chỉ dành riêng cho tài khoản HR Premium. Vui lòng nâng cấp gói HR Premium để sử dụng tính năng này!',
+      );
+    }
+
+    const job = await this.jobRepo.findOne({
+      where: { _id: id, isDeleted: false },
+    });
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+
+    if (
+      userInDb.company &&
+      user.role !== Role.ADMIN &&
+      job.company?._id?.toString() !== userInDb.company._id?.toString()
+    ) {
+      throw new BadRequestException(
+        'Bạn chỉ có thể đẩy TOP tin tuyển dụng thuộc công ty của mình.',
+      );
+    }
+
+    const now = new Date();
+    job.isHot = true;
+    job.boostedAt = now;
+    job.updatedAt = now;
+
+    const savedJob = await this.jobRepo.save(job);
+    await this.redisService.invalidateJobsCache();
+
+    return {
+      message:
+        'Đã đẩy TOP tin tuyển dụng thành công! Tin của bạn sẽ được ưu tiên hiển thị đầu trang với nhãn HOT nổi bật.',
+      job: savedJob,
+    };
   }
 
   async countJobs() {
