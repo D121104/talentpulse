@@ -51,6 +51,12 @@ export class Job {
   isActive: boolean;
 
   @Column({ default: false })
+  isFeatured: boolean;
+
+  @Column({ default: false })
+  isUrgent: boolean;
+
+  @Column({ default: false })
   isDeleted: boolean;
 
   @Column({ type: 'jsonb', nullable: true })

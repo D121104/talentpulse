@@ -1,16 +1,17 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OnlineCVsController } from './online-cvs.controller';
 import { OnlineCVsService } from './online-cvs.service';
 import { OnlineCV } from './entities/online-cv.entity';
+import { User } from 'src/users/entities/user.entity';
 import { FilesModule } from 'src/files/files.module';
-import { UserCVsModule } from 'src/usercvs/usercvs.module';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([OnlineCV]),
+    TypeOrmModule.forFeature([OnlineCV, User]),
     FilesModule,
-    forwardRef(() => UserCVsModule),
+    UsersModule,
   ],
   controllers: [OnlineCVsController],
   providers: [OnlineCVsService],

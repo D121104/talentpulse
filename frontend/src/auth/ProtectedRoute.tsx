@@ -11,7 +11,7 @@ export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) 
     return <Navigate to="/pending-approval" replace />;
   }
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={user.role === 'HR' ? '/dashboard' : '/'} replace />;
   }
 
   return <Outlet />;

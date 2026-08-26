@@ -25,6 +25,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -92,6 +93,7 @@ import { OnlineCVsModule } from './online-cvs/online-cvs.module';
     RedisModule,
     AIMatchingModule,
     OnlineCVsModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

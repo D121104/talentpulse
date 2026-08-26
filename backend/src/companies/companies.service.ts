@@ -11,6 +11,7 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
+import { Application, ApplicationStatus } from 'src/applications/entities/application.entity';
 import { IUser } from 'src/users/users.interface';
 import aqp from 'api-query-params';
 import { FollowCompanyDto } from './dto/follow-company.dto';
@@ -33,6 +34,9 @@ export class CompaniesService {
     @InjectRepository(Job)
     private readonly jobRepo: Repository<Job>,
 
+    @InjectRepository(Application)
+    private readonly applicationRepo: Repository<Application>,
+
     private readonly redisService: RedisService,
 
     private readonly notificationService: NotificationsService,
@@ -40,6 +44,7 @@ export class CompaniesService {
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
   ) {}
+
 
   // Create a new company (Admin only), invalidate Redis cache
   async create(createCompanyDto: CreateCompanyDto, user: IUser) {
@@ -303,7 +308,7 @@ export class CompaniesService {
 
     const newCompany = this.companyRepo.create({
       ...createCompanyDto,
-      isActive: false,
+      isActive: true,
       createdBy: {
         _id: user._id,
         email: user.email,
@@ -337,7 +342,7 @@ export class CompaniesService {
 
     if (!company) throw new NotFoundException('Company not found');
 
-    const hrsInCompany = await this.usersService.findAllByCompanyId(id);
+    const hrsInCompany = await this.getCompanyHrs(id);
 
     const jobCount = await this.jobRepo
       .createQueryBuilder('job')
@@ -359,7 +364,17 @@ export class CompaniesService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    return await this.usersService.findAllByCompanyId(companyId);
+    const hrs = await this.usersService.findAllByCompanyId(companyId);
+    const creatorId = company.createdBy?._id?.toString();
+
+    return hrs.map((hr) => {
+      const isLead = Boolean(creatorId && hr._id?.toString() === creatorId);
+      return {
+        ...hr,
+        isLead,
+        hrRole: isLead ? 'LEAD' : 'MEMBER',
+      };
+    });
   }
 
   async findWithUserFollow(companyId: string) {
@@ -483,7 +498,7 @@ export class CompaniesService {
 
     if (company.createdBy?._id?.toString() !== approver._id.toString()) {
       throw new BadRequestException(
-        'Chỉ người tạo công ty mới có quyền duyệt yêu cầu tham gia',
+        'Chỉ HR Trưởng (người tạo công ty) mới có quyền duyệt yêu cầu tham gia',
       );
     }
 
@@ -500,6 +515,7 @@ export class CompaniesService {
     await this.usersService.updateUserCompany(userId, {
       _id: companyId,
       name: company.name,
+      isActive: true,
     });
 
     // Notify the requesting user
@@ -527,7 +543,7 @@ export class CompaniesService {
 
     if (company.createdBy?._id?.toString() !== approver._id.toString()) {
       throw new BadRequestException(
-        'Chỉ người tạo công ty mới có quyền từ chối yêu cầu tham gia',
+        'Chỉ HR Trưởng (người tạo công ty) mới có quyền từ chối yêu cầu tham gia',
       );
     }
 
@@ -584,7 +600,7 @@ export class CompaniesService {
 
     const newCompany = this.companyRepo.create({
       ...createCompanyDto,
-      isActive: false,
+      isActive: true,
       createdBy: {
         _id: user._id,
         email: user.email,
@@ -597,6 +613,7 @@ export class CompaniesService {
     await this.usersService.updateUserCompany(user._id.toString(), {
       _id: savedCompany._id.toString(),
       name: savedCompany.name,
+      isActive: true,
     });
 
     await this.redisService.invalidateCompaniesCache();
@@ -620,4 +637,236 @@ export class CompaniesService {
 
     return savedCompany;
   }
+
+  // Get comprehensive HR dashboard statistics from PostgreSQL
+  async getHrDashboardStats(user: IUser) {
+    const userInDb = await this.usersService.findOneByEmail(user.email);
+    if (!userInDb || !userInDb.company || !userInDb.company._id) {
+      const isPrem = userInDb ? this.usersService.isHrPremium(userInDb) : false;
+      return {
+        hasCompany: false,
+        isProfileComplete: false,
+        isPremium: isPrem,
+        premiumPlan: userInDb?.premiumPlan || 'FREE',
+        premiumExpiresAt: userInDb?.premiumExpiresAt || null,
+        company: null,
+        stats: {
+          totalJobs: 0,
+          activeJobs: 0,
+          todayJobsPostedCount: 0,
+          maxDailyJobs: isPrem ? 9999 : 5,
+          totalApplications: 0,
+          pendingApplications: 0,
+          reviewingApplications: 0,
+          approvedApplications: 0,
+          rejectedApplications: 0,
+          followersCount: 0,
+          dailyApplicationStats: [],
+          topJobs: [],
+          recentApplications: [],
+        },
+      };
+    }
+
+    const companyId = userInDb.company._id;
+    const company = await this.companyRepo.findOne({
+      where: { _id: companyId, isDeleted: false },
+    });
+
+    if (!company) {
+      const isPrem = this.usersService.isHrPremium(userInDb);
+      return {
+        hasCompany: false,
+        isProfileComplete: false,
+        isPremium: isPrem,
+        premiumPlan: userInDb.premiumPlan || 'FREE',
+        premiumExpiresAt: userInDb.premiumExpiresAt || null,
+        company: null,
+        stats: {
+          totalJobs: 0,
+          activeJobs: 0,
+          todayJobsPostedCount: 0,
+          maxDailyJobs: isPrem ? 9999 : 5,
+          totalApplications: 0,
+          pendingApplications: 0,
+          reviewingApplications: 0,
+          approvedApplications: 0,
+          rejectedApplications: 0,
+          followersCount: 0,
+          dailyApplicationStats: [],
+          topJobs: [],
+          recentApplications: [],
+        },
+      };
+    }
+
+    const isProfileComplete = Boolean(
+      company.name &&
+      company.taxCode &&
+      company.scale &&
+      company.address &&
+      company.description &&
+      company.logo,
+    );
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    // Total jobs & active jobs & today jobs
+    const allCompanyJobs = await this.jobRepo
+      .createQueryBuilder('job')
+      .where("job.company->>'_id' = :companyId", { companyId })
+      .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+      .orderBy('job.createdAt', 'DESC')
+      .getMany();
+
+    const totalJobs = allCompanyJobs.length;
+    const activeJobs = allCompanyJobs.filter(
+      (job) => new Date(job.endDate) > now && job.isActive !== false,
+    ).length;
+    const todayJobsPostedCount = allCompanyJobs.filter(
+      (job) => new Date(job.createdAt) >= startOfToday,
+    ).length;
+
+    // Applications counts
+    const applications = await this.applicationRepo
+      .createQueryBuilder('app')
+      .leftJoinAndSelect('app.job', 'job')
+      .leftJoinAndSelect('app.user', 'user')
+      .leftJoinAndSelect('app.cv', 'cv')
+      .where('app.companyId = :companyId', { companyId })
+      .andWhere('app.isDeleted = :isDeleted', { isDeleted: false })
+      .orderBy('app.createdAt', 'DESC')
+      .getMany();
+
+    const totalApplications = applications.length;
+    const pendingApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.PENDING,
+    ).length;
+    const reviewingApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.REVIEWING,
+    ).length;
+    const consideringApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.CONSIDERING,
+    ).length;
+    const approvedApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.APPROVED,
+    ).length;
+    const rejectedApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.REJECTED,
+    ).length;
+
+    // 7-day breakdown (from 6 days ago up to today)
+    const dailyApplicationStats: { date: string; label: string; count: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+      const count = applications.filter((app) => {
+        const appDate = new Date(app.createdAt);
+        return appDate >= dayStart && appDate <= dayEnd;
+      }).length;
+
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const dateStr = `${d.getFullYear()}-${month}-${day}`;
+
+      dailyApplicationStats.push({
+        date: dateStr,
+        label: `${day}/${month}`,
+        count,
+      });
+    }
+
+    // Top jobs with application counts
+    const jobAppCounts: Record<string, number> = {};
+    applications.forEach((app) => {
+      if (app.jobId) {
+        jobAppCounts[app.jobId] = (jobAppCounts[app.jobId] || 0) + 1;
+      }
+    });
+
+    const topJobs = allCompanyJobs
+      .map((job) => ({
+        _id: job._id,
+        name: job.name,
+        salary: job.salary,
+        level: job.level,
+        location: job.location,
+        createdAt: job.createdAt,
+        endDate: job.endDate,
+        isActive: job.isActive,
+        applicationsCount: jobAppCounts[job._id] || 0,
+      }))
+      .sort((a, b) => b.applicationsCount - a.applicationsCount)
+      .slice(0, 5);
+
+    // Recent 5 applications
+    const recentApplications = applications.slice(0, 5).map((app) => ({
+      _id: app._id,
+      status: app.status,
+      createdAt: app.createdAt,
+      job: app.job
+        ? { _id: app.job._id, name: app.job.name }
+        : { _id: app.jobId, name: 'Vị trí đã đóng' },
+      user: app.user
+        ? {
+            _id: app.user._id,
+            name: app.user.name,
+            email: app.user.email,
+            avatar: app.user.avatar,
+            address: app.user.address,
+          }
+        : null,
+      cv: app.cv
+        ? {
+            _id: app.cv._id,
+            title: app.cv.title,
+            url: app.cv.url,
+          }
+        : null,
+    }));
+
+    const isPremium = this.usersService.isHrPremium(userInDb);
+    const maxDailyJobs = isPremium ? 9999 : 5;
+
+    return {
+      hasCompany: true,
+      isProfileComplete,
+      isPremium,
+      premiumPlan: userInDb.premiumPlan || 'FREE',
+      premiumExpiresAt: userInDb.premiumExpiresAt || null,
+      company: {
+        _id: company._id,
+        name: company.name,
+        description: company.description,
+        address: company.address,
+        logo: company.logo,
+        taxCode: company.taxCode,
+        scale: company.scale,
+        isActive: company.isActive,
+        usersFollow: company.usersFollow || [],
+        createdAt: company.createdAt,
+      },
+      stats: {
+        totalJobs,
+        activeJobs,
+        todayJobsPostedCount,
+        maxDailyJobs,
+        totalApplications,
+        pendingApplications,
+        reviewingApplications,
+        consideringApplications,
+        approvedApplications,
+        rejectedApplications,
+        followersCount: company.usersFollow?.length || 0,
+        dailyApplicationStats,
+        topJobs,
+        recentApplications,
+      },
+    };
+  }
 }
+

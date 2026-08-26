@@ -4,9 +4,13 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  OnModuleInit,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import { Application, ApplicationStatus } from './entities/application.entity';
 import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
 import { IUser } from 'src/users/users.interface';
@@ -31,7 +35,9 @@ import {
 import { CreateNotificationDto } from 'src/notifications/dto/create-notification.dto';
 
 @Injectable()
-export class ApplicationsService {
+export class ApplicationsService implements OnModuleInit {
+  private readonly logger = new Logger(ApplicationsService.name);
+
   constructor(
     @InjectRepository(Application)
     private readonly applicationRepo: Repository<Application>,
@@ -46,7 +52,20 @@ export class ApplicationsService {
     private readonly cvProcessingService: CVProcessingService,
     @Inject(forwardRef(() => JobsService))
     private readonly jobsService: JobsService,
+
+    @InjectQueue('mail-queue')
+    private readonly mailQueue: Queue,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.applicationRepo.query(
+        `ALTER TYPE "applications_status_enum" ADD VALUE IF NOT EXISTS 'CONSIDERING';`,
+      );
+    } catch (e) {
+      // Ignore if not supported or already added
+    }
+  }
 
   // User applies for a job with selected CV
   async create(createApplicationDto: CreateApplicationDto, user: IUser) {
@@ -193,7 +212,18 @@ export class ApplicationsService {
       .leftJoinAndSelect('app.job', 'job')
       .where('app.isDeleted = :isDeleted', { isDeleted: false });
 
-    if (userInfo.role === Role.HR && userInfo.company) {
+    if (userInfo.role === Role.HR) {
+      if (!userInfo.company || !userInfo.company._id) {
+        return {
+          meta: {
+            current,
+            pageSize: limit,
+            pages: 0,
+            total: 0,
+          },
+          result: [],
+        };
+      }
       queryBuilder.andWhere('app.companyId = :companyId', {
         companyId: userInfo.company._id,
       });
@@ -269,6 +299,25 @@ export class ApplicationsService {
 
   // Get applications by job (for HR to review)
   async findByJob(jobId: string, qs: any, user: IUser) {
+    if (user.role === Role.HR) {
+      const userInfo = await this.usersService.findOne(user._id);
+      if (!userInfo.company || !userInfo.company._id) {
+        return {
+          meta: {
+            current: 1,
+            pageSize: 10,
+            pages: 0,
+            total: 0,
+          },
+          result: [],
+        };
+      }
+      const job = await this.jobsService.findOne(jobId);
+      if (!job || job.company?._id?.toString() !== userInfo.company._id.toString()) {
+        throw new BadRequestException('Bạn không có quyền xem ứng viên của công việc này');
+      }
+    }
+
     const limit = qs.pageSize ? parseInt(qs.pageSize) : 10;
     const current = qs.current ? parseInt(qs.current) : 1;
     const skip = (current - 1) * limit;
@@ -396,7 +445,63 @@ export class ApplicationsService {
     };
   }
 
-  // Update application status (HR/Admin)
+  // Mark application as viewed by HR (transitions from PENDING -> REVIEWING and sends realtime socket notification)
+  async markAsViewed(id: string, user: IUser) {
+    const application = await this.applicationRepo.findOne({
+      where: { _id: id, isDeleted: false },
+      relations: ['job', 'company', 'user'],
+    });
+
+    if (!application) {
+      throw new NotFoundException('Đơn ứng tuyển không tồn tại');
+    }
+
+    if (application.status === ApplicationStatus.PENDING) {
+      const history = application.history || [];
+      history.push({
+        status: ApplicationStatus.REVIEWING,
+        updatedAt: new Date(),
+        updatedBy: {
+          _id: user._id,
+          email: user.email,
+        },
+      });
+
+      await this.applicationRepo.update(id, {
+        status: ApplicationStatus.REVIEWING,
+        history,
+        updatedBy: {
+          _id: user._id,
+          email: user.email,
+        },
+      });
+
+      const notiObj: CreateNotificationDto = {
+        userId: application.userId,
+        title: 'Nhà tuyển dụng đã xem CV của bạn',
+        content: `Nhà tuyển dụng từ công ty ${
+          application.company?.name || 'Doanh nghiệp'
+        } đã mở xem hồ sơ ứng tuyển của bạn cho vị trí ${
+          application.job?.name || ''
+        }.`,
+        type: NotificationType.RESUME,
+        targetType: NotificationTargetType.APPLICATION,
+        targetId: application._id,
+        data: {
+          applicationId: application._id,
+          jobId: application.jobId,
+          companyId: application.companyId,
+          status: ApplicationStatus.REVIEWING,
+        },
+      };
+
+      await this.notificationsService.create(notiObj);
+    }
+
+    return await this.findOne(id);
+  }
+
+  // Update application status (HR/Admin) -> sends realtime socket notification + pushes to Bull Queue for email
   async updateStatus(
     id: string,
     updateDto: UpdateApplicationStatusDto,
@@ -404,7 +509,7 @@ export class ApplicationsService {
   ) {
     const application = await this.applicationRepo.findOne({
       where: { _id: id, isDeleted: false },
-      relations: ['job', 'company'],
+      relations: ['job', 'company', 'user'],
     });
 
     if (!application) {
@@ -441,33 +546,96 @@ export class ApplicationsService {
         applicationId: application._id,
         jobId: application.jobId,
         companyId: application.companyId,
+        status: updateDto.status,
       },
     };
 
     switch (updateDto.status) {
       case ApplicationStatus.REVIEWING:
-        notiObj.title = 'Đơn ứng tuyển của bạn đang được xem xét';
-        notiObj.content = `Đơn ứng tuyển của bạn cho công việc ${
-          application.job?.name || ''
-        } tại công ty ${
+        notiObj.title = 'Nhà tuyển dụng đã xem CV của bạn';
+        notiObj.content = `Nhà tuyển dụng từ công ty ${
           application.company?.name || ''
-        } đã được chuyển sang trạng thái Đang xem xét.`;
+        } đã xem hồ sơ ứng tuyển của bạn cho vị trí ${
+          application.job?.name || ''
+        }.`;
         await this.notificationsService.create(notiObj);
         break;
+
+      case ApplicationStatus.CONSIDERING:
+        notiObj.title = 'Hồ sơ ứng tuyển của bạn đang được Cân nhắc';
+        notiObj.content = `Nhà tuyển dụng từ công ty ${
+          application.company?.name || ''
+        } đã đánh giá CV của bạn cho vị trí ${
+          application.job?.name || ''
+        } là Cân nhắc.`;
+        await this.notificationsService.create(notiObj);
+        break;
+
       case ApplicationStatus.APPROVED:
-        notiObj.title = 'Đơn ứng tuyển của bạn đã được chấp thuận';
-        notiObj.content = `Chúc mừng! Đơn ứng tuyển của bạn cho công việc ${
+        notiObj.title = 'Hồ sơ của bạn được đánh giá Phù hợp';
+        notiObj.content = `Chúc mừng! Nhà tuyển dụng từ công ty ${
+          application.company?.name || ''
+        } đã đánh giá CV của bạn cho vị trí ${
           application.job?.name || ''
-        } tại công ty ${application.company?.name || ''} đã được chấp thuận.`;
+        } là Phù hợp.`;
         await this.notificationsService.create(notiObj);
         break;
+
       case ApplicationStatus.REJECTED:
-        notiObj.title = 'Đơn ứng tuyển của bạn đã bị từ chối';
-        notiObj.content = `Rất tiếc! Đơn ứng tuyển của bạn cho công việc ${
+        notiObj.title = 'Thông báo kết quả ứng tuyển';
+        notiObj.content = `Nhà tuyển dụng từ công ty ${
+          application.company?.name || ''
+        } đã gửi thông báo kết quả cho vị trí ${
           application.job?.name || ''
-        } tại công ty ${application.company?.name || ''} đã bị từ chối.`;
+        }.`;
         await this.notificationsService.create(notiObj);
         break;
+    }
+
+    // Push email job to Bull Queue asynchronously for CONSIDERING, APPROVED, REJECTED
+    if (
+      [
+        ApplicationStatus.CONSIDERING,
+        ApplicationStatus.APPROVED,
+        ApplicationStatus.REJECTED,
+      ].includes(updateDto.status)
+    ) {
+      try {
+        let candidateEmail = application.user?.email;
+        let candidateName = application.user?.name;
+
+        if (!candidateEmail) {
+          const userEntity = await this.usersService.findOne(application.userId);
+          candidateEmail = userEntity?.email;
+          candidateName = userEntity?.name;
+        }
+
+        if (candidateEmail) {
+          await this.mailQueue.add(
+            'send-application-status-email',
+            {
+              candidateEmail,
+              candidateName: candidateName || 'Ứng viên',
+              jobTitle: application.job?.name || 'Vị trí tuyển dụng',
+              companyName: application.company?.name || 'Doanh nghiệp',
+              status: updateDto.status,
+            },
+            {
+              attempts: 3,
+              backoff: {
+                type: 'exponential',
+                delay: 2000,
+              },
+              removeOnComplete: true,
+            },
+          );
+          this.logger.log(
+            `Enqueued application status email for ${candidateEmail} (status: ${updateDto.status})`,
+          );
+        }
+      } catch (err) {
+        this.logger.error(`Failed to enqueue email job: ${err.message}`);
+      }
     }
 
     return await this.findOne(id);
@@ -541,6 +709,17 @@ export class ApplicationsService {
     const job = await this.jobsService.findOne(jobId);
     if (!job) {
       throw new NotFoundException('Công việc không tồn tại');
+    }
+
+    if (user.role === Role.HR) {
+      const userInfo = await this.usersService.findOne(user._id);
+      if (
+        !userInfo.company ||
+        !userInfo.company._id ||
+        job.company?._id?.toString() !== userInfo.company._id.toString()
+      ) {
+        throw new BadRequestException('Bạn không có quyền truy cập dữ liệu của công việc này');
+      }
     }
 
     const totalApplications = await this.applicationRepo.count({
@@ -619,6 +798,22 @@ export class ApplicationsService {
     },
     user: IUser,
   ) {
+    const job = await this.jobsService.findOne(jobId);
+    if (!job) {
+      throw new NotFoundException('Công việc không tồn tại');
+    }
+
+    if (user.role === Role.HR) {
+      const userInfo = await this.usersService.findOne(user._id);
+      if (
+        !userInfo.company ||
+        !userInfo.company._id ||
+        job.company?._id?.toString() !== userInfo.company._id.toString()
+      ) {
+        throw new BadRequestException('Bạn không có quyền tìm kiếm ứng viên của công việc này');
+      }
+    }
+
     const skillKeywords = query.skills
       ? query.skills
           .split(',')
@@ -650,7 +845,12 @@ export class ApplicationsService {
       .leftJoinAndSelect('app.cv', 'cv')
       .leftJoinAndSelect('app.user', 'user')
       .where('app.jobId = :jobId', { jobId })
-      .andWhere('app.isDeleted = :isDeleted', { isDeleted: false });
+      .andWhere('app.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('(cv.isSearchable IS NULL OR cv.isSearchable = :isSearchable)', { isSearchable: true })
+      .andWhere('(user.allowRecruiterSearch IS NULL OR user.allowRecruiterSearch = :allowSearch)', { allowSearch: true })
+      .andWhere('(user.isJobSeeking IS NULL OR user.isJobSeeking = :isJobSeeking)', { isJobSeeking: true })
+      .andWhere('user.isDeleted = :userNotDeleted', { userNotDeleted: false })
+      .andWhere('(cv.isDeleted IS NULL OR cv.isDeleted = :cvNotDeleted)', { cvNotDeleted: false });
 
     // Build conditions for matching in PostgreSQL
     if (skillKeywords.length > 0) {
@@ -691,10 +891,21 @@ export class ApplicationsService {
       queryBuilder.andWhere(`(${certConds.join(' OR ')})`, params);
     }
 
-    queryBuilder.orderBy('app.createdAt', 'DESC');
+    queryBuilder
+      .addSelect(
+        `(CASE WHEN user.boostExpiresAt > NOW() THEN 1 ELSE 0 END)`,
+        'user_is_boosted',
+      )
+      .orderBy('user_is_boosted', 'DESC')
+      .addOrderBy('user.isPremium', 'DESC')
+      .addOrderBy('user.createdAt', 'DESC')
+      .addOrderBy('user._id', 'DESC')
+      .addOrderBy('app.createdAt', 'DESC')
+      .addOrderBy('app._id', 'DESC');
 
     const applications = await queryBuilder.getMany();
 
+    const now = new Date();
     const enrichedResults = applications.map((app) => {
       const matchedSkills: string[] = [];
       const matchedEducation: string[] = [];
@@ -751,6 +962,10 @@ export class ApplicationsService {
         matchedInParsedText = true;
       }
 
+      const isBoosted = Boolean(
+        app.user?.boostExpiresAt && new Date(app.user.boostExpiresAt) > now,
+      );
+
       return {
         _id: app._id,
         status: app.status,
@@ -774,6 +989,10 @@ export class ApplicationsService {
               email: app.user.email,
               avatar: app.user.avatar,
               address: app.user.address,
+              isVerified: app.user.isVerified || false,
+              isPremium: app.user.isPremium || false,
+              isBoosted,
+              boostExpiresAt: app.user.boostExpiresAt || null,
             }
           : app.userId,
         matchInfo: {

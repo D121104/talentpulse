@@ -99,6 +99,27 @@ export class OnlineCV {
   @Column({ type: 'jsonb', default: '[]' })
   awards: AwardEntry[];
 
+  @Column({
+    type: 'jsonb',
+    default: '["objective", "education", "experience", "skills", "activities", "certificates", "awards"]',
+  })
+  sectionOrder: string[];
+
+  @Column({ nullable: true })
+  fontFamily: string;
+
+  @Column({ nullable: true })
+  themeColor: string;
+
+  @Column({ nullable: true })
+  fontSize: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  customFormatting: any;
+
+  @Column({ type: 'text', nullable: true })
+  htmlContent: string;
+
   @Column({ nullable: true })
   pdfUrl: string;
 
@@ -108,6 +129,12 @@ export class OnlineCV {
   @ManyToOne(() => User, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;
+
+  @Column({ default: true })
+  isSearchable: boolean;
+
+  @Column({ default: false })
+  isPrimary: boolean;
 
   @Column({ default: false })
   isDeleted: boolean;

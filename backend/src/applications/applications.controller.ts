@@ -103,6 +103,15 @@ export class ApplicationsController {
     return this.applicationsService.findOne(id);
   }
 
+  // HR marks application as viewed -> transitions PENDING to REVIEWING and notifies candidate in realtime
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.HR)
+  @Patch(':id/view')
+  @ResponseMessage('Đánh dấu đã xem đơn ứng tuyển')
+  markAsViewed(@Param('id') id: string, @User() user: IUser) {
+    return this.applicationsService.markAsViewed(id, user);
+  }
+
   // HR updates application status -> sends notification to candidate
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.HR)

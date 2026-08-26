@@ -90,6 +90,16 @@ export const authApi = {
     apiRequest<{ message: string }>('/auth/logout', { method: 'POST', accessToken }),
   exchangeGoogleCode: (code: string) =>
     apiRequest<AuthSession>('/auth/google/exchange', { method: 'POST', body: { code } }),
+  verifyAccount: (token: string) =>
+    apiRequest<{ message: string; user: AuthSession['user'] }>('/auth/verify-account', {
+      method: 'POST',
+      body: { token },
+    }),
+  resendVerification: (data: { email?: string; userId?: string }) =>
+    apiRequest<{ message: string }>('/auth/resend-verification', {
+      method: 'POST',
+      body: data,
+    }),
 };
 
 export function getGoogleLoginUrl() {

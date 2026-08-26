@@ -39,6 +39,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       address: user.address,
       avatar: user.avatar,
       isApproved: user.isApproved,
+      isPremium: user.isPremium || false,
+      premiumPlan: user.premiumPlan || 'FREE',
+      premiumExpiresAt: user.premiumExpiresAt || undefined,
+      isVerified: user.isVerified || false,
+      verifiedAt: user.verifiedAt || undefined,
+      lastBoostedAt: user.lastBoostedAt || undefined,
+      boostExpiresAt: user.boostExpiresAt || undefined,
+      isJobSeeking: user.isJobSeeking ?? true,
+      isJobRecommendation: user.isJobRecommendation ?? true,
+      allowRecruiterSearch: user.allowRecruiterSearch ?? true,
     } as IUser;
   }
 }

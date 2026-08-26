@@ -18,6 +18,7 @@ import { UpdateJobDto } from './dto/update-job.dto';
 import { Job } from './entities/job.entity';
 import aqp from 'api-query-params';
 import { IUser } from 'src/users/users.interface';
+import { Role } from 'src/decorator/customize';
 import { UsersService } from 'src/users/users.service';
 import { RedisService } from 'src/redis/redis.service';
 import { Company } from 'src/companies/entities/company.entity';
@@ -231,6 +232,32 @@ export class JobsService {
 
     if (!company.isActive) {
       throw new BadRequestException('Company is not active');
+    }
+
+    // Enforce daily quota limit (5 jobs/day for Standard Free HR, unlimited for HR Premium & Admin)
+    const isHrPrem = this.usersService.isHrPremium(userInDb);
+    const maxDailyJobs = this.usersService.getUserMaxDailyJobs(userInDb);
+
+    if (!isHrPrem && user.role !== Role.ADMIN) {
+      const now = new Date();
+      const startOfToday = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+      );
+
+      const todayJobsCount = await this.jobRepo
+        .createQueryBuilder('job')
+        .where("job.company->>'_id' = :companyId", { companyId: company._id })
+        .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('job.createdAt >= :startOfToday', { startOfToday })
+        .getCount();
+
+      if (todayJobsCount >= maxDailyJobs) {
+        throw new BadRequestException(
+          `Bạn đã đạt giới hạn tối đa ${maxDailyJobs} tin tuyển dụng/ngày đối với tài khoản miễn phí. Vui lòng nâng cấp gói HR Premium để đăng tin không giới hạn!`,
+        );
+      }
     }
 
     createJobDto.company = {

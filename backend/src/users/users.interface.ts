@@ -13,4 +13,14 @@ export interface IUser {
   };
   avatar?: string;
   isApproved?: boolean;
+  isPremium?: boolean;
+  premiumPlan?: string;
+  premiumExpiresAt?: Date;
+  isVerified?: boolean;
+  verifiedAt?: Date;
+  lastBoostedAt?: Date;
+  boostExpiresAt?: Date;
+  isJobSeeking?: boolean;
+  isJobRecommendation?: boolean;
+  allowRecruiterSearch?: boolean;
 }

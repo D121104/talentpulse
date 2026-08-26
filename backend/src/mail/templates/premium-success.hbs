@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xác nhận đăng ký Premium thành công - TalentPulse</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; -webkit-font-smoothing: antialiased;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 12px 36px rgba(15, 23, 42, 0.1); border: 1px solid #e2e8f0;">
+          
+          <!-- Brand Header Banner -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #2563eb 100%); padding: 36px 32px; text-align: left; position: relative;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td align="left" style="vertical-align: middle;">
+                    <div style="display: inline-flex; align-items: center; gap: 8px;">
+                      <span style="display: inline-block; width: 38px; height: 38px; line-height: 38px; background: #ffffff; color: #2563eb; border-radius: 12px; text-align: center; font-weight: 900; font-size: 22px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);">T</span>
+                      <span style="font-size: 26px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; margin-left: 10px; vertical-align: middle;">TalentPulse</span>
+                    </div>
+                  </td>
+                  <td align="right" style="vertical-align: middle;">
+                    <span style="background: rgba(255, 255, 255, 0.15); color: #fbbf24; padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; border: 1px solid rgba(251, 191, 36, 0.4);">
+                      👑 {{planName}}
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          
+          <!-- Main Content Body -->
+          <tr>
+            <td style="padding: 40px 32px 32px;">
+              
+              <!-- Celebration Header -->
+              <div style="text-align: center; margin-bottom: 28px;">
+                <div style="display: inline-block; width: 64px; height: 64px; line-height: 64px; background: #ecfdf5; border: 2px solid #10b981; border-radius: 50%; text-align: center; font-size: 32px; margin-bottom: 16px;">
+                  ✨
+                </div>
+                <h2 style="color: #0f172a; margin: 0 0 8px; font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">
+                  Thanh Toán Thành Công!
+                </h2>
+                <p style="color: #64748b; font-size: 15px; margin: 0;">
+                  Chúc mừng bạn đã mở khóa trọn bộ đặc quyền cao cấp trên hệ sinh thái TalentPulse
+                </p>
+              </div>
+
+              <!-- Greeting -->
+              <p style="color: #0f172a; font-size: 16px; line-height: 1.6; margin: 0 0 16px;">
+                Xin chào <strong style="color: #2563eb;">{{userName}}</strong>,
+              </p>
+
+              <p style="color: #334155; font-size: 15px; line-height: 1.7; margin: 0 0 24px;">
+                TalentPulse xin trân trọng cảm ơn bạn đã tin tưởng và nâng cấp tài khoản lên gói <strong>{{planTitle}}</strong>. Gói dịch vụ của bạn đã được kích hoạt tự động với đầy đủ quyền lợi VIP.
+              </p>
+
+              <!-- Order Receipt Details Box -->
+              <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; margin: 0 0 28px;">
+                <h3 style="color: #0f172a; font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 16px; border-bottom: 1px dashed #cbd5e1; padding-bottom: 10px;">
+                  🧾 Chi tiết hóa đơn thanh toán
+                </h3>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size: 14px; color: #334155; line-height: 2;">
+                  <tr>
+                    <td style="color: #64748b;">Mã đơn hàng:</td>
+                    <td align="right" style="font-weight: 700; color: #0f172a; font-family: monospace; font-size: 15px;">#{{orderCode}}</td>
+                  </tr>
+                  <tr>
+                    <td style="color: #64748b;">Gói dịch vụ:</td>
+                    <td align="right" style="font-weight: 700; color: #2563eb;">{{planTitle}}</td>
+                  </tr>
+                  <tr>
+                    <td style="color: #64748b;">Chu kỳ sử dụng:</td>
+                    <td align="right" style="font-weight: 600;">{{cycleText}} ({{durationDays}} ngày)</td>
+                  </tr>
+                  <tr>
+                    <td style="color: #64748b;">Thời hạn đến:</td>
+                    <td align="right" style="font-weight: 700; color: #16a34a;">{{expiryDate}}</td>
+                  </tr>
+                  {{#if transactionReference}}
+                  <tr>
+                    <td style="color: #64748b;">Mã giao dịch ngân hàng:</td>
+                    <td align="right" style="font-weight: 600; color: #475569;">{{transactionReference}}</td>
+                  </tr>
+                  {{/if}}
+                  <tr>
+                    <td style="border-top: 1px solid #e2e8f0; padding-top: 8px; color: #0f172a; font-weight: 800; font-size: 16px;">Tổng thanh toán:</td>
+                    <td align="right" style="border-top: 1px solid #e2e8f0; padding-top: 8px; color: #2563eb; font-weight: 900; font-size: 18px;">{{formattedAmount}} đ</td>
+                  </tr>
+                </table>
+              </div>
+
+              <!-- Unlocked Perks Highlight -->
+              <div style="background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%); border-left: 4px solid #2563eb; border-radius: 0 16px 16px 0; padding: 20px; margin: 0 0 28px;">
+                <h4 style="color: #1e3a8a; font-size: 15px; font-weight: 800; margin: 0 0 12px;">
+                  🌟 Đặc quyền VIP đã sẵn sàng cho bạn:
+                </h4>
+                <ul style="margin: 0; padding-left: 20px; color: #334155; font-size: 14px; line-height: 1.8;">
+                  {{#if isCandidate}}
+                  <li><strong>Huy hiệu VIP</strong> bảo chứng uy tín trên mọi đơn ứng tuyển</li>
+                  <li><strong>Đẩy Top hồ sơ mỗi ngày</strong> — Tiếp cận nhà tuyển dụng nhanh gấp 5 lần</li>
+                  <li><strong>Mở khóa toàn bộ 50+ mẫu CV Pro</strong> & xuất PDF không giới hạn</li>
+                  <li><strong>AI Chấm điểm CV & Matching</strong> độ tương thích công việc chuẩn xác</li>
+                  {{else}}
+                  <li><strong>Đăng tin tuyển dụng không giới hạn</strong> (dỡ bỏ hạn mức 5 tin/ngày)</li>
+                  <li><strong>Mở khóa 100% thông tin liên hệ</strong> (SĐT & Email) ứng viên tài năng</li>
+                  <li><strong>Huy hiệu Tuyển Gấp / Tin Nổi Bật</strong> tiếp cận gấp 3x ứng viên chất lượng</li>
+                  <li><strong>AI Sourcing & Báo cáo nâng cao</strong> tự động hóa quy trình tuyển dụng</li>
+                  {{/if}}
+                </ul>
+              </div>
+
+              <!-- Call to Action Button -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px;">
+                <tr>
+                  <td align="center">
+                    <a href="{{actionUrl}}" target="_blank" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: #ffffff; text-decoration: none; font-size: 16px; font-weight: 800; padding: 16px 36px; border-radius: 14px; box-shadow: 0 8px 20px rgba(37, 99, 235, 0.35); letter-spacing: 0.2px;">
+                      Trải Nghiệm Đặc Quyền Ngay &rarr;
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="color: #64748b; font-size: 13px; text-align: center; margin: 0 0 8px;">
+                Bạn có thể xem lại lịch sử hóa đơn bất kỳ lúc nào tại mục <strong>Lịch sử thanh toán</strong> trong tài khoản.
+              </p>
+            </td>
+          </tr>
+          
+          <!-- Footer Information -->
+          <tr>
+            <td style="background-color: #f8fafc; padding: 24px 32px; text-align: center; border-top: 1px solid #e2e8f0;">
+              <p style="color: #94a3b8; font-size: 12px; line-height: 1.6; margin: 0 0 8px;">
+                Email này được gửi tự động từ hệ thống thanh toán TalentPulse.<br>
+                Nếu bạn cần hỗ trợ hóa đơn VAT hoặc có bất kỳ câu hỏi nào, vui lòng liên hệ hotline <strong>1900 8888</strong> hoặc phản hồi email này.
+              </p>
+              <p style="color: #cbd5e1; font-size: 11px; margin: 0;">
+                &copy; 2026 TalentPulse Ecosystem. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

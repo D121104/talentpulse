@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -9,7 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
 import { RegisterUserDto } from './dto/create-user.dto';
 import { UpdateUserDto, UpdateUserPasswordDto } from './dto/update-user.dto';
-import { User } from './entities/user.entity';
+import { User, PremiumPlan } from './entities/user.entity';
 import { Company } from 'src/companies/entities/company.entity';
 import * as bcrypt from 'bcryptjs';
 import aqp from 'api-query-params';
@@ -140,19 +141,18 @@ export class UsersService {
   }
 
   async findByCompanyId(companyId: string) {
-    return await this.userRepo
-      .createQueryBuilder('user')
-      .where("user.company->>'_id' = :companyId", { companyId })
-      .andWhere('user.isDeleted = :isDeleted', { isDeleted: false })
-      .getOne();
+    const rows = await this.userRepo.query(
+      `SELECT * FROM users WHERE company->>'_id' = $1 AND "isDeleted" = false LIMIT 1`,
+      [companyId],
+    );
+    return rows && rows.length > 0 ? rows[0] : null;
   }
 
   async findAllByCompanyId(companyId: string) {
-    return await this.userRepo
-      .createQueryBuilder('user')
-      .where("user.company->>'_id' = :companyId", { companyId })
-      .andWhere('user.isDeleted = :isDeleted', { isDeleted: false })
-      .getMany();
+    return await this.userRepo.query(
+      `SELECT * FROM users WHERE company->>'_id' = $1 AND "isDeleted" = false ORDER BY "createdAt" ASC`,
+      [companyId],
+    );
   }
 
   async findOne(id: string) {
@@ -197,7 +197,7 @@ export class UsersService {
 
   async updateUserCompany(
     userId: string,
-    company: { _id: string; name: string },
+    company: { _id: string; name: string; isActive?: boolean },
   ) {
     return await this.userRepo.update(userId, { company });
   }
@@ -257,9 +257,15 @@ export class UsersService {
       }
       if (company.createdBy?._id?.toString() !== requester._id.toString()) {
         throw new BadRequestException(
-          'Chỉ người tạo công ty mới có quyền xóa HR khác',
+          'Chỉ HR Trưởng (người tạo công ty) mới có quyền xóa HR khác khỏi công ty',
         );
       }
+    }
+
+    if (hrId === requester._id.toString()) {
+      throw new BadRequestException(
+        'HR Trưởng không thể tự xóa chính mình khỏi công ty',
+      );
     }
 
     const hr = await this.userRepo.findOne({
@@ -301,7 +307,7 @@ export class UsersService {
 
     if (company.createdBy?._id?.toString() === user._id.toString()) {
       throw new BadRequestException(
-        'Người tạo công ty không thể rời công ty. Hãy chuyển quyền hoặc xóa công ty.',
+        'HR Trưởng (người tạo công ty) không được quyền rời công ty. Hãy chuyển giao quyền quản lý hoặc giải thể công ty.',
       );
     }
 
@@ -391,6 +397,35 @@ export class UsersService {
       },
     });
 
+    // If HR registered with company information and has no company yet, automatically create company active
+    if (user.registrationCompany?.name && !user.company) {
+      const existingCompany = await this.companyRepo.findOne({
+        where: { name: user.registrationCompany.name },
+      });
+
+      if (!existingCompany) {
+        const newCompany = this.companyRepo.create({
+          name: user.registrationCompany.name,
+          taxCode: user.registrationCompany.taxCode || '',
+          scale: user.registrationCompany.scale || '',
+          isActive: true,
+          createdBy: {
+            _id: user._id,
+            email: user.email,
+          },
+        });
+        const savedCompany = await this.companyRepo.save(newCompany);
+
+        await this.userRepo.update(userId, {
+          company: {
+            _id: savedCompany._id.toString(),
+            name: savedCompany.name,
+            isActive: true,
+          },
+        });
+      }
+    }
+
     return { message: 'Duyệt tài khoản HR thành công' };
   }
 
@@ -442,8 +477,18 @@ export class UsersService {
           (value as number) === 1 ? 'ASC' : 'DESC',
         );
       }
+      queryBuilder.addOrderBy('user._id', 'DESC');
     } else {
-      queryBuilder.orderBy('user.createdAt', 'DESC');
+      queryBuilder
+        .addSelect(
+          `(CASE WHEN user.boostExpiresAt > NOW() THEN 1 ELSE 0 END)`,
+          'candidate_boosted',
+        )
+        .orderBy('candidate_boosted', 'DESC')
+        .addOrderBy('user.isPremium', 'DESC')
+        .addOrderBy('user.isVerified', 'DESC')
+        .addOrderBy('user.createdAt', 'DESC')
+        .addOrderBy('user._id', 'DESC');
     }
 
     const [users, totalRecord] = await queryBuilder
@@ -466,6 +511,278 @@ export class UsersService {
         total: totalRecord,
       },
       result: sanitizedUsers,
+    };
+  }
+
+  /**
+   * Kiểm tra xem người dùng có đang sở hữu gói Premium hợp lệ (hoặc là ADMIN) không
+   */
+  isUserPremium(user: User | IUser | any): boolean {
+    if (!user) return false;
+    if (user.role === Role.ADMIN) return true;
+    if (!user.isPremium) return false;
+    if (!user.premiumExpiresAt) return true; // Gói vĩnh viễn hoặc chưa hết hạn
+    return new Date(user.premiumExpiresAt) > new Date();
+  }
+
+  /**
+   * Kiểm tra xem tài khoản có quyền HR Premium (hoặc Admin) không
+   */
+  isHrPremium(user: User | IUser | any): boolean {
+    if (!user) return false;
+    if (user.role === Role.ADMIN) return true;
+    if (!this.isUserPremium(user)) return false;
+    return user.premiumPlan === PremiumPlan.HR_PREMIUM;
+  }
+
+  /**
+   * Kiểm tra xem ứng viên có quyền Candidate Premium không
+   */
+  isCandidatePremium(user: User | IUser | any): boolean {
+    if (!user) return false;
+    if (user.role === Role.ADMIN) return true;
+    if (!this.isUserPremium(user)) return false;
+    return user.premiumPlan === PremiumPlan.CANDIDATE_PREMIUM;
+  }
+
+  /**
+   * Lấy giới hạn số lượng tin tuyển dụng tối đa được đăng trong 1 ngày
+   * - HR Standard (Free): 5 tin/ngày
+   * - HR Premium / Admin: Không giới hạn (999999)
+   */
+  getUserMaxDailyJobs(user: User | IUser | any): number {
+    if (!user) return 5;
+    if (this.isHrPremium(user)) {
+      return 999999;
+    }
+    return 5;
+  }
+
+  /**
+   * Nâng cấp gói Premium cho người dùng
+   */
+  async upgradePremiumPlan(
+    userId: string,
+    plan: string,
+    durationDays: number,
+  ): Promise<any> {
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const now = new Date();
+    const currentExpiry =
+      user.premiumExpiresAt && new Date(user.premiumExpiresAt) > now
+        ? new Date(user.premiumExpiresAt)
+        : now;
+
+    const newExpiry = new Date(
+      currentExpiry.getTime() + durationDays * 24 * 60 * 60 * 1000,
+    );
+
+    user.isPremium = true;
+    user.premiumPlan = plan as any;
+    user.premiumExpiresAt = newExpiry;
+
+    const savedUser = await this.userRepo.save(user);
+
+    if (user.company?._id && plan === PremiumPlan.HR_PREMIUM) {
+      await this.companyRepo.update(user.company._id, {
+        isPremium: true,
+        premiumExpiresAt: newExpiry,
+      });
+    }
+
+    const { password, refreshToken, ...rest } = savedUser;
+    return rest;
+  }
+
+  /**
+   * Đẩy Top hồ sơ ứng viên (Profile Boosting)
+   * - Candidate Premium: 1 lần / ngày (cooldown 24h, boost 24h)
+   * - Đã Xác Thực: 1 lần / tuần (cooldown 7 ngày, boost 12h)
+   * - Thường (chưa xác thực): Bị chặn
+   */
+  async boostProfile(userId: string) {
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) {
+      throw new NotFoundException('Không tìm thấy người dùng');
+    }
+
+    if (user.role !== Role.USER) {
+      throw new BadRequestException('Tính năng Đẩy Top chỉ dành cho tài khoản Ứng viên (Candidate)');
+    }
+
+    const isPremium = this.isCandidatePremium(user);
+    const isVerified = user.isVerified || false;
+
+    if (!isPremium && !isVerified) {
+      throw new ForbiddenException(
+        'Tính năng Đẩy Top hồ sơ yêu cầu tài khoản Đã Xác Thực (1 lần/tuần) hoặc Candidate Premium (1 lần/ngày). Vui lòng xác thực email hoặc nâng cấp gói Premium.',
+      );
+    }
+
+    const now = Date.now();
+    const cooldownMs = isPremium
+      ? 24 * 60 * 60 * 1000 // 24 hours for Premium
+      : 7 * 24 * 60 * 60 * 1000; // 7 days for Verified
+
+    const boostDurationMs = isPremium
+      ? 24 * 60 * 60 * 1000 // 24 hours boost for Premium
+      : 12 * 60 * 60 * 1000; // 12 hours boost for Verified
+
+    if (user.lastBoostedAt) {
+      const elapsedMs = now - new Date(user.lastBoostedAt).getTime();
+      if (elapsedMs < cooldownMs) {
+        const remainingSeconds = Math.ceil((cooldownMs - elapsedMs) / 1000);
+        const days = Math.floor(remainingSeconds / 86400);
+        const hours = Math.floor((remainingSeconds % 86400) / 3600);
+        const minutes = Math.floor((remainingSeconds % 3600) / 60);
+
+        let remainingText = '';
+        if (days > 0) remainingText += `${days} ngày `;
+        if (hours > 0) remainingText += `${hours} giờ `;
+        remainingText += `${minutes} phút`;
+
+        throw new BadRequestException(
+          `Bạn đang trong thời gian hồi chiêu lượt đẩy top. Vui lòng thử lại sau ${remainingText.trim()}.`,
+        );
+      }
+    }
+
+    const boostExpiresAt = new Date(now + boostDurationMs);
+    user.lastBoostedAt = new Date(now);
+    user.boostExpiresAt = boostExpiresAt;
+
+    await this.userRepo.save(user);
+
+    return {
+      message: '🚀 Đẩy top hồ sơ thành công! Hồ sơ của bạn đã được đưa lên vị trí ưu tiên hàng đầu trong tìm kiếm CV của Nhà Tuyển Dụng.',
+      lastBoostedAt: user.lastBoostedAt,
+      boostExpiresAt: user.boostExpiresAt,
+      isBoosted: true,
+    };
+  }
+
+  /**
+   * Lấy trạng thái Đẩy Top hồ sơ hiện tại của ứng viên
+   */
+  async getBoostStatus(userId: string) {
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) {
+      throw new NotFoundException('Không tìm thấy người dùng');
+    }
+
+    const isPremium = this.isCandidatePremium(user);
+    const isVerified = user.isVerified || false;
+
+    const tier = isPremium ? 'PREMIUM' : isVerified ? 'VERIFIED' : 'FREE';
+    const boostLimitText = isPremium
+      ? '1 lần / ngày (Ưu tiên Top 1 - 24 giờ)'
+      : isVerified
+      ? '1 lần / tuần (Hiệu lực 12 giờ)'
+      : 'Không khả dụng (Cần xác thực email hoặc mua gói Premium)';
+
+    const now = Date.now();
+    const isBoosted = Boolean(
+      user.boostExpiresAt && new Date(user.boostExpiresAt).getTime() > now,
+    );
+
+    let canBoost = false;
+    let remainingCooldownSeconds = 0;
+    let remainingCooldownText = '';
+
+    if (isPremium || isVerified) {
+      const cooldownMs = isPremium
+        ? 24 * 60 * 60 * 1000
+        : 7 * 24 * 60 * 60 * 1000;
+
+      if (!user.lastBoostedAt) {
+        canBoost = true;
+      } else {
+        const elapsedMs = now - new Date(user.lastBoostedAt).getTime();
+        if (elapsedMs >= cooldownMs) {
+          canBoost = true;
+        } else {
+          remainingCooldownSeconds = Math.ceil((cooldownMs - elapsedMs) / 1000);
+          const days = Math.floor(remainingCooldownSeconds / 86400);
+          const hours = Math.floor((remainingCooldownSeconds % 86400) / 3600);
+          const minutes = Math.floor((remainingCooldownSeconds % 3600) / 60);
+
+          if (days > 0) remainingCooldownText += `${days} ngày `;
+          if (hours > 0) remainingCooldownText += `${hours} giờ `;
+          remainingCooldownText += `${minutes} phút`;
+          remainingCooldownText = remainingCooldownText.trim();
+        }
+      }
+    }
+
+    return {
+      tier,
+      isVerified,
+      isPremium,
+      isBoosted,
+      canBoost,
+      lastBoostedAt: user.lastBoostedAt || null,
+      boostExpiresAt: user.boostExpiresAt || null,
+      remainingCooldownSeconds,
+      remainingCooldownText,
+      boostLimitText,
+    };
+  }
+
+  /**
+   * Lấy cài đặt hiển thị và tìm kiếm việc của ứng viên
+   */
+  async getCandidateSettings(userId: string) {
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) {
+      throw new NotFoundException('Không tìm thấy người dùng');
+    }
+
+    return {
+      isJobSeeking: user.isJobSeeking ?? true,
+      isJobRecommendation: user.isJobRecommendation ?? true,
+      allowRecruiterSearch: user.allowRecruiterSearch ?? true,
+    };
+  }
+
+  /**
+   * Cập nhật cài đặt hiển thị và tìm kiếm việc của ứng viên
+   */
+  async updateCandidateSettings(
+    userId: string,
+    settings: {
+      isJobSeeking?: boolean;
+      isJobRecommendation?: boolean;
+      allowRecruiterSearch?: boolean;
+    },
+  ) {
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) {
+      throw new NotFoundException('Không tìm thấy người dùng');
+    }
+
+    if (settings.isJobSeeking !== undefined) {
+      user.isJobSeeking = settings.isJobSeeking;
+    }
+    if (settings.isJobRecommendation !== undefined) {
+      user.isJobRecommendation = settings.isJobRecommendation;
+    }
+    if (settings.allowRecruiterSearch !== undefined) {
+      user.allowRecruiterSearch = settings.allowRecruiterSearch;
+    }
+
+    await this.userRepo.save(user);
+
+    return {
+      message: 'Cập nhật cài đặt tìm việc thành công',
+      settings: {
+        isJobSeeking: user.isJobSeeking,
+        isJobRecommendation: user.isJobRecommendation,
+        allowRecruiterSearch: user.allowRecruiterSearch,
+      },
     };
   }
 }
