@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search,
@@ -27,6 +28,7 @@ import {
 import { useToast } from '../../../context/ToastContext';
 import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate } from '../../../lib/dateUtils';
+import { UserAvatar } from '../../../components/common/UserAvatar';
 
 interface CVSearchTabProps {
   accessToken: string | null;
@@ -410,18 +412,16 @@ export function CVSearchTab({
                     {/* Top: Avatar & Candidate Badges */}
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="relative h-12 w-12 shrink-0 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 text-primary font-black flex items-center justify-center text-base border border-primary/20 dark:border-primary/30 overflow-hidden">
-                          {candidate.avatar ? (
-                            <img
-                              src={candidate.avatar}
-                              alt={candidate.name}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <span>{(candidate.name?.[0] || 'U').toUpperCase()}</span>
-                          )}
+                        <div className="relative shrink-0">
+                          <UserAvatar
+                            src={candidate.avatar}
+                            alt={candidate.name}
+                            shape="rounded"
+                            size="custom"
+                            className="h-12 w-12 rounded-2xl border border-primary/20 dark:border-primary/30"
+                          />
                           {candidate.isBoosted && (
-                            <span className="absolute -top-1 -right-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-indigo-600 text-[10px] text-white shadow-xs">
+                            <span className="absolute -top-1 -right-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-indigo-600 text-[10px] text-white shadow-xs z-10">
                               🚀
                             </span>
                           )}
@@ -591,80 +591,84 @@ export function CVSearchTab({
       )}
 
       {/* 4. Confirmation Modal Before Unlocking */}
-      <AnimatePresence>
-        {showConfirmUnlockModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900"
-            >
-              <div className="flex items-center gap-3">
-                <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary dark:bg-primary/20 dark:text-blue-400">
-                  <Unlock className="h-5 w-5" />
-                </span>
-                <div>
-                  <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-                    Xác nhận mở khóa thông tin ứng viên
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Ứng viên: <strong className="text-slate-900 dark:text-slate-200">{showConfirmUnlockModal.candidate.name}</strong>
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/70 dark:border dark:border-slate-700/60 text-xs space-y-2 text-slate-600 dark:text-slate-300">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 dark:text-slate-400">Vị trí / CV:</span>
-                  <strong className="text-slate-900 dark:text-white">{showConfirmUnlockModal.candidate.title}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 dark:text-slate-400">Hạn mức hôm nay:</span>
-                  <span>
-                    {quota?.isUnlimited ? (
-                      <strong className="text-amber-600 dark:text-amber-400">Không giới hạn (HR Premium)</strong>
-                    ) : (
-                      <>
-                        Đã dùng <strong className="text-slate-900 dark:text-white">{quota?.usedToday ?? 0}/5</strong> (Còn lại <strong className="text-emerald-600 dark:text-emerald-400">{quota?.remaining ?? 5} lượt</strong>)
-                      </>
-                    )}
+      {createPortal(
+        <AnimatePresence>
+          {showConfirmUnlockModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary dark:bg-primary/20 dark:text-blue-400">
+                    <Unlock className="h-5 w-5" />
                   </span>
+                  <div>
+                    <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                      Xác nhận mở khóa thông tin ứng viên
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Ứng viên: <strong className="text-slate-900 dark:text-slate-200">{showConfirmUnlockModal.candidate.name}</strong>
+                    </p>
+                  </div>
                 </div>
-                <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700 text-slate-500 dark:text-slate-400">
-                  {quota?.isUnlimited
-                    ? 'Bạn sở hữu gói HR Premium nên có thể mở khóa thông tin không giới hạn.'
-                    : 'Thao tác này sẽ trừ 1 lượt mở khóa trong hạn mức 5 CV/ngày của tài khoản.'}
-                </div>
-              </div>
 
-              <div className="mt-6 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmUnlockModal(null)}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition"
-                >
-                  Hủy bỏ
-                </button>
-                <button
-                  type="button"
-                  onClick={() => executeUnlock(showConfirmUnlockModal.candidate)}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-bold text-white shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95 cursor-pointer"
-                >
-                  <Unlock className="h-3.5 w-3.5" />
-                  <span>Xác nhận mở khóa</span>
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+                <div className="mt-4 rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/70 dark:border dark:border-slate-700/60 text-xs space-y-2 text-slate-600 dark:text-slate-300">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">Vị trí / CV:</span>
+                    <strong className="text-slate-900 dark:text-white">{showConfirmUnlockModal.candidate.title}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">Hạn mức hôm nay:</span>
+                    <span>
+                      {quota?.isUnlimited ? (
+                        <strong className="text-amber-600 dark:text-amber-400">Không giới hạn (HR Premium)</strong>
+                      ) : (
+                        <>
+                          Đã dùng <strong className="text-slate-900 dark:text-white">{quota?.usedToday ?? 0}/5</strong> (Còn lại <strong className="text-emerald-600 dark:text-emerald-400">{quota?.remaining ?? 5} lượt</strong>)
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+                    {quota?.isUnlimited
+                      ? 'Bạn sở hữu gói HR Premium nên có thể mở khóa thông tin không giới hạn.'
+                      : 'Thao tác này sẽ trừ 1 lượt mở khóa trong hạn mức 5 CV/ngày của tài khoản.'}
+                  </div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmUnlockModal(null)}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
+                  >
+                    Hủy bỏ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => executeUnlock(showConfirmUnlockModal.candidate)}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-bold text-white shadow-md shadow-primary/20 hover:bg-primary-dark transition active:scale-95 cursor-pointer"
+                  >
+                    <Unlock className="h-3.5 w-3.5" />
+                    <span>Xác nhận mở khóa</span>
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* 5. Full Unlocked Candidate Details Modal */}
-      <AnimatePresence>
-        {unlockedModalData && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs overflow-y-auto">
-            <motion.div
+      {createPortal(
+        <AnimatePresence>
+          {unlockedModalData && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs overflow-y-auto">
+              <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -680,17 +684,13 @@ export function CVSearchTab({
 
               {/* Header Profile */}
               <div className="flex items-start gap-4">
-                <div className="h-16 w-16 shrink-0 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 text-primary font-black flex items-center justify-center text-xl border border-primary/20 dark:border-primary/30 overflow-hidden">
-                  {unlockedModalData.candidate.avatar ? (
-                    <img
-                      src={unlockedModalData.candidate.avatar}
-                      alt={unlockedModalData.candidate.name}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <span>{(unlockedModalData.candidate.name?.[0] || 'U').toUpperCase()}</span>
-                  )}
-                </div>
+                <UserAvatar
+                  src={unlockedModalData.candidate.avatar}
+                  alt={unlockedModalData.candidate.name}
+                  shape="rounded"
+                  size="custom"
+                  className="h-16 w-16 rounded-2xl border border-primary/20 dark:border-primary/30 text-xl"
+                />
 
                 <div>
                   <div className="flex items-center gap-2">
@@ -821,13 +821,42 @@ export function CVSearchTab({
                         </h4>
                         <div className="flex flex-wrap gap-1.5">
                           {unlockedModalData.cv.skills.map((sk: any, idx: number) => {
-                            const name = typeof sk === 'string' ? sk : sk?.name;
+                            if (typeof sk === 'string') {
+                              return (
+                                <span
+                                  key={idx}
+                                  className="rounded-lg bg-white px-2.5 py-1 text-xs font-bold text-slate-700 shadow-xs border border-slate-200/80 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700"
+                                >
+                                  {sk}
+                                </span>
+                              );
+                            }
+                            const rawName = (sk?.name || '').trim();
+                            const rawDesc = (sk?.description || '').trim();
+                            const isGenericName = [
+                              'tên kỹ năng',
+                              'kỹ năng chuyên môn',
+                              'kỹ năng',
+                              'mô tả kỹ năng',
+                              'mức độ thành thạo',
+                              'skills',
+                              'skill',
+                            ].includes(rawName.toLowerCase());
+
+                            const displayName = isGenericName
+                              ? rawDesc || rawName
+                              : rawName && rawDesc && !['thành thạo', 'cơ bản', 'mức độ thành thạo', 'nâng cao', 'chuyên sâu'].includes(rawDesc.toLowerCase())
+                              ? `${rawName}: ${rawDesc}`
+                              : rawName || rawDesc;
+
+                            if (!displayName) return null;
+
                             return (
                               <span
                                 key={idx}
                                 className="rounded-lg bg-white px-2.5 py-1 text-xs font-bold text-slate-700 shadow-xs border border-slate-200/80 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700"
                               >
-                                {name}
+                                {displayName}
                               </span>
                             );
                           })}
@@ -905,13 +934,16 @@ export function CVSearchTab({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+    )}
 
       {/* 6. Premium Upgrade Prompt Modal */}
-      <AnimatePresence>
-        {showPremiumPromptModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-            <motion.div
+      {createPortal(
+        <AnimatePresence>
+          {showPremiumPromptModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+              <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -971,7 +1003,9 @@ export function CVSearchTab({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+    )}
     </div>
   );
 }

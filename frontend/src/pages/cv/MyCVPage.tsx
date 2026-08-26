@@ -1438,7 +1438,7 @@ export default function MyCVPage() {
                     <div className="space-y-1.5 text-[11px]">
                       <div className="flex items-center gap-1.5 text-sky-700 dark:text-sky-300">
                         <ShieldCheck className="h-3.5 w-3.5" />
-                        <span><strong>Xác thực Email:</strong> Được 1 lần đẩy Top / tuần</span>
+                        <span><strong>Xác thực Email:</strong> Được 1 lần đẩy Top / tháng</span>
                       </div>
                       <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
                         <Crown className="h-3.5 w-3.5" />

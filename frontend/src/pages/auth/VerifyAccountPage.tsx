@@ -132,7 +132,7 @@ export default function VerifyAccountPage() {
                       </li>
                       <li className="flex items-center gap-2">
                         <Rocket className="h-4 w-4 text-emerald-600 shrink-0" />
-                        <span>Quyền <strong>Đẩy Top hồ sơ 1 lần/tuần</strong> lên đầu tìm kiếm của NTD</span>
+                        <span>Quyền <strong>Đẩy Top hồ sơ 1 lần/tháng</strong> lên đầu tìm kiếm của NTD</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0" />

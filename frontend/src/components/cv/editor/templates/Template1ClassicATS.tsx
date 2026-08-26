@@ -680,7 +680,7 @@ export function Template1ClassicATS({
                             );
                             markDirty();
                           }}
-                          placeholder="Tên kỹ năng"
+                          placeholder="Kỹ năng / Danh mục"
                           className="font-bold text-slate-900"
                           style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
                           defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
@@ -696,7 +696,7 @@ export function Template1ClassicATS({
                             );
                             markDirty();
                           }}
-                          placeholder="Mô tả kỹ năng"
+                          placeholder="Chi tiết kỹ năng (vd: Python, React, ...)"
                           className="text-slate-600"
                           style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
                           defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}

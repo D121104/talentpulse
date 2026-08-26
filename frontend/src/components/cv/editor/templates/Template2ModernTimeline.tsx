@@ -772,7 +772,7 @@ export function Template2ModernTimeline({
                             );
                             markDirty();
                           }}
-                          placeholder="Tên kỹ năng"
+                          placeholder="Tên kỹ năng (vd: Python)"
                           className="font-bold text-slate-800"
                           style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
                           defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
@@ -788,7 +788,7 @@ export function Template2ModernTimeline({
                             );
                             markDirty();
                           }}
-                          placeholder="Mức độ / Chi tiết"
+                          placeholder="Mức độ / Chi tiết (vd: Thành thạo)"
                           className="text-slate-600 text-xs"
                           defaultFontSizePx="12px"
                           defaultFontFamily={currentFont.family}
