@@ -5,11 +5,12 @@ services:
     container_name: postgres
     restart: unless-stopped
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
-      POSTGRES_DB: recruitment_db
+      # Fallbacks preserve existing local startup only; never use them in production.
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-recruitment_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -21,12 +22,93 @@ services:
     container_name: redis
     restart: unless-stopped
     ports:
-      - '6379:6379'
-    command: redis-server --appendonly yes --requirepass redis123
+      - '127.0.0.1:6379:6379'
+    # This fallback is disposable and local-only; never use it in production.
+    command:
+      - redis-server
+      - --appendonly
+      - yes
+      - --requirepass
+      - '${REDIS_PASSWORD:-redis123}'
     volumes:
       - redis_data:/data
     networks:
       - backend-net
+
+  # Local Qdrant vector store for the Phase 1 AI foundation
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:6333:6333'
+      - '127.0.0.1:6334:6334'
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ['CMD-SHELL', 'bash -c "exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && grep -q \"200\" <&3"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - backend-net
+
+  # Local FastAPI AI service. Provider defaults keep this path AWS-free.
+  ai-service:
+    build:
+      context: ../../ai-service
+    container_name: ai-service
+    restart: unless-stopped
+    env_file:
+      - path: ../../ai-service/.env.local
+        required: false
+    # Local AI settings come from ai-service/.env.local (copied from .env.example).
+    # Only container topology, the mounted key path and auto-initialization policy
+    # are supplied here, so Compose does not override provider/model or JWT identity values.
+    environment:
+      APP_ENV: local
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      QDRANT_URL: http://qdrant:6333
+      # Provider/model and JWT identity settings come from ai-service/.env.local
+      # (copied from .env.example); only container topology and the mounted key
+      # path are supplied here.
+      AI_SERVICE_AUTH_PUBLIC_KEY_FILE: /run/secrets/ai-service-public-key
+      # Fresh local Qdrant volumes may initialize the Phase 1 model space.
+      # Readiness still rejects mismatched existing collection metadata.
+      QDRANT_AUTO_INITIALIZE: 'true'
+      HF_HOME: /models/huggingface
+    ports:
+      - '127.0.0.1:8001:8000'
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - hf_cache:/models/huggingface
+    secrets:
+      - source: ai-service-public-key
+        target: ai-service-public-key
+    healthcheck:
+      # Readiness checks Qdrant connectivity and the configured Phase 1
+      # collection/alias/model-space policy; it does not call Bedrock or Ollama.
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=5).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - backend-net
+
+  # Backend HTTP API is run from the host in local development.
+  # Start the separate worker profile only after the Phase 2 worker entrypoint exists.
 
   # Elasticsearch
   elasticsearch:
@@ -34,8 +116,8 @@ services:
     container_name: elasticsearch
     restart: unless-stopped
     ports:
-      - '9200:9200'
-      - '9300:9300'
+      - '127.0.0.1:9200:9200'
+      - '127.0.0.1:9300:9300'
     environment:
       - node.name=elasticsearch
       - cluster.name=es-docker-cluster
@@ -53,7 +135,7 @@ services:
     container_name: prometheus
     restart: unless-stopped
     ports:
-      - '9090:9090'
+      - '127.0.0.1:9090:9090'
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -69,10 +151,11 @@ services:
     container_name: grafana
     restart: unless-stopped
     ports:
-      - '3001:3000'
+      - '127.0.0.1:3001:3000'
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Fallbacks are disposable local-only credentials; never use them in production.
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana_data:/var/lib/grafana
@@ -88,7 +171,7 @@ services:
     container_name: loki
     restart: unless-stopped
     ports:
-      - '3100:3100'
+      - '127.0.0.1:3100:3100'
     volumes:
       - ./config/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
@@ -124,6 +207,14 @@ volumes:
     driver: local
   loki_data:
     driver: local
+  qdrant_data:
+    driver: local
+  hf_cache:
+    driver: local
+
+secrets:
+  ai-service-public-key:
+    file: ../../.secrets/ai-service-dev-public.pem
 
 networks:
   backend-net:

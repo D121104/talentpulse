@@ -37,3 +37,7 @@ npm-debug.log*
 /docker/*
 
 *.traineddata
+# Lambda packaging artifacts
+.lambda-package/
+lambda-deploy.zip
+.docker-build-cache/

@@ -75,6 +75,9 @@ plans/
 .eslintcache
 .stylelintcache
 
+# Local development secrets (including generated AI service key pairs)
+.secrets/
+
 # Certificates and private keys
 *.pem
 *.key

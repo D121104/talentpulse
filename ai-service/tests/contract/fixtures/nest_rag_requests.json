@@ -1,0 +1,70 @@
+{
+  "retrieve": {
+    "identity": {
+      "request_id": "11111111-1111-4111-8111-111111111111",
+      "trace_id": "22222222-2222-4222-8222-222222222222",
+      "operation_attempt_id": "33333333-3333-4333-8333-333333333333",
+      "client_message_id": "44444444-4444-4444-8444-444444444444",
+      "user_id": "55555555-5555-4555-8555-555555555555",
+      "session_id": "66666666-6666-4666-8666-666666666666"
+    },
+    "normalized_user_message": "Find backend jobs in Ha Noi",
+    "locale": "en-US",
+    "recent_history": ["USER: find backend jobs"],
+    "filter_state": {"location": "Ha Noi", "skills": ["Python"]},
+    "explicit_filters": {
+      "company_ids": ["77777777-7777-4777-8777-777777777777"],
+      "locations": ["Ha Noi"],
+      "skills_any": ["Python"],
+      "salary_gte": 25000000
+    },
+    "filter_provenance": {"location": "explicit"},
+    "policy": {"data_scope": "PUBLIC_ACTIVE_JOBS", "max_candidates": 20, "max_context_jobs": 8}
+  },
+  "generate": {
+    "identity": {
+      "request_id": "11111111-1111-4111-8111-111111111111",
+      "trace_id": "22222222-2222-4222-8222-222222222222",
+      "operation_attempt_id": "33333333-3333-4333-8333-333333333333",
+      "client_message_id": "44444444-4444-4444-8444-444444444444",
+      "user_id": "55555555-5555-4555-8555-555555555555",
+      "session_id": "66666666-6666-4666-8666-666666666666"
+    },
+    "normalized_user_message": "Compare my CV with this backend job",
+    "intent": "CV_JOB_COMPARISON",
+    "locale": "en-US",
+    "filter_state": {"skills": ["Python"]},
+    "authorized_cv_snapshot": {
+      "cv_id": "88888888-8888-4888-8888-888888888888",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Backend Engineer CV",
+      "target": "Backend Engineer",
+      "skills": ["Python", "FastAPI"],
+      "education": ["BSc Computer Science"],
+      "experience": ["Backend API development"],
+      "certificates": [],
+      "sanitized_text": "Backend engineer with Python and FastAPI experience.",
+      "consent_version": "phase1-v1"
+    },
+    "consent_version": "phase1-v1",
+    "canonical_active_job_context": [{
+      "job_id": "77777777-7777-4777-8777-777777777777",
+      "title": "Backend Engineer",
+      "company_name": "Example Labs",
+      "location": "Ha Noi",
+      "level": "MID",
+      "salary": {"amount": 30000000, "currency": "VND"},
+      "skills": ["Python", "FastAPI"],
+      "start_date": "2026-09-01",
+      "end_date": null
+    }],
+    "retrieval_evidence": [{
+      "job_id": "77777777-7777-4777-8777-777777777777",
+      "rank": 1,
+      "score": 0.91,
+      "citation_key": "J1"
+    }],
+    "explicit_filters": {},
+    "policy": {"data_scope": "PUBLIC_ACTIVE_JOBS", "max_candidates": 20, "max_context_jobs": 8}
+  }
+}

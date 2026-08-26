@@ -35,13 +35,19 @@ function parsePort(value: unknown): number {
 export function validateEnvironment(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
-  const nodeEnv = String(config.NODE_ENV ?? 'development').trim().toLowerCase();
+  const nodeEnv = String(config.NODE_ENV ?? 'development')
+    .trim()
+    .toLowerCase();
   const synchronize = parseBoolean(
     config.DB_SYNCHRONIZE,
     nodeEnv !== 'production',
     'DB_SYNCHRONIZE',
   );
-  const redisEnabled = parseBoolean(config.REDIS_ENABLED, true, 'REDIS_ENABLED');
+  const redisEnabled = parseBoolean(
+    config.REDIS_ENABLED,
+    true,
+    'REDIS_ENABLED',
+  );
   const runBackgroundJobs = parseBoolean(
     config.RUN_BACKGROUND_JOBS,
     true,
@@ -51,9 +57,9 @@ export function validateEnvironment(
   const consentVersion = String(
     config.AI_CV_CONSENT_VERSION ?? 'phase0-v1',
   ).trim();
-  const consentPolicyHash = String(
-    config.AI_CV_CONSENT_POLICY_HASH ?? '',
-  ).trim().toLowerCase();
+  const consentPolicyHash = String(config.AI_CV_CONSENT_POLICY_HASH ?? '')
+    .trim()
+    .toLowerCase();
 
   if (nodeEnv === 'production' && synchronize) {
     throw new Error('DB_SYNCHRONIZE must be false in production');
@@ -73,8 +79,13 @@ export function validateEnvironment(
     'AI_SERVICE_AUDIENCE',
     'AI_SERVICE_JWT_ALGORITHM',
     'AI_SERVICE_JWT_TTL_SECONDS',
+    'AI_SERVICE_JWT_KID',
+    'AI_SERVICE_JWT_PRIVATE_KEY',
+    'AI_SERVICE_JWT_PRIVATE_KEY_FILE',
   ];
-  const hasServiceAuthConfig = serviceAuthKeys.some((key) => config[key] != null);
+  const hasServiceAuthConfig = serviceAuthKeys.some(
+    (key) => config[key] != null,
+  );
 
   if (hasServiceAuthConfig) {
     const issuer = String(config.AI_SERVICE_ISSUER ?? '').trim();
@@ -82,9 +93,22 @@ export function validateEnvironment(
     const algorithm = String(config.AI_SERVICE_JWT_ALGORITHM ?? '');
     const ttlSeconds = Number(config.AI_SERVICE_JWT_TTL_SECONDS);
 
-    if (!issuer || !audience || !['RS256', 'ES256'].includes(algorithm)) {
+    const keyId = String(config.AI_SERVICE_JWT_KID ?? '').trim();
+    const privateKey = String(config.AI_SERVICE_JWT_PRIVATE_KEY ?? '').trim();
+    const privateKeyFile = String(
+      config.AI_SERVICE_JWT_PRIVATE_KEY_FILE ?? '',
+    ).trim();
+
+    if (
+      !issuer ||
+      !audience ||
+      !keyId ||
+      !['RS256', 'ES256'].includes(algorithm) ||
+      (privateKey && privateKeyFile) ||
+      (!privateKey && !privateKeyFile)
+    ) {
       throw new Error(
-        'AI service JWT requires issuer, audience and RS256/ES256 algorithm',
+        'AI service JWT requires issuer, audience, kid, and exactly one private key source',
       );
     }
     if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > 300) {
@@ -107,4 +131,3 @@ export function validateEnvironment(
       : {}),
   };
 }
-

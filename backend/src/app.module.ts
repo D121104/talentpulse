@@ -31,6 +31,7 @@ import { ActiveJobsModule } from './active-jobs/active-jobs.module';
 import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 import { PaymentsModule } from './payments/payments.module';
 import { CandidateAccessModule } from './candidate-access/candidate-access.module';
+import { AiClientModule } from './ai-client/ai-client.module';
 import { areQueueWorkersEnabled } from './config/runtime-flags';
 import { createRedisConnectionOptions } from './redis/redis.module';
 
@@ -116,6 +117,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     AiCvConsentsModule,
     PaymentsModule,
     CandidateAccessModule,
+    AiClientModule,
   ],
   controllers: [AppController],
   providers: [AppService],
