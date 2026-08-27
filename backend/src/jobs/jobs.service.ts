@@ -4,8 +4,11 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import {
   Repository,
   MoreThan,
@@ -23,6 +26,8 @@ import { UsersService } from 'src/users/users.service';
 import { RedisService } from 'src/redis/redis.service';
 import { Company } from 'src/companies/entities/company.entity';
 import { Application } from 'src/applications/entities/application.entity';
+import { UserCV } from 'src/usercvs/entities/usercv.entity';
+import { OnlineCV } from 'src/online-cvs/entities/online-cv.entity';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import {
   NotificationTargetType,
@@ -30,6 +35,64 @@ import {
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import { ElasticsearchService } from 'src/elasticsearch/elasticsearch.service';
+import { JobSyncPayload } from 'src/elasticsearch/job-sync.processor';
+
+export function getIsoWeekString(d: Date = new Date()): string {
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = target.valueOf();
+  target.setMonth(0, 1);
+  if (target.getDay() !== 4) {
+    target.setMonth(0, 1 + ((4 - target.getDay() + 7) % 7));
+  }
+  const weekNumber =
+    1 + Math.ceil((firstThursday - target.valueOf()) / 604800000);
+  return `${d.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
+}
+
+export function applyCompanyDiversity(
+  jobs: any[],
+  maxPerCompanyInFirstSlide = 2,
+  maxTotalPerCompany = 3,
+): any[] {
+  const result: any[] = [];
+  const companyCounts = new Map<string, number>();
+  const deferredJobs: any[] = [];
+
+  for (const job of jobs) {
+    const companyId = job.company?._id || 'unknown';
+    const currentCount = companyCounts.get(companyId) || 0;
+
+    if (result.length < 9) {
+      if (currentCount < maxPerCompanyInFirstSlide) {
+        result.push(job);
+        companyCounts.set(companyId, currentCount + 1);
+      } else {
+        deferredJobs.push(job);
+      }
+    } else {
+      if (currentCount < maxTotalPerCompany) {
+        result.push(job);
+        companyCounts.set(companyId, currentCount + 1);
+      } else {
+        deferredJobs.push(job);
+      }
+    }
+  }
+
+  for (const job of deferredJobs) {
+    const companyId = job.company?._id || 'unknown';
+    const currentCount = companyCounts.get(companyId) || 0;
+    if (currentCount < maxTotalPerCompany) {
+      result.push(job);
+      companyCounts.set(companyId, currentCount + 1);
+    }
+  }
+
+  return result;
+}
 
 @Injectable()
 export class JobsService {
@@ -45,6 +108,12 @@ export class JobsService {
     @InjectRepository(Application)
     private readonly applicationRepo: Repository<Application>,
 
+    @InjectRepository(UserCV)
+    private readonly userCvRepo: Repository<UserCV>,
+
+    @InjectRepository(OnlineCV)
+    private readonly onlineCvRepo: Repository<OnlineCV>,
+
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
 
@@ -53,7 +122,42 @@ export class JobsService {
     private readonly cvProcessingService: CVProcessingService,
 
     private readonly activeJobQueryService: ActiveJobQueryService,
+
+    private readonly elasticsearchService: ElasticsearchService,
+
+    @Optional()
+    @InjectQueue('job-sync-es')
+    private readonly jobSyncQueue?: Queue<JobSyncPayload>,
   ) {}
+
+  private async enqueueJobSync(
+    jobId: string,
+    action: 'sync-job' | 'delete-job' = 'sync-job',
+  ): Promise<void> {
+    try {
+      if (this.jobSyncQueue) {
+        await this.jobSyncQueue.add(
+          action,
+          { jobId },
+          {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: true,
+          },
+        );
+      } else {
+        // Direct sync fallback if queue disabled
+        if (action === 'sync-job') {
+          const job = await this.jobRepo.findOne({ where: { _id: jobId } });
+          if (job) await this.elasticsearchService.indexJob(job);
+        } else {
+          await this.elasticsearchService.deleteJob(jobId);
+        }
+      }
+    } catch {
+      // Ignore queue dispatch error to keep HTTP request robust
+    }
+  }
 
   async getAll() {
     return await this.activeJobQueryService.createActiveQuery().getMany();
@@ -281,6 +385,9 @@ export class JobsService {
 
     const savedJob = await this.jobRepo.save(newJob);
 
+    // Sync to Elasticsearch
+    void this.enqueueJobSync(savedJob._id);
+
     // Send notification to all users following this company about the new job
     if (company.usersFollow && company.usersFollow.length > 0) {
       await this.notificationsService.createBulk(
@@ -507,6 +614,9 @@ export class JobsService {
       },
     });
 
+    // Sync to Elasticsearch
+    void this.enqueueJobSync(id);
+
     // Re-process all CVs only when description has changed
     if (descriptionChanged) {
       const updatedJob = await this.activeJobQueryService.findNonDeletedById(id);
@@ -550,6 +660,9 @@ export class JobsService {
     });
 
     await this.redisService.invalidateJobsCache();
+    // Remove from Elasticsearch
+    void this.enqueueJobSync(id, 'delete-job');
+
     return await this.jobRepo.softDelete(id);
   }
 
@@ -560,10 +673,31 @@ export class JobsService {
     }
 
     const isHrPrem = this.usersService.isHrPremium(userInDb);
-    if (!isHrPrem && user.role !== Role.ADMIN) {
-      throw new BadRequestException(
-        'Tính năng đẩy TOP tin tuyển dụng chỉ dành riêng cho tài khoản HR Premium. Vui lòng nâng cấp gói HR Premium để sử dụng tính năng này!',
-      );
+    const now = new Date();
+
+    // Check & Enforce Boost Quota:
+    // HR Premium / Admin: 5 boosts per day
+    // HR Standard: 2 boosts per week
+    if (isHrPrem || user.role === Role.ADMIN) {
+      const dayKey = `hr_boost:${userInDb._id}:day:${now.toISOString().slice(0, 10)}`;
+      const usedToday =
+        Number(await this.redisService.getValue<number>(dayKey)) || 0;
+      if (usedToday >= 5 && user.role !== Role.ADMIN) {
+        throw new BadRequestException(
+          'Bạn đã sử dụng hết hạn mức đẩy TOP tin tuyển dụng hôm nay (5 tin/ngày). Vui lòng quay lại vào ngày mai!',
+        );
+      }
+      await this.redisService.setValue(dayKey, usedToday + 1, 48 * 3600);
+    } else {
+      const weekKey = `hr_boost:${userInDb._id}:week:${getIsoWeekString(now)}`;
+      const usedThisWeek =
+        Number(await this.redisService.getValue<number>(weekKey)) || 0;
+      if (usedThisWeek >= 2) {
+        throw new BadRequestException(
+          'Bạn đã sử dụng hết hạn mức đẩy TOP tin tuyển dụng tuần này (2 tin/tuần). Vui lòng nâng cấp gói HR Premium để được đẩy 5 tin/ngày!',
+        );
+      }
+      await this.redisService.setValue(weekKey, usedThisWeek + 1, 8 * 24 * 3600);
     }
 
     const job = await this.activeJobQueryService.findNonDeletedById(id);
@@ -581,19 +715,178 @@ export class JobsService {
       );
     }
 
-    const now = new Date();
+    // HOT duration = 1 day (24 hours)
     job.isHot = true;
     job.boostedAt = now;
+    job.boostExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     job.updatedAt = now;
 
     const savedJob = await this.jobRepo.save(job);
     await this.redisService.invalidateJobsCache();
 
+    // Sync to Elasticsearch
+    void this.enqueueJobSync(job._id);
+
     return {
       message:
-        'Đã đẩy TOP tin tuyển dụng thành công! Tin của bạn sẽ được ưu tiên hiển thị đầu trang với nhãn HOT nổi bật.',
+        'Đã đẩy TOP tin tuyển dụng thành công (hiệu lực 24 giờ)! Tin của bạn sẽ được ưu tiên xuất hiện tại các vị trí nổi bật.',
       job: savedJob,
     };
+  }
+
+  async getLandingPopularJobs(options: {
+    user?: IUser | null;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, Number(options.page) || 1);
+    const limit = Math.max(1, Math.min(50, Number(options.limit) || 9));
+
+    let candidateSkills: string[] = [];
+    const userId = options.user?._id;
+
+    if (userId && options.user?.role === 'USER') {
+      const cacheKey = `user:${userId}:primary-cv-skills`;
+      const cachedSkills = await this.redisService.getValue<string[]>(cacheKey);
+
+      if (Array.isArray(cachedSkills) && cachedSkills.length > 0) {
+        candidateSkills = cachedSkills;
+      } else {
+        // 1. Check uploaded CVs (user_cvs)
+        const primaryCv = await this.userCvRepo.findOne({
+          where: { userId, isDeleted: false },
+          order: { isPrimary: 'DESC', createdAt: 'DESC' },
+        });
+
+        if (
+          primaryCv &&
+          Array.isArray(primaryCv.skills) &&
+          primaryCv.skills.length > 0
+        ) {
+          candidateSkills = primaryCv.skills;
+        } else {
+          // 2. Check Online CVs (online_cvs)
+          const onlineCv = await this.onlineCvRepo.findOne({
+            where: { userId, isDeleted: false },
+            order: { isPrimary: 'DESC', createdAt: 'DESC' },
+          });
+
+          if (onlineCv) {
+            const extractedSkills: string[] = [];
+            if (Array.isArray(onlineCv.skills)) {
+              for (const s of onlineCv.skills) {
+                if (typeof s === 'string' && (s as string).trim()) {
+                  extractedSkills.push((s as string).trim());
+                } else if (s && typeof s === 'object' && s.name) {
+                  extractedSkills.push(s.name.trim());
+                }
+              }
+            }
+            if (onlineCv.position && onlineCv.position.trim()) {
+              extractedSkills.push(onlineCv.position.trim());
+            }
+            if (onlineCv.title && onlineCv.title.trim()) {
+              extractedSkills.push(onlineCv.title.trim());
+            }
+
+            if (extractedSkills.length > 0) {
+              candidateSkills = Array.from(new Set(extractedSkills));
+            }
+          }
+        }
+
+        if (candidateSkills.length > 0) {
+          await this.redisService.setValue(cacheKey, candidateSkills, 900); // 15 min TTL
+        }
+      }
+    }
+
+    // Query top ranked candidates from Elasticsearch
+    const { jobs: rawJobs, total, isPersonalized } =
+      await this.elasticsearchService.searchLandingPopularJobs({
+        candidateSkills,
+        size: 45,
+      });
+
+    // Apply Backend Company Diversity Algorithm
+    const diverseJobs = applyCompanyDiversity(rawJobs, 2, 3);
+    const totalDiverse = diverseJobs.length;
+    const totalPages = Math.ceil(totalDiverse / limit) || 1;
+    const startIndex = (page - 1) * limit;
+    const paginatedJobs = diverseJobs.slice(startIndex, startIndex + limit);
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: totalPages,
+        total: totalDiverse,
+        isPersonalized,
+      },
+      result: paginatedJobs,
+    };
+  }
+
+  async searchJobsFromElasticsearch(params: {
+    query?: string;
+    location?: string;
+    skills?: string[];
+    level?: string;
+    minSalary?: number;
+    maxSalary?: number;
+    isHot?: boolean;
+    isFeatured?: boolean;
+    isUrgent?: boolean;
+    companyId?: string;
+    sort?: 'relevance' | 'newest' | 'salary_desc' | 'salary_asc';
+    page?: number;
+    limit?: number;
+  }) {
+    const { jobs, total, page, limit, totalPages } =
+      await this.elasticsearchService.searchJobs(params);
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: totalPages,
+        total,
+      },
+      result: jobs,
+    };
+  }
+
+  async getRelatedJobs(id: string, limit = 6) {
+    let list = await this.elasticsearchService.getRelatedJobs(id, limit);
+    if (!list || list.length === 0) {
+      const currentJob = await this.jobRepo.findOne({
+        where: { _id: id, isDeleted: false },
+        relations: ['company'],
+      });
+      if (currentJob) {
+        if (currentJob.skills && currentJob.skills.length > 0) {
+          const esRes = await this.elasticsearchService.searchJobs({
+            skills: currentJob.skills,
+            limit: limit + 1,
+          });
+          list = (esRes?.jobs || []).filter((j: any) => j._id !== id);
+        }
+        if (!list || list.length === 0) {
+          const qb = this.activeJobQueryService
+            .createActiveQuery()
+            .leftJoinAndSelect('job.company', 'company')
+            .where('job._id != :id', { id })
+            .orderBy('job.createdAt', 'DESC')
+            .take(limit);
+          list = await qb.getMany();
+        }
+      }
+    }
+    return (list || []).slice(0, limit);
+  }
+
+  async getSearchSuggestions(query: string, limit = 8) {
+    return await this.elasticsearchService.getSearchSuggestions(query, limit);
   }
 
   async countJobs() {

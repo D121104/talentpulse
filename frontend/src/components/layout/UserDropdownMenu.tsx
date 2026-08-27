@@ -14,7 +14,6 @@ import {
   LogOut,
   Send,
   Sparkles,
-  SlidersHorizontal,
   FileCheck,
   Eye,
   UserCog,
@@ -22,6 +21,7 @@ import {
   Settings2,
   Receipt,
   Clock,
+  Heart,
 } from 'lucide-react';
 import { formatDate, parseDate } from '../../lib/dateUtils';
 import { useAuth } from '../../auth/AuthContext';
@@ -256,12 +256,12 @@ export function UserDropdownMenu() {
                         <span>{t('userMenu.matchingJobs')}</span>
                       </Link>
                       <Link
-                        to="/job-alerts"
+                        to="/saved-jobs"
                         onClick={() => setIsOpen(false)}
                         className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
                       >
-                        <SlidersHorizontal className="h-4 w-4 text-slate-400" />
-                        <span>{t('userMenu.jobAlertSettings')}</span>
+                        <Heart className="h-4 w-4 text-rose-500" />
+                        <span>{t('userMenu.savedJobs')}</span>
                       </Link>
                     </div>
                   )}

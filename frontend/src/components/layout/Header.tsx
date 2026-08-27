@@ -76,12 +76,12 @@ export default function Header() {
 
           {/* Desktop Nav */}
           <nav className="hidden lg:flex items-center gap-1">
-            <a
-              href="/#featured-jobs"
+            <Link
+              to="/jobs"
               className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary dark:hover:text-primary-light rounded-lg hover:bg-slate-100/60 dark:hover:bg-slate-800/60 transition-all duration-200"
             >
               {t('nav.jobs')}
-            </a>
+            </Link>
             <a
               href="/#categories"
               className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary dark:hover:text-primary-light rounded-lg hover:bg-slate-100/60 dark:hover:bg-slate-800/60 transition-all duration-200"
@@ -202,13 +202,13 @@ export default function Header() {
             )}
 
             {/* Standard Nav Links */}
-            <a
-              href="/#featured-jobs"
+            <Link
+              to="/jobs"
               onClick={() => setMobileMenuOpen(false)}
               className="block px-4 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors"
             >
               {t('nav.jobs')}
-            </a>
+            </Link>
             <a
               href="/#categories"
               onClick={() => setMobileMenuOpen(false)}

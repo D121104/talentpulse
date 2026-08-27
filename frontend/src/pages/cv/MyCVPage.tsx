@@ -13,7 +13,7 @@ import {
   FileUp,
   ExternalLink,
   QrCode,
-  Bookmark,
+  Heart,
   MapPin,
   Crown,
   Star,
@@ -1258,9 +1258,9 @@ export default function MyCVPage() {
                           </button>
                           <button
                             type="button"
-                            className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 text-slate-400 hover:text-red-500 dark:border-slate-700 cursor-pointer"
+                            className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 text-slate-400 hover:text-rose-500 dark:border-slate-700 cursor-pointer"
                           >
-                            <Bookmark className="h-3.5 w-3.5" />
+                            <Heart className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>

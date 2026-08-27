@@ -18,6 +18,8 @@ import * as Handlebars from 'handlebars';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
+import { RedisService } from 'src/redis/redis.service';
+
 // Dynamic import for puppeteer
 let puppeteer: any;
 
@@ -30,8 +32,19 @@ export class OnlineCVsService {
     private readonly userRepo: Repository<User>,
     private readonly usersService: UsersService,
     private readonly filesService: FilesService,
+    private readonly redisService: RedisService,
   ) {
     this.loadPuppeteer();
+  }
+
+  private async invalidateUserCvSkillsCache(userId: string) {
+    try {
+      if (userId) {
+        await this.redisService.deleteValue(`user:${userId}:primary-cv-skills`);
+      }
+    } catch {
+      // Ignore cache deletion error
+    }
   }
 
   private async loadPuppeteer() {
@@ -100,6 +113,7 @@ export class OnlineCVsService {
     });
 
     const savedCV = await this.onlineCVRepo.save(newCV);
+    await this.invalidateUserCvSkillsCache(user._id);
 
     // If htmlContent is provided, generate PDF & upload to Cloudinary
     try {
@@ -167,6 +181,8 @@ export class OnlineCVsService {
       },
     });
 
+    await this.invalidateUserCvSkillsCache(user._id);
+
     // Auto update PDF & upload to Cloudinary
     try {
       await this.exportToPdf(id, user, htmlContent);
@@ -189,6 +205,8 @@ export class OnlineCVsService {
         email: user.email,
       },
     });
+
+    await this.invalidateUserCvSkillsCache(user._id);
 
     return await this.onlineCVRepo.softDelete(id);
   }
@@ -231,6 +249,8 @@ export class OnlineCVsService {
         email: user.email,
       },
     });
+
+    await this.invalidateUserCvSkillsCache(user._id);
 
     return {
       _id: cv._id,

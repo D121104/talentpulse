@@ -18,6 +18,9 @@ import EmployerDashboardPage from './pages/employer/EmployerDashboardPage';
 import PremiumPage from './pages/premium/PremiumPage';
 import PaymentHistoryPage from './pages/payment/PaymentHistoryPage';
 import PaymentVerifyPage from './pages/payment/PaymentVerifyPage';
+import JobSearchPage from './pages/jobs/JobSearchPage';
+import JobDetailPage from './pages/jobs/JobDetailPage';
+import SavedJobsPage from './pages/jobs/SavedJobsPage';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
@@ -29,6 +32,10 @@ function App() {
             <ScrollToTop />
           <Routes>
             <Route path="/" element={<LandingPage />} />
+            <Route path="/jobs" element={<JobSearchPage />} />
+            <Route path="/jobs/:id" element={<JobDetailPage />} />
+            <Route path="/saved-jobs" element={<SavedJobsPage />} />
+            <Route path="/jobs/saved" element={<Navigate to="/saved-jobs" replace />} />
             <Route path="/verify-account" element={<VerifyAccountPage />} />
             <Route element={<GuestRoute />}>
               <Route path="/login" element={<LoginPage />} />

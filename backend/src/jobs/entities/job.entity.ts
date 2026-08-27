@@ -53,8 +53,11 @@ export class Job {
   @Column({ default: false })
   isHot: boolean;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   boostedAt: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  boostExpiresAt: Date;
 
   @Column({ default: false })
   isFeatured: boolean;

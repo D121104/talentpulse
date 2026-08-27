@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion';
 import { Search, MapPin, ChevronLeft, ChevronRight, Maximize2, X } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
@@ -7,12 +8,26 @@ import { useTheme } from '../../context/ThemeContext';
 export default function HeroSection() {
   const { t } = useTranslation();
   const { theme } = useTheme();
+  const navigate = useNavigate();
+
+  const [heroKeyword, setHeroKeyword] = useState('');
+  const [heroLocation, setHeroLocation] = useState('');
 
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const mockupRef = useRef<HTMLDivElement>(null);
+
+  const handleHeroSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    const params = new URLSearchParams();
+    if (heroKeyword.trim()) params.set('query', heroKeyword.trim());
+    if (heroLocation && heroLocation !== t('hero.locationPlaceholder')) {
+      params.set('location', heroLocation);
+    }
+    navigate(`/jobs?${params.toString()}`);
+  };
 
   // Scroll-driven animation: smooth scale-down & fade-out as user scrolls past the mockup
   const { scrollYProgress } = useScroll({
@@ -135,29 +150,41 @@ export default function HeroSection() {
             transition={{ duration: 0.8, delay: 0.4, ease: [0.16, 1, 0.3, 1] }}
             className="mt-10 w-full max-w-2xl"
           >
-            <div className="flex flex-col sm:flex-row items-stretch bg-white dark:bg-slate-800 rounded-2xl border border-gray-200/80 dark:border-slate-700 shadow-xl shadow-slate-900/5 dark:shadow-black/20 p-2 gap-2">
+            <form
+              onSubmit={handleHeroSearch}
+              className="flex flex-col sm:flex-row items-stretch bg-white dark:bg-slate-800 rounded-2xl border border-gray-200/80 dark:border-slate-700 shadow-xl shadow-slate-900/5 dark:shadow-black/20 p-2 gap-2"
+            >
               <div className="flex items-center gap-2 flex-1 px-3">
                 <Search className="w-5 h-5 text-slate-400 shrink-0" />
                 <input
                   type="text"
+                  value={heroKeyword}
+                  onChange={(e) => setHeroKeyword(e.target.value)}
                   placeholder={t('hero.searchPlaceholder')}
-                  className="w-full py-2.5 text-sm bg-transparent text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none"
+                  className="w-full py-2.5 text-sm bg-transparent text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none font-medium"
                 />
               </div>
               <div className="hidden sm:block w-px bg-gray-200 dark:bg-slate-700 my-2" />
               <div className="flex items-center gap-2 px-3 sm:w-44">
                 <MapPin className="w-5 h-5 text-slate-400 shrink-0" />
-                <select className="w-full py-2.5 text-sm bg-transparent text-slate-700 dark:text-slate-200 outline-none appearance-none cursor-pointer">
+                <select
+                  value={heroLocation}
+                  onChange={(e) => setHeroLocation(e.target.value)}
+                  className="w-full py-2.5 text-sm bg-transparent text-slate-700 dark:text-slate-200 outline-none appearance-none cursor-pointer font-medium"
+                >
                   <option>{t('hero.locationPlaceholder')}</option>
                   <option>Hà Nội</option>
                   <option>TP. Hồ Chí Minh</option>
                   <option>Đà Nẵng</option>
                 </select>
               </div>
-              <button className="px-6 py-3 bg-primary hover:bg-primary-dark text-white text-sm font-semibold rounded-xl transition-all duration-300 active:scale-95 shadow-sm shadow-primary/25 hover:shadow-md hover:shadow-primary/30 cursor-pointer whitespace-nowrap">
+              <button
+                type="submit"
+                className="px-6 py-3 bg-primary hover:bg-primary-dark text-white text-sm font-semibold rounded-xl transition-all duration-300 active:scale-95 shadow-sm shadow-primary/25 hover:shadow-md hover:shadow-primary/30 cursor-pointer whitespace-nowrap"
+              >
                 {t('hero.searchBtn')}
               </button>
-            </div>
+            </form>
           </motion.div>
 
           {/* Stats */}
