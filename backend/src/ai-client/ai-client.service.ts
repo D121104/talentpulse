@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
+import { validate as isUuid } from 'uuid';
 import {
   assertRagGenerateRequest,
   assertRagGenerateResponse,
@@ -13,6 +14,18 @@ import {
   serializeRagGenerateRequest,
   serializeRagRetrieveRequest,
 } from './contracts/rag.contracts';
+import {
+  assertIndexJobDeleteRequest,
+  assertIndexJobDeleteResponse,
+  assertIndexJobUpsertRequest,
+  assertIndexJobUpsertResponse,
+  IndexJobDeleteRequest,
+  IndexJobDeleteResponse,
+  IndexJobUpsertRequest,
+  IndexJobUpsertResponse,
+  serializeIndexJobDeleteRequest,
+  serializeIndexJobUpsertRequest,
+} from './contracts/indexing.contracts';
 import { AiServiceError, AiServiceErrorCode } from './ai-client.errors';
 import { AiCircuitBreaker } from './circuit-breaker';
 import { AiServiceHttpTransport, mapAiClientError } from './http.transport';
@@ -30,6 +43,13 @@ export const AiOperationAttemptIdFactoryToken = Symbol(
 export interface AiClientConfig {
   baseUrl: string;
   timeoutMs: number;
+}
+
+export interface AiIndexCallOptions {
+  /** Stable UUID request ID supplied by an outbox/worker when available. */
+  requestId?: string;
+  /** UUID trace ID for this HTTP attempt; generated when omitted. */
+  traceId?: string;
 }
 
 @Injectable()
@@ -91,20 +111,41 @@ export class AiServiceClient {
     );
   }
 
+  async indexJob(
+    request: IndexJobUpsertRequest,
+    options?: AiIndexCallOptions,
+  ): Promise<IndexJobUpsertResponse> {
+    assertIndexJobUpsertRequest(request);
+    return this.callIndexing(
+      '/internal/v1/index/jobs/upsert',
+      ServiceJwtScope.JobsIndex,
+      serializeIndexJobUpsertRequest(request),
+      assertIndexJobUpsertResponse,
+      options,
+    );
+  }
+
+  async deleteIndexedJob(
+    request: IndexJobDeleteRequest,
+    options?: AiIndexCallOptions,
+  ): Promise<IndexJobDeleteResponse> {
+    assertIndexJobDeleteRequest(request);
+    return this.callIndexing(
+      '/internal/v1/index/jobs/delete',
+      ServiceJwtScope.JobsIndex,
+      serializeIndexJobDeleteRequest(request),
+      assertIndexJobDeleteResponse,
+      options,
+    );
+  }
+
   private async call<TRequest, TResponse>(
     path: string,
     scope: ServiceJwtScope,
     request: TRequest,
     validateResponse: (value: unknown) => TResponse,
   ): Promise<TResponse> {
-    if (!this.config.baseUrl) {
-      throw new AiServiceError(
-        AiServiceErrorCode.AI_CLIENT_NOT_CONFIGURED,
-        'AI service URL is not configured',
-        503,
-        false,
-      );
-    }
+    this.assertConfigured();
     const requestId = this.requestId(request);
     const traceId = this.traceId(request);
 
@@ -132,6 +173,66 @@ export class AiServiceClient {
         throw mapAiClientError(error);
       }
     });
+  }
+
+  /**
+   * Indexing deliberately uses a specialized call because its wire request has
+   * no RAG `identity` object and its current FastAPI response has no `trace_id`.
+   * The service still receives both correlation headers; FastAPI currently
+   * echoes only the UUID in `X-Request-ID` as `request_id`.
+   */
+  private async callIndexing<TRequest, TResponse>(
+    path: string,
+    scope: ServiceJwtScope,
+    request: TRequest,
+    validateResponse: (value: unknown) => TResponse,
+    options?: AiIndexCallOptions,
+  ): Promise<TResponse> {
+    this.assertConfigured();
+    const requestId = this.indexCorrelationId(
+      options?.requestId ?? this.createOperationAttemptId(),
+      'request_id',
+    );
+    const traceId = this.indexCorrelationId(
+      options?.traceId ?? this.createTraceId(),
+      'trace_id',
+    );
+
+    return this.circuit.execute(async () => {
+      try {
+        const token = await this.auth.issue(scope);
+        const response = await this.transport.post<unknown>(
+          `${this.config.baseUrl}${path}`,
+          request,
+          {
+            timeoutMs: this.config.timeoutMs,
+            headers: {
+              Authorization: `Bearer ${token.token}`,
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'X-Request-ID': requestId,
+              'X-Trace-ID': traceId,
+            },
+          },
+        );
+        const validated = validateResponse(response);
+        this.assertIndexResponseCorrelation(validated, requestId);
+        return validated;
+      } catch (error) {
+        throw mapAiClientError(error);
+      }
+    });
+  }
+
+  private assertConfigured(): void {
+    if (!this.config.baseUrl) {
+      throw new AiServiceError(
+        AiServiceErrorCode.AI_CLIENT_NOT_CONFIGURED,
+        'AI service URL is not configured',
+        503,
+        false,
+      );
+    }
   }
 
   private requestId(request: unknown): string {
@@ -166,6 +267,33 @@ export class AiServiceClient {
       );
     }
     return identity.trace_id;
+  }
+
+  private indexCorrelationId(value: unknown, field: string): string {
+    if (typeof value !== 'string' || !isUuid(value)) {
+      throw new AiServiceError(
+        AiServiceErrorCode.AI_REQUEST_REJECTED,
+        `${field} must be a UUID`,
+        400,
+        false,
+      );
+    }
+    return value.toLowerCase();
+  }
+
+  private assertIndexResponseCorrelation(
+    response: unknown,
+    requestId: string,
+  ): void {
+    const correlated = response as { request_id?: unknown };
+    if (correlated.request_id !== requestId) {
+      throw new AiServiceError(
+        AiServiceErrorCode.AI_INVALID_MODEL_OUTPUT,
+        'AI service indexing response correlation is invalid',
+        502,
+        false,
+      );
+    }
   }
 
   private assertResponseCorrelation(

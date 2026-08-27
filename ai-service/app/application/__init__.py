@@ -1,1 +1,35 @@
+from .index_job_service import IndexJobService
+from .indexing import (
+    CHUNKING_VERSION,
+    DEFAULT_MAX_CHUNK_CHARS,
+    INDEX_SCHEMA_VERSION,
+    NORMALIZATION_VERSION,
+    JobChunk,
+    build_chunks,
+    build_search_text,
+    compute_content_hash,
+    compute_job_content_hash,
+    compute_metadata_hash,
+    normalize_text,
+    normalized_job_metadata,
+    point_id_for_job,
+    point_ids_for_job,
+)
 
+__all__ = [
+    "CHUNKING_VERSION",
+    "DEFAULT_MAX_CHUNK_CHARS",
+    "INDEX_SCHEMA_VERSION",
+    "IndexJobService",
+    "JobChunk",
+    "NORMALIZATION_VERSION",
+    "build_chunks",
+    "build_search_text",
+    "compute_content_hash",
+    "compute_job_content_hash",
+    "compute_metadata_hash",
+    "normalize_text",
+    "normalized_job_metadata",
+    "point_id_for_job",
+    "point_ids_for_job",
+]

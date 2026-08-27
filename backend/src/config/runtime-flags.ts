@@ -31,3 +31,17 @@ export function areQueueWorkersEnabled(
 ): boolean {
   return isRedisEnabled(env) && areBackgroundJobsEnabled(env);
 }
+
+/**
+ * The indexing dispatcher is a separate opt-in worker. Background-job
+ * compatibility remains intact, but an ordinary API process must not start an
+ * indexing poller merely because RUN_BACKGROUND_JOBS defaults to true.
+ */
+export function isIndexingWorkerEnabled(
+  env: RuntimeEnvironment = process.env as RuntimeEnvironment,
+): boolean {
+  return (
+    areBackgroundJobsEnabled(env) &&
+    parseRuntimeBoolean(env.RUN_INDEXING_WORKER, false)
+  );
+}

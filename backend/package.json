@@ -25,7 +25,8 @@
     "migration:generate": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d src/database/data-source.ts",
     "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
     "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
-    "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts"
+    "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
+    "ai-index": "ts-node -r tsconfig-paths/register src/scripts/ai-index.ts"
   },
   "dependencies": {
     "@codegenie/serverless-express": "^4.17.1",

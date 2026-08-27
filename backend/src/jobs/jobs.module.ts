@@ -10,6 +10,7 @@ import { UsersModule } from 'src/users/users.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { AIMatchingModule } from 'src/ai-matching/ai-matching.module';
 import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
+import { AiIndexingModule } from 'src/ai-indexing/ai-indexing.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
     NotificationsModule,
     AIMatchingModule,
     ActiveJobsModule,
+    AiIndexingModule,
     forwardRef(() => UsersModule),
   ],
   controllers: [JobsController],

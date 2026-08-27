@@ -53,6 +53,11 @@ export function validateEnvironment(
     true,
     'RUN_BACKGROUND_JOBS',
   );
+  const runIndexingWorker = parseBoolean(
+    config.RUN_INDEXING_WORKER,
+    false,
+    'RUN_INDEXING_WORKER',
+  );
   const port = parsePort(config.DB_PORT);
   const consentVersion = String(
     config.AI_CV_CONSENT_VERSION ?? 'phase0-v1',
@@ -125,6 +130,7 @@ export function validateEnvironment(
     DB_SYNCHRONIZE: String(synchronize),
     REDIS_ENABLED: String(redisEnabled),
     RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
+    RUN_INDEXING_WORKER: String(runIndexingWorker),
     AI_CV_CONSENT_VERSION: consentVersion,
     ...(consentPolicyHash
       ? { AI_CV_CONSENT_POLICY_HASH: consentPolicyHash }

@@ -10,6 +10,7 @@ import { UsersModule } from 'src/users/users.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
+import { AiIndexingModule } from 'src/ai-indexing/ai-indexing.module';
 
 @Module({
   imports: [
@@ -18,10 +19,10 @@ import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
     forwardRef(() => UsersModule),
     NotificationsModule,
     ActiveJobsModule,
+    AiIndexingModule,
   ],
   controllers: [CompaniesController],
   providers: [CompaniesService],
   exports: [CompaniesService, CompaniesModule],
 })
 export class CompaniesModule {}
-

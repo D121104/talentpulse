@@ -32,6 +32,7 @@ import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 import { PaymentsModule } from './payments/payments.module';
 import { CandidateAccessModule } from './candidate-access/candidate-access.module';
 import { AiClientModule } from './ai-client/ai-client.module';
+import { AiIndexingModule } from './ai-indexing/ai-indexing.module';
 import { areQueueWorkersEnabled } from './config/runtime-flags';
 import { createRedisConnectionOptions } from './redis/redis.module';
 
@@ -118,6 +119,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     PaymentsModule,
     CandidateAccessModule,
     AiClientModule,
+    AiIndexingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
+  DataSource,
   Repository,
   MoreThan,
   LessThanOrEqual,
@@ -30,6 +31,11 @@ import {
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import {
+  AiIndexAggregateType,
+  AiIndexOutboxOperation,
+} from 'src/ai-indexing/entities';
+import { AiIndexingService } from 'src/ai-indexing/ai-indexing.service';
 
 @Injectable()
 export class JobsService {
@@ -53,6 +59,10 @@ export class JobsService {
     private readonly cvProcessingService: CVProcessingService,
 
     private readonly activeJobQueryService: ActiveJobQueryService,
+
+    private readonly dataSource: DataSource,
+
+    private readonly aiIndexingService: AiIndexingService,
   ) {}
 
   async getAll() {
@@ -271,32 +281,52 @@ export class JobsService {
       isActive: company.isActive,
     };
 
-    const newJob = this.jobRepo.create({
-      ...createJobDto,
-      createdBy: {
-        _id: user._id,
-        email: user.email,
-      },
+    const savedJob = await this.dataSource.transaction(async (manager) => {
+      const jobRepository = manager.getRepository(Job);
+      const newJob = jobRepository.create({
+        ...createJobDto,
+        createdBy: {
+          _id: user._id,
+          email: user.email,
+        },
+      });
+      const createdJob = await jobRepository.save(newJob);
+
+      await this.aiIndexingService.enqueueWithNextSourceVersion(
+        {
+          aggregateType: AiIndexAggregateType.JOB,
+          aggregateId: createdJob._id,
+          operation: AiIndexOutboxOperation.UPSERT,
+        },
+        manager,
+      );
+
+      return createdJob;
     });
 
-    const savedJob = await this.jobRepo.save(newJob);
-
-    // Send notification to all users following this company about the new job
-    if (company.usersFollow && company.usersFollow.length > 0) {
-      await this.notificationsService.createBulk(
-        company.usersFollow,
-        'Công ty ' + company.name + ' vừa đăng tuyển công việc mới',
-        `Công việc ${savedJob.name} với mức lương ${savedJob.salary} VND đã được đăng tuyển. Hãy nhanh tay ứng tuyển ngay!`,
-        NotificationType.JOB,
-        NotificationTargetType.JOB,
-        savedJob._id.toString(),
-        { jobId: savedJob._id.toString(), companyId: company._id.toString() },
-      );
-    }
-
+    // Post-commit side effects are deliberately outside the business transaction.
+    // A notification/cache failure cannot roll back the persisted job/outbox.
+    await this.notifyNewJobFollowers(company, savedJob);
     await this.redisService.invalidateJobsCache();
 
     return savedJob;
+  }
+
+  private async notifyNewJobFollowers(
+    company: Company,
+    savedJob: Job,
+  ): Promise<void> {
+    if (!company.usersFollow || company.usersFollow.length === 0) return;
+
+    await this.notificationsService.createBulk(
+      company.usersFollow,
+      'Công ty ' + company.name + ' vừa đăng tuyển công việc mới',
+      `Công việc ${savedJob.name} với mức lương ${savedJob.salary} VND đã được đăng tuyển. Hãy nhanh tay ứng tuyển ngay!`,
+      NotificationType.JOB,
+      NotificationTargetType.JOB,
+      savedJob._id.toString(),
+      { jobId: savedJob._id.toString(), companyId: company._id.toString() },
+    );
   }
 
   async findAll(qs: any) {
@@ -493,31 +523,55 @@ export class JobsService {
       };
     }
 
-    const descriptionChanged =
-      updateJobDto.description !== undefined &&
-      updateJobDto.description !== currentJob.description;
+    const { result, updatedJob, descriptionChanged } =
+      await this.dataSource.transaction(async (manager) => {
+        const jobRepository = manager.getRepository(Job);
+        const lockedJob = await jobRepository.findOne({
+          where: { _id: id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!lockedJob || lockedJob.isDeleted || lockedJob.deletedAt) {
+          throw new NotFoundException('Job not found');
+        }
+
+        const descriptionChanged =
+          updateJobDto.description !== undefined &&
+          updateJobDto.description !== lockedJob.description;
+
+        const result = await jobRepository.update(id, {
+          ...updateJobDto,
+          updatedBy: {
+            _id: user._id,
+            email: user.email,
+          },
+        });
+        await this.aiIndexingService.enqueueWithNextSourceVersion(
+          {
+            aggregateType: AiIndexAggregateType.JOB,
+            aggregateId: id,
+            operation: AiIndexOutboxOperation.UPSERT,
+          },
+          manager,
+        );
+
+        return {
+          result,
+          updatedJob: await jobRepository.findOne({ where: { _id: id } }),
+          descriptionChanged,
+        };
+      });
 
     await this.redisService.invalidateJobsCache();
 
-    const result = await this.jobRepo.update(id, {
-      ...updateJobDto,
-      updatedBy: {
-        _id: user._id,
-        email: user.email,
-      },
-    });
-
-    // Re-process all CVs only when description has changed
-    if (descriptionChanged) {
-      const updatedJob = await this.activeJobQueryService.findNonDeletedById(id);
-      if (updatedJob) {
-        await this.cvProcessingService.reprocessAllCVsForJob(id, {
-          name: updatedJob.name,
-          description: updatedJob.description,
-          skills: updatedJob.skills || [],
-          level: updatedJob.level,
-        });
-      }
+    // Re-process all CVs only when description has changed. This is a
+    // post-commit best-effort side effect, matching the existing behavior.
+    if (descriptionChanged && updatedJob) {
+      await this.cvProcessingService.reprocessAllCVsForJob(id, {
+        name: updatedJob.name,
+        description: updatedJob.description,
+        skills: updatedJob.skills || [],
+        level: updatedJob.level,
+      });
     }
 
     return result;
@@ -540,17 +594,39 @@ export class JobsService {
       );
     }
 
-    await this.jobRepo.update(id, {
-      isDeleted: true,
-      deletedAt: new Date(),
-      deletedBy: {
-        _id: user._id,
-        email: user.email,
-      },
+    const deletedAt = new Date();
+    const result = await this.dataSource.transaction(async (manager) => {
+      const jobRepository = manager.getRepository(Job);
+      const lockedJob = await jobRepository.findOne({
+        where: { _id: id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lockedJob || lockedJob.isDeleted || lockedJob.deletedAt) {
+        throw new NotFoundException('Job not found');
+      }
+
+      await jobRepository.update(id, {
+        isDeleted: true,
+        deletedAt,
+        deletedBy: {
+          _id: user._id,
+          email: user.email,
+        },
+      });
+      const softDeleteResult = await jobRepository.softDelete(id);
+      await this.aiIndexingService.enqueueWithNextSourceVersion(
+        {
+          aggregateType: AiIndexAggregateType.JOB,
+          aggregateId: id,
+          operation: AiIndexOutboxOperation.DELETE,
+        },
+        manager,
+      );
+      return softDeleteResult;
     });
 
     await this.redisService.invalidateJobsCache();
-    return await this.jobRepo.softDelete(id);
+    return result;
   }
 
   async boostJob(id: string, user: IUser) {
@@ -582,11 +658,33 @@ export class JobsService {
     }
 
     const now = new Date();
-    job.isHot = true;
-    job.boostedAt = now;
-    job.updatedAt = now;
 
-    const savedJob = await this.jobRepo.save(job);
+    const savedJob = await this.dataSource.transaction(async (manager) => {
+      const jobRepository = manager.getRepository(Job);
+      const lockedJob = await jobRepository.findOne({
+        where: { _id: id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lockedJob || lockedJob.isDeleted || lockedJob.deletedAt) {
+        throw new NotFoundException('Job not found');
+      }
+
+      // `updatedAt` is part of the current canonical index payload, so a
+      // boost needs a fresh UPSERT even though searchable content is unchanged.
+      lockedJob.isHot = true;
+      lockedJob.boostedAt = now;
+      lockedJob.updatedAt = now;
+      const saved = await jobRepository.save(lockedJob);
+      await this.aiIndexingService.enqueueWithNextSourceVersion(
+        {
+          aggregateType: AiIndexAggregateType.JOB,
+          aggregateId: id,
+          operation: AiIndexOutboxOperation.UPSERT,
+        },
+        manager,
+      );
+      return saved;
+    });
     await this.redisService.invalidateJobsCache();
 
     return {

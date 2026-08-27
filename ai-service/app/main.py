@@ -8,10 +8,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.adapters import build_chat_model, build_embedding_model, build_vector_store
+from app.application.index_job_service import IndexJobService
 from app.core.errors import ServiceError, error_response
 from app.core.logging import RequestIdMiddleware, configure_logging
 from app.core.settings import Settings, get_settings
-from app.schemas import RagGenerateRequest, RagRetrieveRequest
+from app.schemas import (
+    IndexJobDeleteRequest,
+    IndexJobResponse,
+    IndexJobUpsertRequest,
+    IndexMetadataScanRequest,
+    IndexMetadataScanResponse,
+    RagGenerateRequest,
+    RagRetrieveRequest,
+)
 from app.security.dependencies import (
     require_generate_auth,
     require_index_auth,
@@ -31,6 +40,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.chat_model = build_chat_model(active_settings)
     app.state.embedding_model = build_embedding_model(active_settings)
     app.state.vector_store = build_vector_store(active_settings)
+    app.state.index_job_service = IndexJobService(
+        app.state.embedding_model,
+        app.state.vector_store,
+    )
 
     @app.exception_handler(ServiceError)
     async def handle_service_error(request: Request, exc: ServiceError) -> JSONResponse:
@@ -107,22 +120,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post(
         "/internal/v1/index/jobs/upsert",
         dependencies=[Depends(require_index_auth)],
-        response_model=None,
+        response_model=IndexJobResponse,
     )
-    async def index_upsert() -> dict[str, str]:
-        raise ServiceError(
-            "AI_FEATURE_NOT_IMPLEMENTED", "Job indexing is not available in Phase 1", 501
+    async def index_upsert(
+        payload: IndexJobUpsertRequest,
+        http_request: Request,
+    ) -> IndexJobResponse:
+        return await http_request.app.state.index_job_service.upsert(
+            payload, request_id=http_request.state.request_id
         )
 
     @app.post(
         "/internal/v1/index/jobs/delete",
         dependencies=[Depends(require_index_auth)],
-        response_model=None,
+        response_model=IndexJobResponse,
     )
-    async def index_delete() -> dict[str, str]:
-        raise ServiceError(
-            "AI_FEATURE_NOT_IMPLEMENTED", "Job indexing is not available in Phase 1", 501
+    async def index_delete(
+        payload: IndexJobDeleteRequest,
+        http_request: Request,
+    ) -> IndexJobResponse:
+        return await http_request.app.state.index_job_service.delete(
+            payload, request_id=http_request.state.request_id
         )
+
+    @app.post(
+        "/internal/v1/index/points/scan",
+        dependencies=[Depends(require_index_auth)],
+        response_model=IndexMetadataScanResponse,
+    )
+    async def index_points_scan(
+        payload: IndexMetadataScanRequest,
+        http_request: Request,
+    ) -> IndexMetadataScanResponse:
+        try:
+            page = await http_request.app.state.vector_store.scan_metadata(
+                payload.cursor, payload.limit
+            )
+            response = IndexMetadataScanResponse(
+                points=[
+                    {
+                        "point_id": point.point_id,
+                        "job_id": point.job_id,
+                        "company_id": point.company_id,
+                        "source_version": point.source_version,
+                        "content_hash": point.content_hash,
+                        "metadata_hash": point.metadata_hash,
+                        "embedding_provider": point.embedding_provider,
+                        "embedding_model_version": point.embedding_model_version,
+                        "embedding_dimensions": point.embedding_dimensions,
+                        "normalization_version": point.normalization_version,
+                        "chunking_version": point.chunking_version,
+                        "index_schema_version": point.index_schema_version,
+                    }
+                    for point in page.points
+                ],
+                next_cursor=page.next_cursor,
+                request_id=http_request.state.request_id,
+            )
+            return response
+        except ValueError as exc:
+            raise ServiceError(
+                "AI_INVALID_INDEX_METADATA", "Vector index metadata is invalid", 502
+            ) from exc
 
     return app
 

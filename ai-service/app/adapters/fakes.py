@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -11,8 +12,12 @@ from app.ports import (
     EmbeddingModel,
     EmbeddingResponse,
     VectorMatch,
+    VectorMetadataScanPage,
     VectorRecord,
     VectorStore,
+    bounded_scan_limit,
+    parse_vector_point_metadata,
+    validate_scan_cursor,
     validate_vector,
     validate_vectors,
 )
@@ -37,11 +42,12 @@ class FakeEmbeddingModel(EmbeddingModel):
     dimensions: int = 4
     provider_name: str = "fake"
     model_name: str = "fake-embedding"
+    calls: list[tuple[list[str], EmbeddingInputType]] = field(default_factory=list, init=False)
 
     async def embed(
         self, texts: Sequence[str], input_type: EmbeddingInputType
     ) -> EmbeddingResponse:
-        del input_type
+        self.calls.append((list(texts), input_type))
         vectors = []
         for text in texts:
             vector = [0.0] * self.dimensions
@@ -64,6 +70,7 @@ class InMemoryVectorStore(VectorStore):
     collection_name: str = "fake-collection"
     records: dict[str, VectorRecord] = field(default_factory=dict)
     dimensions: int = 4
+    embedding_model: str = "fake-embedding"
 
     def __post_init__(self) -> None:
         self.records = {} if self.records is None else self.records
@@ -95,3 +102,36 @@ class InMemoryVectorStore(VectorStore):
     async def delete(self, point_ids: Sequence[str]) -> None:
         for point_id in point_ids:
             self.records.pop(point_id, None)
+
+    async def get_by_job_id(self, job_id: str) -> list[VectorRecord]:
+        return [
+            record for record in self.records.values() if record.payload.get("job_id") == job_id
+        ]
+
+    async def scan_metadata(self, cursor: str | None, limit: int) -> VectorMetadataScanPage:
+        """Mirror the bounded provider scan without returning vectors or text."""
+
+        safe_limit = bounded_scan_limit(limit)
+        normalized_cursor = validate_scan_cursor(cursor)
+        point_ids = sorted(self.records)
+        if normalized_cursor is None:
+            start = 0
+        elif normalized_cursor.isdecimal():
+            start = int(normalized_cursor)
+        else:
+            start = bisect_right(point_ids, normalized_cursor)
+
+        selected_ids = point_ids[start : start + safe_limit]
+        metadata = [
+            parse_vector_point_metadata(
+                point_id,
+                self.records[point_id].payload,
+            )
+            for point_id in selected_ids
+        ]
+        next_cursor = (
+            selected_ids[-1]
+            if start + len(selected_ids) < len(point_ids) and selected_ids
+            else None
+        )
+        return VectorMetadataScanPage(metadata, next_cursor)
