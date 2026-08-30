@@ -1,0 +1,15 @@
+FROM public.ecr.aws/lambda/python:3.12
+
+COPY --from=ghcr.io/astral-sh/uv:0.9.5 /uv /uvx /bin/
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-group local --no-emit-project --no-header \
+        --output-file /tmp/requirements.txt \
+    && uv pip install --target ${LAMBDA_TASK_ROOT} --requirement /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+COPY app ./app
+
+CMD ["app.lambda_handler.handler"]

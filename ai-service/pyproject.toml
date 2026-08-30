@@ -11,8 +11,7 @@ dependencies = [
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
   "qdrant-client>=1.15,<2",
-  "sentence-transformers>=5,<6",
-  "uvicorn[standard]>=0.35,<1",
+  "mangum>=0.19,<1",
 ]
 
 [dependency-groups]
@@ -21,6 +20,10 @@ dev = [
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
+]
+local = [
+    "sentence-transformers>=5,<6",
+    "uvicorn[standard]>=0.35,<1",
 ]
 
 [tool.uv]

@@ -26,7 +26,8 @@
     "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
     "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
     "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
-    "ai-index": "ts-node -r tsconfig-paths/register src/scripts/ai-index.ts"
+    "ai-index": "ts-node -r tsconfig-paths/register src/scripts/ai-index.ts",
+    "ai-index:backfill-task": "ts-node -r tsconfig-paths/register src/tasks/ai-index-backfill.task.ts"
   },
   "dependencies": {
     "@codegenie/serverless-express": "^4.17.1",
@@ -84,6 +85,7 @@
     "@nestjs/cli": "9.4.2",
     "@nestjs/schematics": "9.1.0",
     "@nestjs/testing": "9.0.0",
+    "@types/aws-lambda": "^8.10.162",
     "@types/bcryptjs": "^2.4.6",
     "@types/cache-manager": "^4.0.1",
     "@types/cookie-parser": "^1.4.7",

@@ -37,7 +37,10 @@ export interface ParsedCliArguments {
   maxOperations?: number;
 }
 
-type OperationalContext = Pick<INestApplicationContext, 'get' | 'close'>;
+export type AiIndexOperationalContext = Pick<
+  INestApplicationContext,
+  'get' | 'close'
+>;
 
 /** Parses only documented, bounded operational arguments without side effects. */
 export function parseAiIndexArguments(argv: string[]): ParsedCliArguments {
@@ -160,10 +163,11 @@ export function parseAiIndexArguments(argv: string[]): ParsedCliArguments {
  */
 export async function runAiIndexCommand(
   argv: string[],
-  applicationContext?: OperationalContext,
+  applicationContext?: AiIndexOperationalContext,
 ): Promise<unknown> {
   const args = parseAiIndexArguments(argv);
-  const context = applicationContext ?? (await createOperationalContext());
+  const context =
+    applicationContext ?? (await createAiIndexOperationalContext());
   const ownsContext = applicationContext === undefined;
 
   try {
@@ -236,7 +240,7 @@ export async function runAiIndexCommand(
   }
 }
 
-async function createOperationalContext(): Promise<OperationalContext> {
+export async function createAiIndexOperationalContext(): Promise<AiIndexOperationalContext> {
   // The imports are intentionally delayed. Parsing/tests never load dotenv,
   // database configuration, or construct a network-capable Nest application.
   const { NestFactory } = await import('@nestjs/core');

@@ -174,6 +174,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
   async claimBatch(
     limit = this.options.batchSize,
     now = new Date(),
+    outboxId?: string,
   ): Promise<ClaimedAiIndexOutbox[]> {
     const boundedLimit = Math.min(
       Math.max(Math.trunc(limit), 1),
@@ -181,7 +182,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     );
     return this.runTransaction(async (manager) => {
       const repository = manager.getRepository(AiIndexOutbox);
-      const candidates = await repository
+      const candidates = repository
         .createQueryBuilder('outbox')
         .where(
           `(
@@ -203,7 +204,13 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
           ],
           processingStatus: AiIndexOutboxStatus.PROCESSING,
           claimNow: now,
-        })
+        });
+
+      if (outboxId) {
+        candidates.andWhere('outbox._id = :outboxId', { outboxId });
+      }
+
+      const rows = await candidates
         .orderBy('outbox.createdAt', 'ASC')
         .addOrderBy('outbox._id', 'ASC')
         .take(boundedLimit)
@@ -212,7 +219,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
         .getMany();
 
       const claimed: ClaimedAiIndexOutbox[] = [];
-      for (const outbox of candidates) {
+      for (const outbox of rows) {
         const attempts = integerOrZero(outbox.attempts);
         const maxAttempts = Math.max(integerOrZero(outbox.maxAttempts), 1);
         if (attempts >= maxAttempts) {
@@ -238,6 +245,31 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
       }
       return claimed;
     });
+  }
+
+  /** Claims and processes the exact outbox command signaled by SQS. */
+  async processOutbox(outboxId: string): Promise<AiIndexDispatchResult | null> {
+    if (!isUuid(outboxId)) return null;
+
+    const claimed = await this.claimBatch(
+      1,
+      new Date(),
+      outboxId.toLowerCase(),
+    );
+    if (claimed.length > 0) return this.processClaimed(claimed[0]);
+
+    // SQS is at-least-once. A truly durable success from a previous
+    // delivery may be acknowledged without dispatching the provider again.
+    const outbox = await this.outboxRepository.findOne({
+      where: { _id: outboxId.toLowerCase() },
+    });
+    if (outbox?.status === AiIndexOutboxStatus.SUCCEEDED) {
+      return { outboxId: outbox._id, status: 'SUCCEEDED' };
+    }
+    if (outbox?.status === AiIndexOutboxStatus.DEAD_LETTER) {
+      return { outboxId: outbox._id, status: 'DEAD_LETTER' };
+    }
+    return null;
   }
 
   /** Claims and processes one command, if one is available. */
