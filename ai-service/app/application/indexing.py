@@ -23,6 +23,7 @@ __all__ = [
     "CHUNKING_VERSION",
     "DEFAULT_MAX_CHUNK_CHARS",
     "INDEX_SCHEMA_VERSION",
+    "MAX_CHUNK_COUNT",
     "NORMALIZATION_VERSION",
     "POINT_NAMESPACE",
     "JobChunk",
@@ -38,6 +39,7 @@ __all__ = [
 ]
 
 DEFAULT_MAX_CHUNK_CHARS = 1_900
+MAX_CHUNK_COUNT = 128
 POINT_NAMESPACE = uuid5(NAMESPACE_URL, "https://talentpulse.ai/index/jobs")
 _MIN_BODY_BUDGET = 128
 

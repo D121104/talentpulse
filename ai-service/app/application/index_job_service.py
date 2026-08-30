@@ -11,6 +11,7 @@ from app.application.indexing import (
     CHUNKING_VERSION,
     DEFAULT_MAX_CHUNK_CHARS,
     INDEX_SCHEMA_VERSION,
+    MAX_CHUNK_COUNT,
     NORMALIZATION_VERSION,
     build_chunks,
     build_search_text,
@@ -147,13 +148,25 @@ class IndexJobService:
             self._assert_hash(request.metadata_hash, metadata_hash, "metadata_hash")
 
             chunks = build_chunks(job, max_chars=self._max_chunk_chars)
+            chunk_count = len(chunks)
             if not chunks:
                 raise ServiceError("AI_INVALID_REQUEST", "Job search text is empty", 422)
-            point_ids = point_ids_for_job(job.job_id, len(chunks), chunking_version=versions[3])
+            if chunk_count > MAX_CHUNK_COUNT:
+                raise ServiceError(
+                    "AI_INVALID_REQUEST",
+                    "Job search text produces too many chunks",
+                    422,
+                    {
+                        "reason": "TOO_MANY_CHUNKS",
+                        "chunk_count": chunk_count,
+                        "max_chunk_count": MAX_CHUNK_COUNT,
+                    },
+                )
+            point_ids = point_ids_for_job(job.job_id, chunk_count, chunking_version=versions[3])
             desired_payloads = self._build_payloads(
                 job,
                 point_ids=point_ids,
-                chunk_count=len(chunks),
+                chunk_count=chunk_count,
                 content_hash=content_hash,
                 metadata_hash=metadata_hash,
                 source_version=request.source_version,
@@ -229,7 +242,7 @@ class IndexJobService:
                     vectors = validate_vectors(
                         embedding_response.vectors,
                         versions[1],
-                        len(chunks),
+                        chunk_count,
                     )
                 except ValueError as exc:
                     raise ProviderError("Embedding provider returned invalid vectors") from exc
@@ -257,7 +270,7 @@ class IndexJobService:
                 deleted_point_ids=[UUID(point_id) for point_id in stale_point_ids],
                 content_hash=content_hash,
                 metadata_hash=metadata_hash,
-                chunk_count=len(chunks),
+                chunk_count=chunk_count,
                 embedded=embedded,
                 embedding_provider=self._embedding_provider,
                 embedding_model_version=versions[0],

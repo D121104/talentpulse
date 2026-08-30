@@ -5,10 +5,12 @@ from uuid import UUID, uuid5
 
 import pytest
 from app.adapters.fakes import FakeEmbeddingModel, InMemoryVectorStore
+from app.application import index_job_service as index_job_service_module
 from app.application.index_job_service import IndexJobService
 from app.application.indexing import (
     CHUNKING_VERSION,
     POINT_NAMESPACE,
+    JobChunk,
     build_chunks,
     build_search_text,
     compute_content_hash,
@@ -111,6 +113,49 @@ def test_long_jobs_are_bounded_and_repeat_identity_metadata() -> None:
     assert all(len(chunk.text) <= 300 for chunk in chunks)
     assert all("title: backend engineer" in chunk.text for chunk in chunks)
     assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
+
+
+async def test_upsert_rejects_too_many_chunks_before_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    indexer, embedding, store = service()
+    monkeypatch.setattr(
+        index_job_service_module,
+        "build_chunks",
+        lambda _job, *, max_chars: [JobChunk(index, f"chunk {index}") for index in range(129)],
+    )
+
+    with pytest.raises(ServiceError) as error:
+        await indexer.upsert(request())
+
+    assert error.value.code == "AI_INVALID_REQUEST"
+    assert error.value.status_code == 422
+    assert error.value.details == {
+        "reason": "TOO_MANY_CHUNKS",
+        "chunk_count": 129,
+        "max_chunk_count": 128,
+    }
+    assert embedding.calls == []
+    assert store.records == {}
+
+
+async def test_upsert_accepts_the_maximum_chunk_count_before_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    indexer, embedding, store = service()
+    monkeypatch.setattr(
+        index_job_service_module,
+        "build_chunks",
+        lambda _job, *, max_chars: [JobChunk(index, f"chunk {index}") for index in range(128)],
+    )
+
+    response = await indexer.upsert(request())
+
+    assert response.chunk_count == 128
+    assert response.embedded is True
+    assert len(embedding.calls) == 1
+    assert len(embedding.calls[0][0]) == 128
+    assert len(store.records) == 128
 
 
 @pytest.mark.parametrize(
