@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
+from app.adapters.qdrant import representation_manifest_digest
+from app.core.index_representation import (
+    CHUNKING_VERSION,
+    INDEX_SCHEMA_VERSION,
+    NORMALIZATION_VERSION,
+    RepresentationManifest,
+)
 from app.schemas import IndexJobDeleteRequest
 
 from .local_retrieval import (
@@ -43,7 +51,106 @@ async def test_local_evaluation_enforces_phase_two_release_gates() -> None:
     assert report.consistency_missing == 0
     assert report.consistency_orphan == 0
     assert report.consistency_stale == 0
+    assert report.injection_safety_violations == 0
     assert 0.0 <= report.recall_at_10 <= 1.0
+    assert report.release_gate_failures == ()
+    assert report.passed is True
+    assert report.as_dict()["release_gate_failures"] == []
+    assert report.as_dict()["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_local_evaluation_reports_representation_identity_and_stable_digest() -> None:
+    evaluation = await run_local_evaluation()
+    report = evaluation.report
+
+    manifest = report.representation
+    assert isinstance(manifest, RepresentationManifest)
+    assert manifest.as_dict() == {
+        "provider": "fake",
+        "model": "fake-embedding",
+        "dimensions": 4,
+        "normalization_version": NORMALIZATION_VERSION,
+        "chunking_version": CHUNKING_VERSION,
+        "index_schema_version": INDEX_SCHEMA_VERSION,
+        "physical_collection": "jobs_fake_local_v1",
+        "alias": "jobs_fake_local_v1",
+        "collection_version": "local-eval-v1",
+        "embedding_provider": "fake",
+        "embedding_model_version": "fake-embedding",
+        "embedding_dimensions": 4,
+    }
+    assert report.manifest_digest == representation_manifest_digest(manifest)
+    assert report.as_dict()["representation"] == manifest.as_dict()
+    assert report.as_dict()["manifest_digest"] == report.manifest_digest
+
+
+@pytest.mark.asyncio
+async def test_release_gate_fails_when_recall_is_below_explicit_target() -> None:
+    evaluation = await run_local_evaluation()
+    failed_report = replace(evaluation.report, recall_at_10=0.84)
+
+    assert failed_report.release_gate_failures == ("recall_at_10",)
+    assert failed_report.passed is False
+    assert failed_report.as_dict()["recall_at_10_target"] == 0.85
+    assert failed_report.as_dict()["passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_gate_fails_for_empty_query_count() -> None:
+    evaluation = await run_local_evaluation()
+    empty_report = replace(evaluation.report, query_count=0)
+
+    assert "query_count" in empty_report.release_gate_failures
+    assert empty_report.passed is False
+
+
+@pytest.mark.asyncio
+async def test_release_gate_accepts_recall_at_exact_target() -> None:
+    evaluation = await run_local_evaluation()
+    target_report = replace(evaluation.report, recall_at_10=0.85)
+
+    assert "recall_at_10" not in target_report.release_gate_failures
+    assert target_report.passed is True
+
+
+@pytest.mark.asyncio
+async def test_release_gate_rejects_recall_above_one() -> None:
+    evaluation = await run_local_evaluation()
+    invalid_report = replace(evaluation.report, recall_at_10=1.01)
+
+    assert "recall_at_10" in invalid_report.release_gate_failures
+    assert invalid_report.passed is False
+
+
+@pytest.mark.asyncio
+async def test_release_gate_fails_for_no_result_failure() -> None:
+    evaluation = await run_local_evaluation()
+    failed_report = replace(evaluation.report, no_result_failures=1)
+
+    assert "no_result" in failed_report.release_gate_failures
+    assert failed_report.passed is False
+
+
+@pytest.mark.asyncio
+async def test_release_gate_includes_each_existing_quality_field() -> None:
+    evaluation = await run_local_evaluation()
+    cases = (
+        ("filter_correctness", 0.0, "filter_correctness"),
+        ("lifecycle_leakage", 1, "lifecycle_leakage"),
+        ("duplicate_job_cards", 1, "duplicate_job_cards"),
+        ("payload_safety_violations", 1, "payload_safety"),
+        ("injection_safety_violations", 1, "injection_safety"),
+        ("no_result_failures", 1, "no_result"),
+        ("consistency_missing", 1, "consistency"),
+        ("consistency_orphan", 1, "consistency"),
+        ("consistency_stale", 1, "consistency"),
+    )
+
+    for field_name, value, failure_name in cases:
+        failed_report = replace(evaluation.report, **{field_name: value})
+        assert failure_name in failed_report.release_gate_failures
+        assert failed_report.passed is False
 
 
 @pytest.mark.asyncio
@@ -87,9 +194,19 @@ async def test_payload_and_evaluation_output_never_expose_raw_sensitive_fields()
         assert "ignore previous instructions" not in payload_text
 
     report_text = json.dumps(evaluation.report.as_dict(), ensure_ascii=False).casefold()
-    assert "description" not in report_text
-    assert "candidate@example.test" not in report_text
-    assert "ignore previous instructions" not in report_text
+    for forbidden in (
+        "description",
+        "cv",
+        "resume",
+        "prompt",
+        "response",
+        "vector",
+        "api_key",
+        "secret",
+        "candidate@example.test",
+        "ignore previous instructions",
+    ):
+        assert forbidden not in report_text
 
 
 @pytest.mark.asyncio

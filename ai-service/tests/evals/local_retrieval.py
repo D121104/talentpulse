@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.adapters.fakes import FakeEmbeddingModel, InMemoryVectorStore
+from app.adapters.qdrant import representation_manifest_digest
 from app.application.index_job_service import IndexJobService
 from app.application.indexing import (
     CHUNKING_VERSION,
@@ -16,7 +18,8 @@ from app.application.indexing import (
     normalized_job_metadata,
 )
 from app.core.errors import ServiceError
-from app.ports import EmbeddingInputType
+from app.core.index_representation import RepresentationManifest
+from app.ports import EmbeddingInputType, VectorStore
 from app.schemas import CanonicalJobSnapshot, IndexJobResponse, IndexJobUpsertRequest
 
 FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "local_retrieval_gold.json"
@@ -30,6 +33,7 @@ REQUIRED_SCENARIOS = frozenset(
         "malicious-content-isolation",
     }
 )
+RECALL_AT_10_TARGET = 0.85
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +91,65 @@ class EvaluationReport:
     consistency_orphan: int
     consistency_stale: int
     query_result_ids: dict[str, tuple[str, ...]]
+    representation: RepresentationManifest | None = None
+    manifest_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.representation is None:
+            if self.manifest_digest is not None:
+                raise ValueError("evaluation manifest digest requires a representation")
+            return
+        expected_digest = representation_manifest_digest(self.representation)
+        if self.manifest_digest is None:
+            object.__setattr__(self, "manifest_digest", expected_digest)
+        elif self.manifest_digest != expected_digest:
+            raise ValueError("evaluation manifest digest does not match representation")
+
+    @property
+    def recall_at_10_target(self) -> float:
+        return RECALL_AT_10_TARGET
+
+    @property
+    def release_gate_failures(self) -> tuple[str, ...]:
+        """Return stable gate identifiers without exposing evaluation content."""
+
+        failures: list[str] = []
+        if self.query_count <= 0:
+            failures.append("query_count")
+        if self.representation is None or self.manifest_digest is None:
+            failures.append("representation")
+        if self.filter_correctness != 1.0:
+            failures.append("filter_correctness")
+        if self.lifecycle_leakage != 0:
+            failures.append("lifecycle_leakage")
+        if self.duplicate_job_cards != 0:
+            failures.append("duplicate_job_cards")
+        if self.payload_safety_violations != 0:
+            failures.append("payload_safety")
+        if self.injection_safety_violations != 0:
+            failures.append("injection_safety")
+        if self.no_result_failures != 0:
+            failures.append("no_result")
+        if any(
+            value != 0
+            for value in (
+                self.consistency_missing,
+                self.consistency_orphan,
+                self.consistency_stale,
+            )
+        ):
+            failures.append("consistency")
+        if (
+            not math.isfinite(self.recall_at_10)
+            or not 0.0 <= self.recall_at_10 <= 1.0
+            or self.recall_at_10 < self.recall_at_10_target
+        ):
+            failures.append("recall_at_10")
+        return tuple(failures)
+
+    @property
+    def passed(self) -> bool:
+        return not self.release_gate_failures
 
     def as_dict(self) -> dict[str, object]:
         """Return an aggregate-only report suitable for CI logs."""
@@ -94,6 +157,7 @@ class EvaluationReport:
         return {
             "query_count": self.query_count,
             "recall_at_10": self.recall_at_10,
+            "recall_at_10_target": self.recall_at_10_target,
             "filter_correctness": self.filter_correctness,
             "duplicate_job_cards": self.duplicate_job_cards,
             "raw_chunk_duplicate_matches": self.raw_chunk_duplicate_matches,
@@ -107,6 +171,12 @@ class EvaluationReport:
             "query_result_ids": {
                 name: list(job_ids) for name, job_ids in self.query_result_ids.items()
             },
+            "representation": (
+                self.representation.as_dict() if self.representation is not None else None
+            ),
+            "manifest_digest": self.manifest_digest,
+            "release_gate_failures": list(self.release_gate_failures),
+            "passed": self.passed,
         }
 
 
@@ -126,6 +196,34 @@ class LocalIndex:
             for record in self.store.records.values()
             if isinstance(record.payload.get("job_id"), str)
         )
+
+
+def representation_manifest_for_store(
+    store: VectorStore, *, alias: str | None = None
+) -> RepresentationManifest:
+    """Read representation identity without probing or mutating the provider."""
+
+    manifest_factory = getattr(store, "representation_manifest", None)
+    if callable(manifest_factory):
+        manifest = manifest_factory()
+        if not isinstance(manifest, RepresentationManifest):
+            raise ValueError("vector store returned an invalid representation manifest")
+        return manifest
+
+    configured_alias = alias or getattr(store, "alias_name", store.collection_name)
+    if not isinstance(configured_alias, str):
+        raise ValueError("vector store alias is invalid")
+    return RepresentationManifest(
+        provider=store.embedding_provider,
+        model=store.embedding_model,
+        dimensions=store.dimensions,
+        normalization_version=NORMALIZATION_VERSION,
+        chunking_version=CHUNKING_VERSION,
+        index_schema_version=INDEX_SCHEMA_VERSION,
+        physical_collection=store.collection_name,
+        alias=configured_alias,
+        collection_version=store.collection_version,
+    )
 
 
 def _parse_utc(value: str) -> datetime:
@@ -396,6 +494,7 @@ async def run_local_evaluation(
             no_result_failures += 1
 
     payload_violations, injection_violations = _payload_safety_violations(index)
+    representation = representation_manifest_for_store(index.store)
     report = EvaluationReport(
         query_count=len(fixture.queries),
         recall_at_10=sum(recalls) / len(recalls) if recalls else 1.0,
@@ -410,6 +509,8 @@ async def run_local_evaluation(
         consistency_orphan=len(consistency.orphan_job_ids),
         consistency_stale=len(consistency.stale_job_ids),
         query_result_ids={name: result.job_ids for name, result in results.items()},
+        representation=representation,
+        manifest_digest=representation_manifest_digest(representation),
     )
     return EvaluationResult(fixture, index, results, report)
 
@@ -427,6 +528,7 @@ class EvaluationResult:
 
 
 __all__ = [
+    "RECALL_AT_10_TARGET",
     "REQUIRED_SCENARIOS",
     "ConsistencyReport",
     "EvaluationReport",
@@ -441,5 +543,6 @@ __all__ = [
     "make_upsert_request",
     "normalize_text",
     "reconcile_local_index",
+    "representation_manifest_for_store",
     "run_local_evaluation",
 ]
