@@ -13,6 +13,18 @@ export interface AiServiceHttpTransport {
   ): Promise<TResponse>;
 }
 
+const SAFE_TRANSPORT_CODES = new Set([
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+]);
+
 export function mapAiServiceHttpStatus(status: number): AiServiceError {
   if (status === 400 || status === 422)
     return new AiServiceError(
@@ -51,21 +63,25 @@ export function mapAiServiceHttpStatus(status: number): AiServiceError {
 }
 
 export function mapAiServiceTransportError(error: unknown): AiServiceError {
-  const code = (error as { code?: string })?.code;
-  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT')
+  const candidate = (error as { code?: unknown })?.code;
+  const transportCode =
+    typeof candidate === 'string' && SAFE_TRANSPORT_CODES.has(candidate)
+      ? candidate
+      : undefined;
+  if (transportCode === 'ECONNABORTED' || transportCode === 'ETIMEDOUT')
     return new AiServiceError(
       AiServiceErrorCode.AI_PROVIDER_TIMEOUT,
       'AI service request timed out',
       504,
       true,
-      error,
+      transportCode,
     );
   return new AiServiceError(
     AiServiceErrorCode.AI_DEPENDENCY_UNAVAILABLE,
     'AI service is unavailable',
     503,
     true,
-    error,
+    transportCode,
   );
 }
 

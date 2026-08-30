@@ -3,6 +3,8 @@ import { Company } from '../companies/entities/company.entity';
 import { Job } from '../jobs/entities/job.entity';
 
 const JOB_ID = '11111111-1111-4111-8111-111111111111';
+const SECOND_JOB_ID = '11111111-1111-4111-8111-111111111112';
+const THIRD_JOB_ID = '11111111-1111-4111-8111-111111111113';
 const COMPANY_ID = '22222222-2222-4222-8222-222222222222';
 const NOW = new Date('2026-08-28T12:00:00.000Z');
 
@@ -141,6 +143,94 @@ describe('CanonicalJobProjectionService', () => {
       where: { _id: JOB_ID },
       withDeleted: false,
     });
+  });
+
+  it('paginates company jobs by UUID keyset and keeps inactive/deleted rows in the scan', async () => {
+    const jobs = [
+      createJob({ _id: JOB_ID }),
+      createJob({ _id: SECOND_JOB_ID, isActive: false }),
+      createJob({
+        _id: THIRD_JOB_ID,
+        isDeleted: true,
+        deletedAt: new Date('2026-08-28T10:00:00.000Z'),
+      }),
+    ];
+    const queryCalls: Array<{ cursor: string | null; take: number }> = [];
+    const jobRepository = {
+      createQueryBuilder: jest.fn(() => {
+        let cursor: string | null = null;
+        let take = 0;
+        const query: Record<string, jest.Mock> = {};
+        query.withDeleted = jest.fn(() => query);
+        query.where = jest.fn(() => query);
+        query.andWhere = jest.fn(
+          (_condition: string, parameters: { companyJobCursor: string }) => {
+            cursor = parameters.companyJobCursor;
+            return query;
+          },
+        );
+        query.orderBy = jest.fn(() => query);
+        query.take = jest.fn((value: number) => {
+          take = value;
+          return query;
+        });
+        query.getMany = jest.fn(async () => {
+          queryCalls.push({ cursor, take });
+          return jobs
+            .filter((job) => !cursor || job._id > cursor)
+            .slice(0, take);
+        });
+        return query;
+      }),
+    };
+    const companyRepository = {
+      findOne: jest.fn().mockResolvedValue(createCompany()),
+    };
+    const service = new CanonicalJobProjectionService(
+      jobRepository as never,
+      companyRepository as never,
+    );
+
+    const firstPage = await service.projectCompanyJobs(
+      COMPANY_ID,
+      null,
+      2,
+      NOW,
+    );
+    const secondPage = await service.projectCompanyJobs(
+      COMPANY_ID,
+      firstPage.nextCursor,
+      2,
+      NOW,
+    );
+
+    expect(firstPage.jobs.map((projection) => projection.job._id)).toEqual([
+      JOB_ID,
+      SECOND_JOB_ID,
+    ]);
+    expect(firstPage.jobs[1]).toMatchObject({
+      isCanonicalActive: false,
+      snapshot: null,
+    });
+    expect(firstPage).toMatchObject({
+      nextCursor: SECOND_JOB_ID,
+      hasMore: true,
+    });
+    expect(secondPage.jobs.map((projection) => projection.job._id)).toEqual([
+      THIRD_JOB_ID,
+    ]);
+    expect(secondPage.jobs[0]).toMatchObject({
+      isCanonicalActive: false,
+      snapshot: null,
+    });
+    expect(secondPage).toMatchObject({
+      nextCursor: null,
+      hasMore: false,
+    });
+    expect(queryCalls).toEqual([
+      { cursor: null, take: 3 },
+      { cursor: SECOND_JOB_ID, take: 3 },
+    ]);
   });
 
   it('normalizes a database numeric string and null salary without using JSONB values', () => {

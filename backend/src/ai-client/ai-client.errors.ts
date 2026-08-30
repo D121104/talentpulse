@@ -8,6 +8,7 @@ export enum AiServiceErrorCode {
   AI_DEPENDENCY_RATE_LIMITED = 'AI_DEPENDENCY_RATE_LIMITED',
   AI_CLIENT_NOT_CONFIGURED = 'AI_CLIENT_NOT_CONFIGURED',
   AI_CIRCUIT_OPEN = 'AI_CIRCUIT_OPEN',
+  AI_PROVIDER_AUDIT_PERSISTENCE_FAILED = 'AI_PROVIDER_AUDIT_PERSISTENCE_FAILED',
 }
 
 export class AiServiceError extends Error {
@@ -18,7 +19,8 @@ export class AiServiceError extends Error {
     message: string,
     public readonly status: number,
     public readonly retryable: boolean,
-    public readonly cause?: unknown,
+    /** Safe transport category only; raw provider errors are never retained. */
+    public readonly transportCode?: string,
   ) {
     super(message);
   }

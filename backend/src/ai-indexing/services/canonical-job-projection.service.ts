@@ -15,7 +15,6 @@ const MAX_DESCRIPTION_CHARS = 50_000;
 const MAX_SKILLS = 50;
 const MAX_SKILL_CHARS = 500;
 const MAX_TEXT_CHARS = 500;
-const MAX_COMPANY_JOBS_PER_ENUMERATION = 1_000;
 
 export interface CanonicalProjectionLookupOptions {
   /** Defaults to true so delete/deactivation events can see soft-deleted rows. */
@@ -42,16 +41,24 @@ export interface CanonicalJobScanPage {
   hasMore: boolean;
 }
 
+export interface CanonicalCompanyJobScanPage {
+  jobs: CanonicalJobProjection[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export const MAX_CANONICAL_JOB_SCAN_SIZE = 100;
+export const MAX_COMPANY_JOB_SCAN_SIZE = 1_000;
 
 /** Error raised for malformed canonical data that cannot be sent to AI. */
 export class CanonicalProjectionError extends Error {
   readonly name = 'CanonicalProjectionError';
   readonly retryable = false;
-  readonly code = 'AI_CANONICAL_PROJECTION_INVALID';
+  readonly code: string;
 
-  constructor(message: string) {
+  constructor(message: string, code = 'AI_CANONICAL_PROJECTION_INVALID') {
     super(message);
+    this.code = code;
   }
 }
 
@@ -128,9 +135,7 @@ export class CanonicalJobProjectionService {
   ): Promise<CanonicalJobScanPage> {
     const boundedLimit = boundedScanLimit(limit);
     const normalizedCursor = normalizeCursor(cursor);
-    const query = this.jobRepository
-      .createQueryBuilder('job')
-      .withDeleted();
+    const query = this.jobRepository.createQueryBuilder('job').withDeleted();
 
     if (normalizedCursor) {
       query.where('job."_id" > :jobCursor', { jobCursor: normalizedCursor });
@@ -218,38 +223,61 @@ export class CanonicalJobProjectionService {
   }
 
   /**
-   * Enumerates a bounded company job set, including deleted/expired jobs so a
-   * company lifecycle event can remove stale vectors as well as re-upsert
-   * currently eligible jobs.
+   * Enumerates company jobs with a bounded UUID keyset page.
+   *
+   * The page deliberately includes soft-deleted, inactive and expired jobs.
+   * A company lifecycle event must remove every stale point, not only the
+   * currently eligible jobs. Callers must continue with `nextCursor` while
+   * `hasMore` is true; this method never loads the whole company into memory.
    */
   async projectCompanyJobs(
     companyId: string,
-    limit = MAX_COMPANY_JOBS_PER_ENUMERATION,
+    cursor: string | null = null,
+    limit = MAX_COMPANY_JOB_SCAN_SIZE,
     now = new Date(),
-  ): Promise<CanonicalJobProjection[]> {
-    const boundedLimit = Math.min(
-      Math.max(Math.trunc(limit), 1),
-      MAX_COMPANY_JOBS_PER_ENUMERATION,
-    );
+  ): Promise<CanonicalCompanyJobScanPage> {
+    if (!isUuid(companyId)) {
+      throw new CanonicalProjectionError(
+        'companyId must be a UUID',
+        'AI_INDEX_COMPANY_ID_INVALID',
+      );
+    }
+    const boundedLimit = boundedCompanyScanLimit(limit);
+    const normalizedCursor = normalizeCursor(cursor);
     const company = await this.findCompany(companyId, { withDeleted: true });
-    const jobs = await this.jobRepository
+    const query = this.jobRepository
       .createQueryBuilder('job')
       .withDeleted()
-      .where("job.company->>'_id' = :companyId", { companyId })
-      .orderBy('job._id', 'ASC')
-      .take(boundedLimit)
-      .getMany();
+      .where("job.company->>'_id' = :companyId", { companyId });
 
-    return jobs.map((job) => this.toProjection(job, company, now));
+    if (normalizedCursor) {
+      query.andWhere('job."_id" > :companyJobCursor', {
+        companyJobCursor: normalizedCursor,
+      });
+    }
+
+    const rows = await query
+      .orderBy('job._id', 'ASC')
+      .take(boundedLimit + 1)
+      .getMany();
+    const hasMore = rows.length > boundedLimit;
+    const jobs = hasMore ? rows.slice(0, boundedLimit) : rows;
+    const projections = jobs.map((job) => this.toProjection(job, company, now));
+    const nextCursor = hasMore
+      ? projections[projections.length - 1]?.job._id ?? normalizedCursor
+      : null;
+
+    return { jobs: projections, nextCursor, hasMore };
   }
 
   /** Alias for operational/reconcile callers. */
   async enumerateCompanyJobs(
     companyId: string,
-    limit = MAX_COMPANY_JOBS_PER_ENUMERATION,
+    cursor: string | null = null,
+    limit = MAX_COMPANY_JOB_SCAN_SIZE,
     now = new Date(),
-  ): Promise<CanonicalJobProjection[]> {
-    return this.projectCompanyJobs(companyId, limit, now);
+  ): Promise<CanonicalCompanyJobScanPage> {
+    return this.projectCompanyJobs(companyId, cursor, limit, now);
   }
 
   /**
@@ -360,10 +388,22 @@ function toIsoDate(value: unknown, field: string): string | null {
   return date.toISOString();
 }
 
+function boundedCompanyScanLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new CanonicalProjectionError(
+      'Company scan limit must be a positive safe integer',
+      'AI_INDEX_COMPANY_SCAN_LIMIT_INVALID',
+    );
+  }
+  return Math.min(value, MAX_COMPANY_JOB_SCAN_SIZE);
+}
 
 function boundedScanLimit(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error('AI_INDEX_SCAN_LIMIT must be a positive safe integer');
+    throw new CanonicalProjectionError(
+      'Scan limit must be a positive safe integer',
+      'AI_INDEX_SCAN_LIMIT_INVALID',
+    );
   }
   return Math.min(value, MAX_CANONICAL_JOB_SCAN_SIZE);
 }
@@ -371,7 +411,10 @@ function boundedScanLimit(value: number): number {
 function normalizeCursor(value: string | null): string | null {
   if (value === null || value === undefined || value === '') return null;
   if (!isUuid(value)) {
-    throw new Error('AI_INDEX_CURSOR_INVALID: cursor must be a UUID');
+    throw new CanonicalProjectionError(
+      'Cursor must be a UUID',
+      'AI_INDEX_CURSOR_INVALID',
+    );
   }
   return value.toLowerCase();
 }

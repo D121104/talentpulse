@@ -28,6 +28,16 @@ function parsePort(value: unknown): number {
   return port;
 }
 
+const INDEX_ENVIRONMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
+
+function parseIndexEnvironment(value: unknown, variableName: string): string {
+  const environment = String(value ?? '').trim();
+  if (!INDEX_ENVIRONMENT_PATTERN.test(environment)) {
+    throw new Error(`${variableName} must contain 1 to 32 safe characters`);
+  }
+  return environment;
+}
+
 /**
  * Validates deployment configuration without loading or generating key material.
  * Phase 1 owns private-key storage, rotation and token signing.
@@ -40,7 +50,7 @@ export function validateEnvironment(
     .toLowerCase();
   const synchronize = parseBoolean(
     config.DB_SYNCHRONIZE,
-    nodeEnv !== 'production',
+    nodeEnv !== 'staging' && nodeEnv !== 'production',
     'DB_SYNCHRONIZE',
   );
   const redisEnabled = parseBoolean(
@@ -58,6 +68,39 @@ export function validateEnvironment(
     false,
     'RUN_INDEXING_WORKER',
   );
+  // The outbox table is intentionally unscoped. A non-local worker must name
+  // both its logical index environment and the environment of its dedicated
+  // outbox database; otherwise it could claim another deployment's commands.
+  const indexingEnvironment = parseIndexEnvironment(
+    config.AI_INDEX_ENVIRONMENT ??
+      (nodeEnv === 'development' ? 'local' : nodeEnv),
+    'AI_INDEX_ENVIRONMENT',
+  );
+  const rawOutboxEnvironment = config.AI_INDEX_OUTBOX_ENVIRONMENT;
+  const hasOutboxEnvironment = !(
+    rawOutboxEnvironment === undefined ||
+    rawOutboxEnvironment === null ||
+    String(rawOutboxEnvironment).trim() === ''
+  );
+  const outboxEnvironment = hasOutboxEnvironment
+    ? parseIndexEnvironment(rawOutboxEnvironment, 'AI_INDEX_OUTBOX_ENVIRONMENT')
+    : undefined;
+
+  if (outboxEnvironment && outboxEnvironment !== indexingEnvironment) {
+    throw new Error(
+      'AI_INDEX_OUTBOX_ENVIRONMENT must match AI_INDEX_ENVIRONMENT for the unscoped outbox',
+    );
+  }
+  if (
+    runIndexingWorker &&
+    !outboxEnvironment &&
+    indexingEnvironment !== 'local'
+  ) {
+    throw new Error(
+      'AI_INDEX_OUTBOX_ENVIRONMENT must be explicitly set for a non-local indexing worker',
+    );
+  }
+
   const port = parsePort(config.DB_PORT);
   const consentVersion = String(
     config.AI_CV_CONSENT_VERSION ?? 'phase0-v1',
@@ -66,8 +109,8 @@ export function validateEnvironment(
     .trim()
     .toLowerCase();
 
-  if (nodeEnv === 'production' && synchronize) {
-    throw new Error('DB_SYNCHRONIZE must be false in production');
+  if ((nodeEnv === 'staging' || nodeEnv === 'production') && synchronize) {
+    throw new Error('DB_SYNCHRONIZE must be false outside development');
   }
 
   if (!/^\w[\w.-]{0,79}$/.test(consentVersion)) {
@@ -131,6 +174,12 @@ export function validateEnvironment(
     REDIS_ENABLED: String(redisEnabled),
     RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
     RUN_INDEXING_WORKER: String(runIndexingWorker),
+    AI_INDEX_ENVIRONMENT: indexingEnvironment,
+    ...(outboxEnvironment
+      ? { AI_INDEX_OUTBOX_ENVIRONMENT: outboxEnvironment }
+      : indexingEnvironment === 'local'
+      ? { AI_INDEX_OUTBOX_ENVIRONMENT: 'local' }
+      : {}),
     AI_CV_CONSENT_VERSION: consentVersion,
     ...(consentPolicyHash
       ? { AI_CV_CONSENT_POLICY_HASH: consentPolicyHash }

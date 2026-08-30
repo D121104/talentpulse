@@ -8,3 +8,6 @@ export * from './services/ai-index-reconcile.service';
 export * from './services/ai-index-replay.service';
 export * from './services/index-representation';
 export * from './services/canonical-job-lifecycle';
+export * from './services/ai-index-lifecycle-sweep.service';
+export * from './services/ai-index-drain.service';
+export * from './services/ai-provider-attempt-recorder.service';

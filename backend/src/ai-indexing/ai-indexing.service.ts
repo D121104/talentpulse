@@ -108,9 +108,11 @@ export class AiIndexingService {
       }
 
       return {
-        outbox: await this.enqueueWithNextSourceVersion(
-          input,
+        outbox: await this.enqueueWithManagerLocked(
           transactionManager,
+          input,
+          undefined,
+          maxAttempts,
         ),
         enqueued: true,
       };
@@ -197,11 +199,28 @@ export class AiIndexingService {
   ): Promise<AiIndexOutbox> {
     // A transaction-scoped advisory lock closes the first-event race where no
     // row exists yet to lock with SELECT ... FOR UPDATE.
-    await manager.query(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-      [`ai-index:${input.aggregateType}:${input.aggregateId}`],
+    await this.lockAggregate(manager, input);
+    return this.enqueueWithManagerLocked(
+      manager,
+      input,
+      sourceVersion,
+      maxAttempts,
     );
+  }
 
+  /**
+   * Writes under an already-held aggregate lock. The operational coalescing
+   * path uses this internal method so it can inspect the latest command and
+   * allocate exactly one sequence value without recursively taking the lock.
+   */
+  private async enqueueWithManagerLocked(
+    manager: EntityManager,
+    input:
+      | EnqueueAiIndexEventInput
+      | EnqueueAiIndexEventWithoutSourceVersionInput,
+    sourceVersion: string | undefined,
+    maxAttempts: number,
+  ): Promise<AiIndexOutbox> {
     const effectiveSourceVersion =
       sourceVersion ?? (await nextSourceVersion(manager));
     const versionedInput = input as EnqueueAiIndexEventInput;
@@ -265,6 +284,18 @@ export class AiIndexingService {
         lastErrorAt: null,
         processedAt: null,
       }),
+    );
+  }
+
+  private lockAggregate(
+    manager: EntityManager,
+    input:
+      | EnqueueAiIndexEventInput
+      | EnqueueAiIndexEventWithoutSourceVersionInput,
+  ): Promise<unknown> {
+    return manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`ai-index:${input.aggregateType}:${input.aggregateId}`],
     );
   }
 }
@@ -363,7 +394,6 @@ function validateEnqueueShape(
   }
 }
 
-
 async function findLatestOutbox(
   repository: Repository<AiIndexOutbox>,
   input: EnqueueAiIndexEventWithoutSourceVersionInput,
@@ -383,10 +413,7 @@ async function findLatestOutbox(
   return rows[0] ?? null;
 }
 
-function shouldCoalesceLatest(
-  latest: AiIndexOutbox,
-  force: boolean,
-): boolean {
+function shouldCoalesceLatest(latest: AiIndexOutbox, force: boolean): boolean {
   switch (latest.status) {
     case AiIndexOutboxStatus.PENDING:
     case AiIndexOutboxStatus.PROCESSING:

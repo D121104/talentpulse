@@ -17,6 +17,11 @@ export const MAX_INDEX_VERSION_CHARS = 64;
 export const MAX_INDEX_EMBEDDING_DIMENSIONS = 4096;
 export const MAX_INDEX_CHUNK_COUNT = 128;
 export const MAX_INDEX_SAFE_SOURCE_VERSION = Number.MAX_SAFE_INTEGER;
+export const MAX_INDEX_SCAN_LIMIT = 256;
+export const MAX_INDEX_SCAN_CURSOR_CHARS = 128;
+export const MAX_INDEX_EMBEDDING_PROVIDER_CHARS = 64;
+export const MAX_INDEX_COLLECTION_NAME_CHARS = 255;
+export const MAX_INDEX_COLLECTION_VERSION_CHARS = 128;
 
 export interface CanonicalCompanySnapshot {
   company_id: string;
@@ -142,6 +147,39 @@ export interface IndexJobResponse {
   normalization_version?: string | null;
   chunking_version?: string | null;
   index_schema_version?: string | null;
+  embedding_provider?: string | null;
+  collection_name?: string | null;
+  collection_version?: string | null;
+}
+
+export interface IndexMetadataScanRequest {
+  /** Opaque Qdrant cursor; UUID and canonical numeric offsets are supported. */
+  cursor?: string | null;
+  /** FastAPI defaults this to MAX_INDEX_SCAN_LIMIT when omitted. */
+  limit?: number;
+}
+
+export interface IndexPointMetadata {
+  point_id: string;
+  job_id: string;
+  company_id: string;
+  source_version: number;
+  content_hash: Sha256Hash;
+  metadata_hash?: Sha256Hash | null;
+  embedding_provider?: string | null;
+  embedding_model_version: string;
+  embedding_dimensions: number;
+  normalization_version: string;
+  chunking_version: string;
+  index_schema_version: string;
+  collection_name?: string | null;
+  collection_version?: string | null;
+}
+
+export interface IndexMetadataScanResponse {
+  points: IndexPointMetadata[];
+  next_cursor?: string | null;
+  request_id: string;
 }
 
 export type IndexJobUpsertResponse = IndexJobResponse;
@@ -228,6 +266,25 @@ const DELETE_REQUEST_KEYS = new Set([
   'source_version',
 ]);
 
+const SCAN_REQUEST_KEYS = new Set(['cursor', 'limit']);
+const SCAN_POINT_KEYS = new Set([
+  'point_id',
+  'job_id',
+  'company_id',
+  'source_version',
+  'content_hash',
+  'metadata_hash',
+  'embedding_provider',
+  'embedding_model_version',
+  'embedding_dimensions',
+  'normalization_version',
+  'chunking_version',
+  'index_schema_version',
+  'collection_name',
+  'collection_version',
+]);
+const SCAN_RESPONSE_KEYS = new Set(['points', 'next_cursor', 'request_id']);
+
 const RESPONSE_KEYS = new Set([
   'job_id',
   'operation',
@@ -245,6 +302,9 @@ const RESPONSE_KEYS = new Set([
   'normalization_version',
   'chunking_version',
   'index_schema_version',
+  'embedding_provider',
+  'collection_name',
+  'collection_version',
 ]);
 
 function invalidRequest(message: string): never {
@@ -323,6 +383,19 @@ function ensureNonBlankString(
   return stringValue;
 }
 
+/** Qdrant metadata parsing rejects leading/trailing whitespace. */
+function ensureMetadataString(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): string {
+  const stringValue = ensureNonBlankString(value, field, maxLength, true);
+  if (stringValue !== stringValue.trim()) {
+    invalidResponse(field + ' is invalid');
+  }
+  return stringValue;
+}
+
 /** Matches the current FastAPI optional text validators: blank text is null. */
 function ensureOptionalText(
   value: unknown,
@@ -351,6 +424,39 @@ function ensureUuid(value: unknown, field: string, response = false): string {
     (response ? invalidResponse : invalidRequest)(field + ' must be a UUID');
   }
   return stringValue.toLowerCase();
+}
+
+function ensureScanCursor(
+  value: unknown,
+  field: string,
+  response = false,
+): string | null | undefined {
+  if (value === undefined || value === null) return value as null | undefined;
+  const cursor = ensureString(
+    value,
+    field,
+    MAX_INDEX_SCAN_CURSOR_CHARS,
+    response,
+  );
+  if (isUuid(cursor)) return cursor.toLowerCase();
+  if (!/^\d+$/.test(cursor)) {
+    (response ? invalidResponse : invalidRequest)(
+      field + ' must be a UUID or canonical numeric offset',
+    );
+  }
+  try {
+    const numeric = BigInt(cursor);
+    if (
+      numeric < 0n ||
+      numeric > 18446744073709551615n ||
+      String(numeric) !== cursor
+    ) {
+      (response ? invalidResponse : invalidRequest)(field + ' is invalid');
+    }
+  } catch {
+    (response ? invalidResponse : invalidRequest)(field + ' is invalid');
+  }
+  return cursor;
 }
 
 function ensureHash(value: unknown, field: string, response = false): string {
@@ -1222,6 +1328,190 @@ export function assertIndexJobResponse(value: unknown): IndexJobResponse {
           ),
         }
       : {}),
+    ...(hasOwn(response, 'embedding_provider')
+      ? {
+          embedding_provider: ensureOptionalVersion(
+            response.embedding_provider,
+            'embedding_provider',
+            MAX_INDEX_EMBEDDING_PROVIDER_CHARS,
+            true,
+          ),
+        }
+      : {}),
+    ...(hasOwn(response, 'collection_name')
+      ? {
+          collection_name: ensureOptionalVersion(
+            response.collection_name,
+            'collection_name',
+            MAX_INDEX_COLLECTION_NAME_CHARS,
+            true,
+          ),
+        }
+      : {}),
+    ...(hasOwn(response, 'collection_version')
+      ? {
+          collection_version: ensureOptionalVersion(
+            response.collection_version,
+            'collection_version',
+            MAX_INDEX_COLLECTION_VERSION_CHARS,
+            true,
+          ),
+        }
+      : {}),
+  };
+}
+
+export function assertIndexMetadataScanRequest(
+  value: unknown,
+): IndexMetadataScanRequest {
+  const request = ensureRecord(value, 'request');
+  ensureKeys(request, SCAN_REQUEST_KEYS, 'request');
+  return {
+    ...(hasOwn(request, 'cursor')
+      ? { cursor: ensureScanCursor(request.cursor, 'cursor') }
+      : {}),
+    limit: hasOwn(request, 'limit')
+      ? ensureInteger(request.limit, 'limit', 1, MAX_INDEX_SCAN_LIMIT)
+      : MAX_INDEX_SCAN_LIMIT,
+  };
+}
+
+export function serializeIndexMetadataScanRequest(
+  value: IndexMetadataScanRequest,
+): IndexMetadataScanRequest {
+  return { ...assertIndexMetadataScanRequest(value) };
+}
+
+function assertIndexPointMetadata(value: unknown): IndexPointMetadata {
+  const point = ensureRecord(value, 'point', true);
+  ensureKeys(point, SCAN_POINT_KEYS, 'point', true);
+  for (const key of [
+    'point_id',
+    'job_id',
+    'company_id',
+    'source_version',
+    'content_hash',
+    'embedding_model_version',
+    'embedding_dimensions',
+    'normalization_version',
+    'chunking_version',
+    'index_schema_version',
+  ]) {
+    if (!hasOwn(point, key)) invalidResponse('point is invalid');
+  }
+  return {
+    point_id: ensureUuid(point.point_id, 'point.point_id', true),
+    job_id: ensureUuid(point.job_id, 'point.job_id', true),
+    company_id: ensureUuid(point.company_id, 'point.company_id', true),
+    source_version: ensureInteger(
+      point.source_version,
+      'point.source_version',
+      1,
+      MAX_INDEX_SAFE_SOURCE_VERSION,
+      true,
+    ),
+    content_hash: ensureHash(point.content_hash, 'point.content_hash', true),
+    ...(hasOwn(point, 'metadata_hash')
+      ? {
+          metadata_hash: ensureOptionalHash(
+            point.metadata_hash,
+            'point.metadata_hash',
+            true,
+          ),
+        }
+      : {}),
+    ...(hasOwn(point, 'embedding_provider')
+      ? {
+          embedding_provider:
+            point.embedding_provider === null
+              ? null
+              : ensureMetadataString(
+                  point.embedding_provider,
+                  'point.embedding_provider',
+                  MAX_INDEX_EMBEDDING_PROVIDER_CHARS,
+                ),
+        }
+      : {}),
+    embedding_model_version: ensureMetadataString(
+      point.embedding_model_version,
+      'point.embedding_model_version',
+      MAX_INDEX_EMBEDDING_MODEL_VERSION_CHARS,
+    ),
+    embedding_dimensions: ensureInteger(
+      point.embedding_dimensions,
+      'point.embedding_dimensions',
+      1,
+      MAX_INDEX_EMBEDDING_DIMENSIONS,
+      true,
+    ),
+    normalization_version: ensureMetadataString(
+      point.normalization_version,
+      'point.normalization_version',
+      MAX_INDEX_VERSION_CHARS,
+    ),
+    chunking_version: ensureMetadataString(
+      point.chunking_version,
+      'point.chunking_version',
+      MAX_INDEX_VERSION_CHARS,
+    ),
+    index_schema_version: ensureMetadataString(
+      point.index_schema_version,
+      'point.index_schema_version',
+      MAX_INDEX_VERSION_CHARS,
+    ),
+    ...(hasOwn(point, 'collection_name')
+      ? {
+          collection_name:
+            point.collection_name === null
+              ? null
+              : ensureMetadataString(
+                  point.collection_name,
+                  'point.collection_name',
+                  MAX_INDEX_COLLECTION_NAME_CHARS,
+                ),
+        }
+      : {}),
+    ...(hasOwn(point, 'collection_version')
+      ? {
+          collection_version:
+            point.collection_version === null
+              ? null
+              : ensureMetadataString(
+                  point.collection_version,
+                  'point.collection_version',
+                  MAX_INDEX_COLLECTION_VERSION_CHARS,
+                ),
+        }
+      : {}),
+  };
+}
+
+export function assertIndexMetadataScanResponse(
+  value: unknown,
+): IndexMetadataScanResponse {
+  const response = ensureRecord(value, 'response', true);
+  ensureKeys(response, SCAN_RESPONSE_KEYS, 'response', true);
+  if (!hasOwn(response, 'points') || !hasOwn(response, 'request_id')) {
+    invalidResponse('response is invalid');
+  }
+  if (
+    !Array.isArray(response.points) ||
+    response.points.length > MAX_INDEX_SCAN_LIMIT
+  ) {
+    invalidResponse('response.points is invalid');
+  }
+  return {
+    points: (response.points as unknown[]).map(assertIndexPointMetadata),
+    ...(hasOwn(response, 'next_cursor')
+      ? {
+          next_cursor: ensureScanCursor(
+            response.next_cursor,
+            'response.next_cursor',
+            true,
+          ),
+        }
+      : {}),
+    request_id: ensureUuid(response.request_id, 'response.request_id', true),
   };
 }
 

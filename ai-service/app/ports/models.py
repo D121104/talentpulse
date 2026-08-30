@@ -8,7 +8,6 @@ from enum import StrEnum
 from typing import Any, Protocol
 from uuid import UUID
 
-
 MAX_SCAN_LIMIT = 256
 MAX_SCAN_CURSOR_LENGTH = 128
 MAX_SAFE_SOURCE_VERSION = 2**53 - 1
@@ -30,6 +29,8 @@ SCAN_METADATA_PAYLOAD_FIELDS: tuple[str, ...] = (
     "normalization_version",
     "chunking_version",
     "index_schema_version",
+    "collection_name",
+    "collection_version",
 )
 
 
@@ -86,7 +87,7 @@ def validate_scan_cursor(cursor: object) -> str | None:
             raise ValueError("scan cursor must be a UUID or numeric offset") from None
         numeric = int(cursor)
         if numeric > _MAX_SCAN_NUMERIC_CURSOR or str(numeric) != cursor:
-            raise ValueError("scan cursor must use canonical notation")
+            raise ValueError("scan cursor must use canonical notation") from None
         return cursor
     if str(parsed_uuid) != cursor.lower():
         raise ValueError("scan cursor must use canonical UUID notation")
@@ -141,6 +142,8 @@ class VectorPointMetadata:
     index_schema_version: str
     metadata_hash: str | None = None
     embedding_provider: str | None = None
+    collection_name: str | None = None
+    collection_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +166,8 @@ def parse_vector_point_metadata(
         raise ValueError("vector point payload must be an object")
     provider_value = payload.get("embedding_provider")
     metadata_hash_value = payload.get("metadata_hash")
+    collection_name_value = payload.get("collection_name")
+    collection_version_value = payload.get("collection_version")
     return VectorPointMetadata(
         point_id=_metadata_uuid(point_id, "point_id"),
         job_id=_metadata_uuid(payload.get("job_id"), "job_id"),
@@ -180,9 +185,7 @@ def parse_vector_point_metadata(
         normalization_version=_metadata_string(
             payload.get("normalization_version"), "normalization_version", 64
         ),
-        chunking_version=_metadata_string(
-            payload.get("chunking_version"), "chunking_version", 64
-        ),
+        chunking_version=_metadata_string(payload.get("chunking_version"), "chunking_version", 64),
         index_schema_version=_metadata_string(
             payload.get("index_schema_version"), "index_schema_version", 64
         ),
@@ -195,6 +198,16 @@ def parse_vector_point_metadata(
             None
             if provider_value is None
             else _metadata_string(provider_value, "embedding_provider", 64)
+        ),
+        collection_name=(
+            None
+            if collection_name_value is None
+            else _metadata_string(collection_name_value, "collection_name", 255)
+        ),
+        collection_version=(
+            None
+            if collection_version_value is None
+            else _metadata_string(collection_version_value, "collection_version", 128)
         ),
     )
 
@@ -266,8 +279,10 @@ class EmbeddingModel(Protocol):
 
 class VectorStore(Protocol):
     collection_name: str
+    collection_version: str | None
     dimensions: int
     embedding_model: str
+    embedding_provider: str
 
     async def health(self) -> bool: ...
 
@@ -281,6 +296,4 @@ class VectorStore(Protocol):
 
     async def get_by_job_id(self, job_id: str) -> list[VectorRecord]: ...
 
-    async def scan_metadata(
-        self, cursor: str | None, limit: int
-    ) -> VectorMetadataScanPage: ...
+    async def scan_metadata(self, cursor: str | None, limit: int) -> VectorMetadataScanPage: ...

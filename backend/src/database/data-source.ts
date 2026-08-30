@@ -7,7 +7,9 @@ export function createDataSourceOptions(
   config: Record<string, unknown> = process.env as Record<string, unknown>,
 ): DataSourceOptions {
   const env = validateEnvironment(config);
-  const nodeEnv = String(env.NODE_ENV ?? 'development').trim().toLowerCase();
+  const nodeEnv = String(env.NODE_ENV ?? 'development')
+    .trim()
+    .toLowerCase();
 
   return {
     type: 'postgres',
@@ -22,7 +24,7 @@ export function createDataSourceOptions(
     // The CLI DataSource is migration-only; schema changes must be reviewed.
     synchronize: false,
     extra: { options: '-c timezone=UTC' },
-    ssl: nodeEnv === 'production' ? { rejectUnauthorized: false } : false,
+    ssl: nodeEnv !== 'development',
   };
 }
 

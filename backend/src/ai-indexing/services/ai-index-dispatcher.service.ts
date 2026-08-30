@@ -3,11 +3,13 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { validate as isUuid, v5 as uuidv5, NIL as UUID_NIL } from 'uuid';
-import { EntityManager, Repository } from 'typeorm';
+import { validate as isUuid, v5 as uuidv5 } from 'uuid';
+import { EntityManager, MoreThan, Repository } from 'typeorm';
 import { AiServiceClient } from '../../ai-client/ai-client.service';
 import {
   AiServiceError,
@@ -19,7 +21,8 @@ import {
   CanonicalJobProjectionService,
   CanonicalProjectionError,
 } from './canonical-job-projection.service';
-import { prepareAiIndexOutboxReplay } from './ai-index-replay.service';
+import { replayAiIndexOutboxAtomically } from './ai-index-replay.service';
+import { AiIndexLifecycleSweepService } from './ai-index-lifecycle-sweep.service';
 import {
   AiIndexAggregateType,
   AiIndexOutbox,
@@ -33,6 +36,10 @@ const STABLE_REQUEST_NAMESPACE = uuidv5(
   'https://talentpulse.ai/indexing/dispatcher',
   uuidv5.URL,
 );
+const STABLE_OPERATION_ATTEMPT_NAMESPACE = uuidv5(
+  'https://talentpulse.ai/indexing/dispatcher-operation-attempt',
+  uuidv5.URL,
+);
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LEASE_MS = 30_000;
@@ -43,6 +50,11 @@ const DEFAULT_RETRY_MAX_MS = 60_000;
 const DEFAULT_RETRY_JITTER_RATIO = 0.2;
 const MAX_BATCH_SIZE = 100;
 const MAX_COMPANY_JOB_LIMIT = 1_000;
+// Continuation is intentionally process-local until the schema has a durable
+// cursor. Bound one delivery attempt so a malformed or unexpectedly huge
+// company cannot hold a worker forever; a retry safely starts at page one.
+const MAX_COMPANY_REINDEX_JOBS_PER_ATTEMPT = 100_000;
+const MAX_COMPANY_REINDEX_PAGES_PER_ATTEMPT = 1_000;
 const MAX_ERROR_MESSAGE_LENGTH = 1_000;
 
 export interface AiIndexDispatcherOptions {
@@ -96,6 +108,9 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
   private readonly options: AiIndexDispatcherOptions;
   private readonly owner: string;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollInFlight = false;
+  private lifecycleCursor: string | null = null;
+  private lifecycleNow: Date | null = null;
 
   constructor(
     @InjectRepository(AiIndexOutbox)
@@ -105,6 +120,8 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     private readonly projectionService: CanonicalJobProjectionService,
     private readonly aiServiceClient: AiServiceClient,
     private readonly configService: ConfigService,
+    @Optional()
+    private readonly lifecycleSweep?: AiIndexLifecycleSweepService,
   ) {
     this.options = readDispatcherOptions(configService);
     this.owner = boundedWorkerOwner(
@@ -118,6 +135,9 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
    * worker on in an API process.
    */
   onModuleInit(): void {
+    if (this.configService.get<boolean>('AI_INDEX_OPERATIONAL_MODE', false)) {
+      return;
+    }
     if (
       !isIndexingWorkerEnabled({
         RUN_BACKGROUND_JOBS: this.configService.get(
@@ -133,6 +153,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    assertSingleOutboxEnvironment(this.configService);
     if (this.pollTimer) return;
     void this.runPoll().catch((error) => this.logWorkerError(error));
     this.pollTimer = setInterval(() => {
@@ -211,7 +232,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
         outbox.lastAttemptAt = now;
         outbox.leasedAt = now;
         outbox.leaseExpiresAt = new Date(now.getTime() + this.options.leaseMs);
-        outbox.leaseOwner = this.owner;
+        outbox.leaseOwner = createClaimLeaseOwner(this.owner);
         await repository.save(outbox);
         claimed.push(outbox as ClaimedAiIndexOutbox);
       }
@@ -240,15 +261,10 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
 
   /** Re-queues only failed/dead commands and preserves delivery history. */
   async replay(outboxId: string): Promise<boolean> {
-    return this.runTransaction(async (manager) => {
-      const repository = manager.getRepository(AiIndexOutbox);
-      const outbox = await repository.findOne({ where: { _id: outboxId } });
-      if (!outbox || !prepareAiIndexOutboxReplay(outbox, new Date())) {
-        return false;
-      }
-      await repository.save(outbox);
-      return true;
-    });
+    if (!isUuid(outboxId)) return false;
+    return this.runTransaction((manager) =>
+      replayAiIndexOutboxAtomically(manager, outboxId, new Date()),
+    );
   }
 
   /** Alias used by future operator tooling. */
@@ -275,11 +291,41 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async runPoll(): Promise<void> {
-    const results = await this.processBatch();
-    if (results.length > 0) {
-      this.logger.debug(
-        `Processed ${results.length} AI indexing outbox command(s)`,
-      );
+    if (this.pollInFlight) return;
+    this.pollInFlight = true;
+    try {
+      const results = await this.processBatch();
+      if (results.length > 0) {
+        this.logger.debug(
+          `Processed ${results.length} AI indexing outbox command(s)`,
+        );
+      }
+      await this.runLifecycleSweep();
+    } finally {
+      this.pollInFlight = false;
+    }
+  }
+
+  private async runLifecycleSweep(): Promise<void> {
+    if (!this.lifecycleSweep) return;
+    const now = this.lifecycleNow ?? new Date();
+    try {
+      const result = await this.lifecycleSweep.sweepPage({
+        cursor: this.lifecycleCursor,
+        limit: this.options.batchSize,
+        now,
+      });
+      this.lifecycleCursor = result.nextCursor;
+      if (!result.hasMore) {
+        this.lifecycleCursor = null;
+        this.lifecycleNow = null;
+      } else {
+        this.lifecycleNow = now;
+      }
+    } catch (error) {
+      this.lifecycleCursor = null;
+      this.lifecycleNow = null;
+      this.logWorkerError(error);
     }
   }
 
@@ -295,11 +341,25 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
         };
       }
 
-      const outcomes =
-        outbox.aggregateType === AiIndexAggregateType.JOB
-          ? [await this.dispatchJob(outbox)]
-          : await this.dispatchCompany(outbox);
-      const finalized = await this.markSuccess(outbox, outcomes);
+      if (outbox.aggregateType === AiIndexAggregateType.JOB) {
+        const outcome = await this.dispatchJob(outbox);
+        const finalized = await this.markSuccess(outbox, [outcome]);
+        return {
+          outboxId: outbox._id,
+          status: finalized ? 'SUCCEEDED' : 'LEASE_LOST',
+        };
+      }
+
+      // Company commands are processed one bounded keyset page at a time. Each
+      // page is persisted only after its AI calls have completed, while the
+      // parent outbox row remains PROCESSING until the final page finishes.
+      // A crash restarts the page from its cursor, and stable per-job request
+      // IDs make that replay idempotent.
+      const completed = await this.dispatchCompany(outbox);
+      if (!completed) {
+        return { outboxId: outbox._id, status: 'LEASE_LOST' };
+      }
+      const finalized = await this.markSuccess(outbox, []);
       return {
         outboxId: outbox._id,
         status: finalized ? 'SUCCEEDED' : 'LEASE_LOST',
@@ -323,7 +383,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
           source_version: sourceVersion,
           idempotency_key: createIndexIdempotencyKey(outbox._id, 'DELETE'),
         },
-        { requestId: createIndexRequestId(outbox._id) },
+        createIndexCallOptions(outbox, jobId, 'DELETE'),
       );
       assertIndexResponse(response, jobId, sourceVersion, 'DELETE');
       return { jobId, response, operation: 'DELETE' };
@@ -337,9 +397,10 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     );
 
     if (request) {
-      const response = await this.aiServiceClient.indexJob(request, {
-        requestId: createIndexRequestId(outbox._id),
-      });
+      const response = await this.aiServiceClient.indexJob(
+        request,
+        createIndexCallOptions(outbox, jobId, 'UPSERT'),
+      );
       assertIndexResponse(response, jobId, sourceVersion, 'UPSERT');
       return { jobId, response, operation: 'UPSERT' };
     }
@@ -353,7 +414,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
         source_version: sourceVersion,
         idempotency_key: createIndexIdempotencyKey(outbox._id, 'DELETE'),
       },
-      { requestId: createIndexRequestId(outbox._id, undefined, 'DELETE') },
+      createIndexCallOptions(outbox, jobId, 'DELETE'),
     );
     assertIndexResponse(response, jobId, sourceVersion, 'DELETE');
     return { jobId, response, operation: 'DELETE' };
@@ -361,7 +422,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
 
   private async dispatchCompany(
     outbox: ClaimedAiIndexOutbox,
-  ): Promise<JobDispatchOutcome[]> {
+  ): Promise<boolean> {
     if (outbox.operation !== AiIndexOutboxOperation.REINDEX_COMPANY) {
       throw terminalDispatchError(
         'AI_INDEX_OPERATION_INVALID',
@@ -370,56 +431,101 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     }
 
     const sourceVersion = toSafeSourceVersion(outbox.sourceVersion);
-    const projections = await this.projectionService.projectCompanyJobs(
-      outbox.aggregateId,
-      this.options.companyJobLimit,
-      new Date(),
-    );
-    const outcomes: JobDispatchOutcome[] = [];
+    const now = new Date();
+    let cursor: string | null = null;
+    let hasMore = true;
+    let processedJobs = 0;
+    let processedPages = 0;
 
-    for (const projection of projections) {
-      const jobId = projection.job._id;
-      const effectiveOperation =
-        projection.isCanonicalActive && projection.snapshot
-          ? 'UPSERT'
-          : 'DELETE';
-      const requestId = createIndexRequestId(
-        outbox._id,
-        jobId,
-        effectiveOperation,
-      );
-      const idempotencyKey = createIndexIdempotencyKey(
-        outbox._id,
-        effectiveOperation,
-        jobId,
-      );
-
-      if (effectiveOperation === 'UPSERT') {
-        const response = await this.aiServiceClient.indexJob(
-          this.projectionService.toIndexJobUpsertRequest(
-            projection.snapshot,
-            sourceVersion,
-            idempotencyKey,
-          ),
-          { requestId },
+    while (hasMore) {
+      if (processedPages >= MAX_COMPANY_REINDEX_PAGES_PER_ATTEMPT) {
+        throw retryableDispatchError(
+          'AI_INDEX_COMPANY_REINDEX_BUDGET_EXCEEDED',
+          'Company reindex exceeded the per-attempt page budget',
         );
-        assertIndexResponse(response, jobId, sourceVersion, 'UPSERT');
-        outcomes.push({ jobId, response, operation: 'UPSERT' });
-      } else {
-        const response = await this.aiServiceClient.deleteIndexedJob(
-          {
-            job_id: jobId,
-            source_version: sourceVersion,
-            idempotency_key: idempotencyKey,
-          },
-          { requestId },
-        );
-        assertIndexResponse(response, jobId, sourceVersion, 'DELETE');
-        outcomes.push({ jobId, response, operation: 'DELETE' });
       }
+
+      // The cursor is intentionally process-local until company continuation
+      // receives a durable schema of its own. Renewing before hydration and
+      // before each external call keeps the parent claim valid; every replay
+      // starts at page one and uses stable per-job request/idempotency IDs.
+      if (!(await this.renewLease(outbox))) return false;
+
+      const page = await this.projectionService.projectCompanyJobs(
+        outbox.aggregateId,
+        cursor,
+        this.options.companyJobLimit,
+        now,
+      );
+      assertCompanyPage(page, cursor);
+      processedPages += 1;
+      if (
+        processedJobs + page.jobs.length >
+        MAX_COMPANY_REINDEX_JOBS_PER_ATTEMPT
+      ) {
+        throw retryableDispatchError(
+          'AI_INDEX_COMPANY_REINDEX_BUDGET_EXCEEDED',
+          'Company reindex exceeded the per-attempt job budget',
+        );
+      }
+
+      const previousCursor = cursor;
+      if (page.hasMore && page.nextCursor === previousCursor) {
+        throw terminalDispatchError(
+          'AI_INDEX_COMPANY_CURSOR_INVALID',
+          'Company projection page did not advance its cursor',
+        );
+      }
+      const outcomes: JobDispatchOutcome[] = [];
+
+      for (const projection of page.jobs) {
+        if (!(await this.renewLease(outbox))) return false;
+
+        const jobId = projection.job._id;
+        const effectiveOperation =
+          projection.isCanonicalActive && projection.snapshot
+            ? 'UPSERT'
+            : 'DELETE';
+        const idempotencyKey = createIndexIdempotencyKey(
+          outbox._id,
+          effectiveOperation,
+          jobId,
+        );
+
+        if (effectiveOperation === 'UPSERT') {
+          const response = await this.aiServiceClient.indexJob(
+            this.projectionService.toIndexJobUpsertRequest(
+              projection.snapshot,
+              sourceVersion,
+              idempotencyKey,
+            ),
+            createIndexCallOptions(outbox, jobId, effectiveOperation),
+          );
+          assertIndexResponse(response, jobId, sourceVersion, 'UPSERT');
+          outcomes.push({ jobId, response, operation: 'UPSERT' });
+        } else {
+          const response = await this.aiServiceClient.deleteIndexedJob(
+            {
+              job_id: jobId,
+              source_version: sourceVersion,
+              idempotency_key: idempotencyKey,
+            },
+            createIndexCallOptions(outbox, jobId, effectiveOperation),
+          );
+          assertIndexResponse(response, jobId, sourceVersion, 'DELETE');
+          outcomes.push({ jobId, response, operation: 'DELETE' });
+        }
+      }
+
+      if (!(await this.markCompanyPage(outbox, outcomes))) return false;
+
+      processedJobs += page.jobs.length;
+      hasMore = page.hasMore;
+      if (!hasMore) break;
+      cursor = page.nextCursor;
     }
 
-    return outcomes;
+    return true;
   }
 
   /** Best-effort stale suppression before hydrating/calling the AI service. */
@@ -451,26 +557,46 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     return BigInt(String(latest.sourceVersion)) <= BigInt(outbox.sourceVersion);
   }
 
+  private async markCompanyPage(
+    outbox: ClaimedAiIndexOutbox,
+    outcomes: JobDispatchOutcome[],
+  ): Promise<boolean> {
+    const now = new Date();
+    return this.runTransaction(async (manager) => {
+      // Fence and renew before writing any page state. The conditional update
+      // locks the outbox row until commit, so an expired claim cannot write a
+      // page after another worker has acquired the same command.
+      const renewed = await this.updateClaimedOutbox(manager, outbox, now, {
+        leasedAt: now,
+        leaseExpiresAt: new Date(now.getTime() + this.options.leaseMs),
+      });
+      if (!renewed) return false;
+
+      for (const outcome of outcomes) {
+        await this.persistIndexStateSuccess(manager, outbox, outcome, now);
+      }
+      return true;
+    });
+  }
+
   private async markSuccess(
     outbox: ClaimedAiIndexOutbox,
     outcomes: JobDispatchOutcome[],
   ): Promise<boolean> {
     const now = new Date();
     return this.runTransaction(async (manager) => {
-      const repository = manager.getRepository(AiIndexOutbox);
-      const current = await repository.findOne({ where: { _id: outbox._id } });
-      if (!this.ownsLease(current, outbox)) return false;
-
-      current.status = AiIndexOutboxStatus.SUCCEEDED;
-      current.processedAt = now;
-      current.nextRetryAt = now;
-      current.leasedAt = null;
-      current.leaseExpiresAt = null;
-      current.leaseOwner = null;
-      current.lastErrorCode = null;
-      current.lastErrorMessage = null;
-      current.lastErrorAt = null;
-      await repository.save(current);
+      const finalized = await this.updateClaimedOutbox(manager, outbox, now, {
+        status: AiIndexOutboxStatus.SUCCEEDED,
+        processedAt: now,
+        nextRetryAt: now,
+        leasedAt: null,
+        leaseExpiresAt: null,
+        leaseOwner: null,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        lastErrorAt: null,
+      });
+      if (!finalized) return false;
 
       for (const outcome of outcomes) {
         await this.persistIndexStateSuccess(manager, outbox, outcome, now);
@@ -488,7 +614,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     return this.runTransaction(async (manager) => {
       const repository = manager.getRepository(AiIndexOutbox);
       const current = await repository.findOne({ where: { _id: outbox._id } });
-      if (!this.ownsLease(current, outbox)) return 'LEASE_LOST';
+      if (!this.ownsLease(current, outbox, now)) return 'LEASE_LOST';
 
       const terminal =
         !details.retryable || current.attempts >= current.maxAttempts;
@@ -503,20 +629,19 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
                 this.options.retryJitterRatio,
               ),
           );
-      current.status = terminal
-        ? AiIndexOutboxStatus.DEAD_LETTER
-        : AiIndexOutboxStatus.FAILED;
-      current.nextRetryAt = nextRetryAt;
-      current.lastErrorCode = details.code.slice(0, 80);
-      current.lastErrorMessage = details.message.slice(
-        0,
-        MAX_ERROR_MESSAGE_LENGTH,
-      );
-      current.lastErrorAt = now;
-      current.leasedAt = null;
-      current.leaseExpiresAt = null;
-      current.leaseOwner = null;
-      await repository.save(current);
+      const updated = await this.updateClaimedOutbox(manager, outbox, now, {
+        status: terminal
+          ? AiIndexOutboxStatus.DEAD_LETTER
+          : AiIndexOutboxStatus.FAILED,
+        nextRetryAt,
+        lastErrorCode: details.code.slice(0, 80),
+        lastErrorMessage: details.message.slice(0, MAX_ERROR_MESSAGE_LENGTH),
+        lastErrorAt: now,
+        leasedAt: null,
+        leaseExpiresAt: null,
+        leaseOwner: null,
+      });
+      if (!updated) return 'LEASE_LOST';
 
       if (outbox.aggregateType === AiIndexAggregateType.JOB) {
         await this.persistIndexStateFailure(
@@ -531,12 +656,54 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  private async renewLease(
+    outbox: ClaimedAiIndexOutbox,
+    now = new Date(),
+  ): Promise<boolean> {
+    return this.runTransaction((manager) =>
+      this.updateClaimedOutbox(manager, outbox, now, {
+        leasedAt: now,
+        leaseExpiresAt: new Date(now.getTime() + this.options.leaseMs),
+      }),
+    );
+  }
+
+  /**
+   * Conditionally changes a claimed outbox row. A lease owner is a fencing
+   * token, not merely a worker label; checking expiry in the UPDATE prevents a
+   * late completion from overwriting a newer claim.
+   */
+  private async updateClaimedOutbox(
+    manager: EntityManager,
+    outbox: ClaimedAiIndexOutbox,
+    now: Date,
+    changes: Partial<AiIndexOutbox>,
+  ): Promise<boolean> {
+    const repository = manager.getRepository(AiIndexOutbox);
+    // PostgreSQL's conditional UPDATE is the fencing point. Do not fall back
+    // to read-then-save: that would let a late completion race a reclaimed
+    // claim when an adapter does not implement atomic update semantics.
+    const result = await repository.update(
+      {
+        _id: outbox._id,
+        status: AiIndexOutboxStatus.PROCESSING,
+        leaseOwner: outbox.leaseOwner,
+        leaseExpiresAt: MoreThan(now),
+      },
+      changes,
+    );
+    if (result.affected !== 1) return false;
+    Object.assign(outbox, changes);
+    return true;
+  }
+
   private async persistIndexStateSuccess(
     manager: EntityManager,
     outbox: ClaimedAiIndexOutbox,
     outcome: JobDispatchOutcome,
     now: Date,
   ): Promise<void> {
+    await this.lockIndexState(manager, outcome.jobId);
     const repository = manager.getRepository(AiJobIndexState);
     const state = await this.findOrCreateState(
       repository,
@@ -557,24 +724,38 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
       outcome.operation === 'DELETE'
         ? AiJobIndexStateStatus.DELETED
         : AiJobIndexStateStatus.INDEXED;
-    state.contentHash = outcome.response.content_hash ?? null;
-    state.metadataHash = outcome.response.metadata_hash ?? null;
-    state.embeddingModelVersion =
-      outcome.response.embedding_model_version ??
-      state.embeddingModelVersion ??
-      null;
-    state.embeddingDimensions =
-      outcome.response.embedding_dimensions ??
-      state.embeddingDimensions ??
-      null;
-    state.normalizationVersion =
-      outcome.response.normalization_version ??
-      state.normalizationVersion ??
-      null;
-    state.chunkingVersion =
-      outcome.response.chunking_version ?? state.chunkingVersion ?? null;
-    state.indexSchemaVersion =
-      outcome.response.index_schema_version ?? state.indexSchemaVersion ?? null;
+    if (hasResponseField(outcome.response, 'content_hash')) {
+      state.contentHash = outcome.response.content_hash ?? null;
+    }
+    if (hasResponseField(outcome.response, 'metadata_hash')) {
+      state.metadataHash = outcome.response.metadata_hash ?? null;
+    }
+    if (hasResponseField(outcome.response, 'embedding_provider')) {
+      state.embeddingProvider = outcome.response.embedding_provider ?? null;
+    }
+    if (hasResponseField(outcome.response, 'embedding_model_version')) {
+      state.embeddingModelVersion =
+        outcome.response.embedding_model_version ?? null;
+    }
+    if (hasResponseField(outcome.response, 'embedding_dimensions')) {
+      state.embeddingDimensions = outcome.response.embedding_dimensions ?? null;
+    }
+    if (hasResponseField(outcome.response, 'normalization_version')) {
+      state.normalizationVersion =
+        outcome.response.normalization_version ?? null;
+    }
+    if (hasResponseField(outcome.response, 'chunking_version')) {
+      state.chunkingVersion = outcome.response.chunking_version ?? null;
+    }
+    if (hasResponseField(outcome.response, 'index_schema_version')) {
+      state.indexSchemaVersion = outcome.response.index_schema_version ?? null;
+    }
+    if (hasResponseField(outcome.response, 'collection_name')) {
+      state.collectionName = outcome.response.collection_name ?? null;
+    }
+    if (hasResponseField(outcome.response, 'collection_version')) {
+      state.collectionVersion = outcome.response.collection_version ?? null;
+    }
     state.indexedPointIds =
       outcome.operation === 'DELETE' ? [] : [...outcome.response.point_ids];
     state.attempts = outbox.attempts;
@@ -597,6 +778,7 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     now: Date,
     terminal: boolean,
   ): Promise<void> {
+    await this.lockIndexState(manager, outbox.aggregateId);
     const repository = manager.getRepository(AiJobIndexState);
     const state = await this.findOrCreateState(
       repository,
@@ -621,6 +803,17 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
     state.lastErrorMessage = details.message.slice(0, MAX_ERROR_MESSAGE_LENGTH);
     state.lastErrorAt = now;
     await repository.save(state);
+  }
+
+  private async lockIndexState(
+    manager: EntityManager,
+    jobId: string,
+  ): Promise<void> {
+    if (typeof manager.query !== 'function') return;
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`ai-index-state:${jobId}:${this.environment}`],
+    );
   }
 
   private async findOrCreateState(
@@ -675,12 +868,14 @@ export class AiIndexDispatcherService implements OnModuleInit, OnModuleDestroy {
   private ownsLease(
     current: AiIndexOutbox | null,
     claimed: ClaimedAiIndexOutbox,
+    now = new Date(),
   ): current is AiIndexOutbox {
     return Boolean(
       current &&
         current.status === AiIndexOutboxStatus.PROCESSING &&
         current.leaseOwner === claimed.leaseOwner &&
-        claimed.leaseOwner === this.owner,
+        current.leaseExpiresAt &&
+        current.leaseExpiresAt > now,
     );
   }
 
@@ -717,6 +912,42 @@ export function createIndexRequestId(
     `${outboxId}:${jobId ?? ''}:${operation ?? ''}`,
     STABLE_REQUEST_NAMESPACE,
   );
+}
+
+/** Stable UUID for one outbox/job/operation delivery across HTTP retries. */
+export function createIndexOperationAttemptId(
+  outboxId: string,
+  jobId: string,
+  operation: 'UPSERT' | 'DELETE',
+): string {
+  return uuidv5(
+    `${outboxId}:${jobId}:${operation}`,
+    STABLE_OPERATION_ATTEMPT_NAMESPACE,
+  );
+}
+
+function createIndexCallOptions(
+  outbox: ClaimedAiIndexOutbox,
+  jobId: string,
+  operation: 'UPSERT' | 'DELETE',
+): {
+  requestId: string;
+  operationAttemptId: string;
+  outboxId: string;
+  jobId: string;
+  attemptNumber: number;
+} {
+  return {
+    requestId: createIndexRequestId(outbox._id, jobId, operation),
+    operationAttemptId: createIndexOperationAttemptId(
+      outbox._id,
+      jobId,
+      operation,
+    ),
+    outboxId: outbox._id,
+    jobId,
+    attemptNumber: outbox.attempts,
+  };
 }
 
 export function computeRetryDelay(
@@ -824,17 +1055,51 @@ function readNumber(
 }
 
 function boundedWorkerOwner(value: string): string {
-  const owner =
-    value.trim() ||
-    `ai-index-worker:${process.pid}:${createIndexRequestId(UUID_NIL)}`;
-  if (owner.length > 128) return owner.slice(0, 128);
-  return owner;
+  const configured =
+    String(value ?? '').trim() || `ai-index-worker:${process.pid}`;
+  // Leave room for a complete per-claim UUID. The claim token is the actual
+  // fencing value; the worker UUID only identifies the process that created it.
+  return `${randomUUID()}:${configured.slice(0, 80)}`.slice(0, 128);
 }
 
-function boundedEnvironment(value: string): string {
-  const environment = value.trim();
-  if (!environment || environment.length > 32) {
-    throw new Error('AI_INDEX_ENVIRONMENT must be between 1 and 32 characters');
+function createClaimLeaseOwner(workerOwner: string): string {
+  return `${randomUUID()}:${workerOwner.slice(0, 90)}`.slice(0, 128);
+}
+
+function assertSingleOutboxEnvironment(config: ConfigService): void {
+  const environment = boundedEnvironment(
+    config.get<string>('AI_INDEX_ENVIRONMENT', 'local') || 'local',
+  );
+  const rawOutboxEnvironment = config.get<string>(
+    'AI_INDEX_OUTBOX_ENVIRONMENT',
+  );
+  if (rawOutboxEnvironment === undefined || rawOutboxEnvironment === null) {
+    if (environment !== 'local') {
+      throw new Error(
+        'AI_INDEX_OUTBOX_ENVIRONMENT must be explicitly set for a non-local unscoped outbox',
+      );
+    }
+    return;
+  }
+
+  const outboxEnvironment = boundedEnvironment(rawOutboxEnvironment);
+  // ai_index_outbox is intentionally unscoped in the current migration. Each
+  // deployment must therefore use a database dedicated to one environment and
+  // declare the same value on both sides; staging/production are never allowed
+  // to silently claim a differently configured outbox.
+  if (environment !== outboxEnvironment) {
+    throw new Error(
+      'AI_INDEX_OUTBOX_ENVIRONMENT must match AI_INDEX_ENVIRONMENT for the unscoped outbox',
+    );
+  }
+}
+
+function boundedEnvironment(value: unknown): string {
+  const environment = String(value ?? '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/.test(environment)) {
+    throw new Error(
+      'AI_INDEX_ENVIRONMENT must contain 1 to 32 safe characters',
+    );
   }
   return environment;
 }
@@ -865,6 +1130,80 @@ function toSafeSourceVersion(value: string | number | bigint): number {
   return Number(parsed);
 }
 
+function hasResponseField(
+  response: IndexJobResponse,
+  field: keyof IndexJobResponse,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(response, field);
+}
+
+function assertCompanyPage(
+  page: unknown,
+  cursor: string | null,
+): asserts page is {
+  jobs: Array<{ job: { _id: string } }>;
+  nextCursor: string | null;
+  hasMore: boolean;
+} {
+  if (!page || typeof page !== 'object') {
+    throw terminalDispatchError(
+      'AI_INDEX_COMPANY_PAGE_INVALID',
+      'Company projection page is invalid',
+    );
+  }
+  const candidate = page as {
+    jobs?: unknown;
+    nextCursor?: unknown;
+    hasMore?: unknown;
+  };
+  if (
+    !Array.isArray(candidate.jobs) ||
+    typeof candidate.hasMore !== 'boolean' ||
+    (candidate.nextCursor !== null &&
+      (typeof candidate.nextCursor !== 'string' ||
+        !isUuid(candidate.nextCursor)))
+  ) {
+    throw terminalDispatchError(
+      'AI_INDEX_COMPANY_PAGE_INVALID',
+      'Company projection page is invalid',
+    );
+  }
+  if (candidate.hasMore && !candidate.nextCursor) {
+    throw terminalDispatchError(
+      'AI_INDEX_COMPANY_CURSOR_INVALID',
+      'Company projection page is missing its next cursor',
+    );
+  }
+  if (!candidate.hasMore && candidate.nextCursor !== null) {
+    throw terminalDispatchError(
+      'AI_INDEX_COMPANY_CURSOR_INVALID',
+      'Final company projection page must not have a next cursor',
+    );
+  }
+  if (candidate.hasMore && candidate.nextCursor === cursor) {
+    throw terminalDispatchError(
+      'AI_INDEX_COMPANY_CURSOR_INVALID',
+      'Company projection page did not advance its cursor',
+    );
+  }
+  for (const projection of candidate.jobs) {
+    if (
+      !projection ||
+      typeof projection !== 'object' ||
+      !('job' in projection) ||
+      !projection.job ||
+      typeof projection.job !== 'object' ||
+      typeof (projection.job as { _id?: unknown })._id !== 'string' ||
+      !isUuid((projection.job as { _id: string })._id)
+    ) {
+      throw terminalDispatchError(
+        'AI_INDEX_COMPANY_PAGE_INVALID',
+        'Company projection page contains an invalid job',
+      );
+    }
+  }
+}
+
 function assertIndexResponse(
   response: IndexJobResponse,
   jobId: string,
@@ -887,6 +1226,10 @@ function terminalDispatchError(code: string, message: string): AiServiceError {
   return new AiServiceError(code as AiServiceErrorCode, message, 422, false);
 }
 
+function retryableDispatchError(code: string, message: string): AiServiceError {
+  return new AiServiceError(code as AiServiceErrorCode, message, 503, true);
+}
+
 function classifyDispatchError(error: unknown): DispatchErrorDetails {
   if (error instanceof AiServiceError) {
     return {
@@ -903,7 +1246,10 @@ function classifyDispatchError(error: unknown): DispatchErrorDetails {
     };
   }
   return {
-    retryable: false,
+    // Unknown errors are generally database/network/infrastructure failures.
+    // Retry them with the bounded outbox policy; malformed contract errors are
+    // represented by AiServiceError/CanonicalProjectionError above.
+    retryable: true,
     code: 'AI_INDEX_DISPATCH_ERROR',
     message: safeErrorMessage(
       error instanceof Error ? error.message : 'Index dispatch failed',

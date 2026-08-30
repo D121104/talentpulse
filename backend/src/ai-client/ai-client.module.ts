@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { AiCircuitBreaker } from './circuit-breaker';
+import { AiProviderAttemptModule } from '../ai-indexing/ai-provider-attempt.module';
 import {
   AiServiceClient,
   AiCircuitBreakerToken,
@@ -19,7 +20,7 @@ import {
 } from './service-jwt.provider';
 
 @Module({
-  imports: [ConfigModule, JwtModule.register({})],
+  imports: [ConfigModule, JwtModule.register({}), AiProviderAttemptModule],
   providers: [
     AiServiceClient,
     { provide: AiTraceIdFactoryToken, useValue: randomUUID },

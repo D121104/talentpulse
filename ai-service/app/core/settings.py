@@ -6,6 +6,18 @@ from functools import lru_cache
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.index_representation import (
+    CHUNKING_VERSION,
+    INDEX_SCHEMA_VERSION,
+    NORMALIZATION_VERSION,
+    RepresentationManifest,
+    validate_safe_identifier,
+)
+
+LOCAL_QDRANT_COLLECTION = "jobs_bge_m3_1024_local_v1"
+LOCAL_QDRANT_ALIAS = "jobs_current_local"
+FAKE_VECTOR_COLLECTION = "fake-collection"
+
 
 class Environment(StrEnum):
     LOCAL = "local"
@@ -59,16 +71,17 @@ class Settings(BaseSettings):
     local_embedding_dimensions: int = Field(default=1024, ge=1, le=4096)
     local_embedding_device: str = "cpu"
     fake_embedding_dimensions: int = Field(default=4, ge=1, le=4096)
-    bedrock_embedding_model: str = "cohere.embed-multilingual-v3"
+    bedrock_embedding_model: str = Field(
+        default="cohere.embed-multilingual-v3", min_length=1, max_length=256
+    )
     bedrock_embedding_dimensions: int = Field(default=1024, ge=1, le=4096)
 
     vector_store_provider: VectorStoreProvider = VectorStoreProvider.QDRANT
     qdrant_url: str = "http://127.0.0.1:6333"
     qdrant_api_key: SecretStr | None = None
-    qdrant_collection: str = Field(
-        default="jobs_bge_m3_1024_local_v1", min_length=1, max_length=255
-    )
-    qdrant_alias: str = Field(default="jobs_current_local", min_length=1, max_length=255)
+    qdrant_collection: str = Field(default=LOCAL_QDRANT_COLLECTION, min_length=1, max_length=255)
+    qdrant_alias: str = Field(default=LOCAL_QDRANT_ALIAS, min_length=1, max_length=255)
+    qdrant_collection_version: str | None = Field(default=None, min_length=1, max_length=128)
     qdrant_auto_initialize: bool = True
     qdrant_timeout_seconds: float = Field(default=3.0, gt=0, le=60)
 
@@ -107,6 +120,34 @@ class Settings(BaseSettings):
             raise ValueError("bedrock_region is invalid")
         return value
 
+    @field_validator("qdrant_api_key", mode="before")
+    @classmethod
+    def normalize_qdrant_api_key(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            return None if not value.get_secret_value().strip() else value
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("qdrant_collection")
+    @classmethod
+    def validate_collection_name(cls, value: str) -> str:
+        return validate_safe_identifier(value, "QDRANT_COLLECTION", 255)
+
+    @field_validator("qdrant_alias")
+    @classmethod
+    def validate_alias_name(cls, value: str) -> str:
+        return validate_safe_identifier(value, "QDRANT_ALIAS", 255)
+
+    @field_validator("qdrant_collection_version")
+    @classmethod
+    def validate_collection_version(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_safe_identifier(value, "QDRANT_COLLECTION_VERSION", 128)
+
     @field_validator("ai_service_auth_public_key", mode="before")
     @classmethod
     def normalize_public_key(cls, value: object) -> object:
@@ -139,17 +180,38 @@ class Settings(BaseSettings):
             and self.bedrock_embedding_dimensions != 1024
         ):
             raise ValueError("Cohere multilingual v3 requires 1024 dimensions")
-        if self.app_env is not Environment.LOCAL and not (
-            self.ai_service_auth_public_key or self.ai_service_auth_public_key_file
-        ):
-            raise ValueError(
-                "AI_SERVICE_AUTH_PUBLIC_KEY or AI_SERVICE_AUTH_PUBLIC_KEY_FILE "
-                + "is required outside local configuration"
-            )
         if self.ai_service_auth_public_key and self.ai_service_auth_public_key_file:
             raise ValueError(
                 "Configure exactly one of AI_SERVICE_AUTH_PUBLIC_KEY and "
                 + "AI_SERVICE_AUTH_PUBLIC_KEY_FILE"
+            )
+        if self.app_env is Environment.LOCAL:
+            return self
+
+        if not (self.ai_service_auth_public_key or self.ai_service_auth_public_key_file):
+            raise ValueError(
+                "AI_SERVICE_AUTH_PUBLIC_KEY or AI_SERVICE_AUTH_PUBLIC_KEY_FILE "
+                + "is required outside local configuration"
+            )
+        if self.embedding_provider is not EmbeddingProvider.BEDROCK_COHERE:
+            raise ValueError(
+                "embedding_provider must be BEDROCK_COHERE outside local configuration"
+            )
+        if self.qdrant_collection_version is None:
+            raise ValueError("QDRANT_COLLECTION_VERSION is required outside local configuration")
+        if self.qdrant_auto_initialize:
+            raise ValueError("QDRANT_AUTO_INITIALIZE must be false outside local configuration")
+        if self.qdrant_api_key is None or not self.qdrant_api_key.get_secret_value().strip():
+            raise ValueError("QDRANT_API_KEY is required outside local configuration")
+        if not self.qdrant_url.startswith("https://"):
+            raise ValueError("QDRANT_URL must use HTTPS outside local configuration")
+        if self.qdrant_collection == LOCAL_QDRANT_COLLECTION:
+            raise ValueError(
+                "QDRANT_COLLECTION must be explicitly configured outside local configuration"
+            )
+        if self.qdrant_alias == LOCAL_QDRANT_ALIAS:
+            raise ValueError(
+                "QDRANT_ALIAS must be explicitly configured outside local configuration"
             )
         return self
 
@@ -168,6 +230,69 @@ class Settings(BaseSettings):
         if self.embedding_provider is EmbeddingProvider.FAKE:
             return "fake-embedding"
         return self.local_embedding_model
+
+    # These aliases make the server-owned representation available without
+    # exposing provider-specific configuration fields to callers.
+    @property
+    def embedding_model_version(self) -> str:
+        return self.effective_embedding_model
+
+    @property
+    def embedding_dimensions(self) -> int:
+        return self.effective_embedding_dimensions
+
+    @property
+    def normalization_version(self) -> str:
+        return NORMALIZATION_VERSION
+
+    @property
+    def chunking_version(self) -> str:
+        return CHUNKING_VERSION
+
+    @property
+    def index_schema_version(self) -> str:
+        return INDEX_SCHEMA_VERSION
+
+    @property
+    def physical_collection(self) -> str:
+        return self.representation.physical_collection
+
+    @property
+    def alias(self) -> str:
+        return self.representation.alias
+
+    @property
+    def collection_version(self) -> str | None:
+        return self.qdrant_collection_version
+
+    @property
+    def representation(self) -> RepresentationManifest:
+        """Return the server-owned vector representation manifest."""
+
+        physical_collection = self.qdrant_collection
+        alias = self.qdrant_alias
+        if self.vector_store_provider is VectorStoreProvider.FAKE:
+            physical_collection = FAKE_VECTOR_COLLECTION
+            alias = FAKE_VECTOR_COLLECTION
+        return RepresentationManifest(
+            provider=self.embedding_provider.value,
+            model=self.effective_embedding_model,
+            dimensions=self.effective_embedding_dimensions,
+            normalization_version=NORMALIZATION_VERSION,
+            chunking_version=CHUNKING_VERSION,
+            index_schema_version=INDEX_SCHEMA_VERSION,
+            physical_collection=physical_collection,
+            alias=alias,
+            collection_version=self.qdrant_collection_version,
+        )
+
+    @property
+    def representation_manifest(self) -> RepresentationManifest:
+        return self.representation
+
+    @property
+    def manifest(self) -> RepresentationManifest:
+        return self.representation
 
 
 @lru_cache

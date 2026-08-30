@@ -28,6 +28,9 @@ export enum AiProviderAttemptStatus {
 @Index('IDX_ai_provider_attempts_outbox', ['outboxId', 'createdAt'], {
   where: '"outbox_id" IS NOT NULL',
 })
+@Index('IDX_ai_provider_attempts_job', ['jobId', 'createdAt'], {
+  where: '"job_id" IS NOT NULL',
+})
 export class AiProviderAttempt {
   @PrimaryGeneratedColumn('uuid', { name: 'provider_attempt_id' })
   providerAttemptId: string;
@@ -43,6 +46,9 @@ export class AiProviderAttempt {
 
   @Column({ name: 'outbox_id', type: 'uuid', nullable: true })
   outboxId: string | null;
+
+  @Column({ name: 'job_id', type: 'uuid', nullable: true })
+  jobId: string | null;
 
   @Column({ name: 'attempt_number', type: 'integer', default: 1 })
   attemptNumber: number;

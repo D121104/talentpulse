@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AiClientModule } from '../ai-client/ai-client.module';
+import { AiProviderAttemptModule } from './ai-provider-attempt.module';
 import { Company } from '../companies/entities/company.entity';
 import { Job } from '../jobs/entities/job.entity';
 import { AiIndexDispatcherService } from './services/ai-index-dispatcher.service';
@@ -9,8 +10,10 @@ import { CanonicalJobProjectionService } from './services/canonical-job-projecti
 import { AiIndexBackfillService } from './services/ai-index-backfill.service';
 import { AiIndexReconcileService } from './services/ai-index-reconcile.service';
 import { AiIndexReplayService } from './services/ai-index-replay.service';
+import { AiIndexLifecycleSweepService } from './services/ai-index-lifecycle-sweep.service';
+import { AiIndexDrainService } from './services/ai-index-drain.service';
 import { AiIndexingService } from './ai-indexing.service';
-import { AiIndexOutbox, AiJobIndexState, AiProviderAttempt } from './entities';
+import { AiIndexOutbox, AiJobIndexState } from './entities';
 
 /**
  * Composition root for the transactional indexing outbox and its opt-in
@@ -22,13 +25,8 @@ import { AiIndexOutbox, AiJobIndexState, AiProviderAttempt } from './entities';
   imports: [
     ConfigModule,
     AiClientModule,
-    TypeOrmModule.forFeature([
-      AiIndexOutbox,
-      AiJobIndexState,
-      AiProviderAttempt,
-      Job,
-      Company,
-    ]),
+    AiProviderAttemptModule,
+    TypeOrmModule.forFeature([AiIndexOutbox, AiJobIndexState, Job, Company]),
   ],
   providers: [
     AiIndexingService,
@@ -37,6 +35,8 @@ import { AiIndexOutbox, AiJobIndexState, AiProviderAttempt } from './entities';
     AiIndexBackfillService,
     AiIndexReconcileService,
     AiIndexReplayService,
+    AiIndexLifecycleSweepService,
+    AiIndexDrainService,
   ],
   exports: [
     AiIndexingService,
@@ -45,6 +45,9 @@ import { AiIndexOutbox, AiJobIndexState, AiProviderAttempt } from './entities';
     AiIndexBackfillService,
     AiIndexReconcileService,
     AiIndexReplayService,
+    AiIndexLifecycleSweepService,
+    AiIndexDrainService,
+    AiProviderAttemptModule,
     TypeOrmModule,
   ],
 })

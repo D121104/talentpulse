@@ -242,3 +242,36 @@ async def test_request_cannot_spoof_configured_embedding_or_index_versions() -> 
         )
     assert error.value.status_code == 422
     assert "configured index representation" in error.value.message
+
+
+async def test_index_responses_report_server_owned_metadata() -> None:
+    embedding = FakeEmbeddingModel(dimensions=4)
+    store = InMemoryVectorStore(
+        collection_name="jobs_fake_v1",
+        dimensions=4,
+        embedding_model="fake-embedding",
+        collection_version="collection-v1",
+    )
+    indexer = IndexJobService(embedding, store, clock=lambda: NOW)
+
+    indexed = await indexer.upsert(request())
+    indexed_payload = next(iter(store.records.values())).payload
+    deleted = await indexer.delete(
+        IndexJobDeleteRequest(job_id=JOB_ID, idempotency_key="delete-1", source_version=2)
+    )
+
+    assert indexed_payload["embedding_provider"] == "fake"
+    assert indexed_payload["embedding_model_version"] == "fake-embedding"
+    assert indexed_payload["embedding_dimensions"] == 4
+    assert indexed_payload["collection_name"] == "jobs_fake_v1"
+    assert indexed_payload["collection_version"] == "collection-v1"
+
+    for response in (indexed, deleted):
+        assert response.embedding_provider == "fake"
+        assert response.embedding_model_version == "fake-embedding"
+        assert response.embedding_dimensions == 4
+        assert response.normalization_version is not None
+        assert response.chunking_version is not None
+        assert response.index_schema_version is not None
+        assert response.collection_name == "jobs_fake_v1"
+        assert response.collection_version == "collection-v1"

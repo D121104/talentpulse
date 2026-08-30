@@ -228,11 +228,14 @@ class IndexJobResponse(ContractModel):
     chunk_count: int = Field(ge=0, le=128)
     embedded: bool
     request_id: UuidValue | None = None
+    embedding_provider: Annotated[str, Field(min_length=1, max_length=64)] | None = None
     embedding_model_version: Annotated[str, Field(min_length=1, max_length=256)] | None = None
     embedding_dimensions: int | None = Field(default=None, ge=1, le=4096)
     normalization_version: Annotated[str, Field(min_length=1, max_length=64)] | None = None
     chunking_version: Annotated[str, Field(min_length=1, max_length=64)] | None = None
     index_schema_version: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+    collection_name: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    collection_version: Annotated[str, Field(min_length=1, max_length=128)] | None = None
 
 
 # Explicit aliases make the endpoint contract discoverable to callers.
@@ -270,6 +273,8 @@ class IndexPointMetadata(ContractModel):
     normalization_version: Annotated[str, Field(min_length=1, max_length=64)]
     chunking_version: Annotated[str, Field(min_length=1, max_length=64)]
     index_schema_version: Annotated[str, Field(min_length=1, max_length=64)]
+    collection_name: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    collection_version: Annotated[str, Field(min_length=1, max_length=128)] | None = None
 
 
 class IndexMetadataScanResponse(ContractModel):

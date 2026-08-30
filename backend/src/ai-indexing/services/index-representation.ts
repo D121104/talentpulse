@@ -33,17 +33,19 @@ const HTML_ENTITIES: Record<string, string> = {
 export function normalizeIndexText(value: string | null | undefined): string {
   if (!value) return '';
   const decoded = decodeHtmlEntities(value);
-  return decoded
-    .replace(HTML_SCRIPT_STYLE_PATTERN, ' ')
-    .replace(HTML_TAG_PATTERN, ' ')
-    .normalize('NFKC')
-    .replace(WHITESPACE_PATTERN, ' ')
-    .trim()
-    .toLowerCase()
-    // Python's casefold expands these common Unicode case variants while
-    // JavaScript's lower-case operation does not.
-    .replace(/\u00df/g, 'ss')
-    .replace(/\u1e9e/g, 'ss');
+  return (
+    decoded
+      .replace(HTML_SCRIPT_STYLE_PATTERN, ' ')
+      .replace(HTML_TAG_PATTERN, ' ')
+      .normalize('NFKC')
+      .replace(WHITESPACE_PATTERN, ' ')
+      .trim()
+      .toLowerCase()
+      // Python's casefold expands these common Unicode case variants while
+      // JavaScript's lower-case operation does not.
+      .replace(/\u00df/g, 'ss')
+      .replace(/\u1e9e/g, 'ss')
+  );
 }
 
 export function normalizedCanonicalJobMetadata(
@@ -131,12 +133,14 @@ export function computeCanonicalMetadataHash(
 
 function normalizeSkills(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return [...new Set(
-    value
-      .filter((skill): skill is string => typeof skill === 'string')
-      .map((skill) => normalizeIndexText(skill))
-      .filter(Boolean),
-  )].sort();
+  return [
+    ...new Set(
+      value
+        .filter((skill): skill is string => typeof skill === 'string')
+        .map((skill) => normalizeIndexText(skill))
+        .filter(Boolean),
+    ),
+  ].sort();
 }
 
 function normalizeOptionalText(value: unknown): string | null {
@@ -180,7 +184,8 @@ function normalizeSalary(
 function pythonUtcIso(value: string | Date | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   const date = value instanceof Date ? value : new Date(String(value));
-  if (Number.isNaN(date.getTime())) return normalizeIndexText(String(value)) || null;
+  if (Number.isNaN(date.getTime()))
+    return normalizeIndexText(String(value)) || null;
 
   const iso = date.toISOString();
   const milliseconds = date.getUTCMilliseconds();
@@ -198,11 +203,15 @@ function decodeHtmlEntities(value: string): string {
       const normalized = body.toLowerCase();
       if (normalized.startsWith('#x')) {
         const codePoint = Number.parseInt(normalized.slice(2), 16);
-        return validCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
+        return validCodePoint(codePoint)
+          ? String.fromCodePoint(codePoint)
+          : entity;
       }
       if (normalized.startsWith('#')) {
         const codePoint = Number.parseInt(normalized.slice(1), 10);
-        return validCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
+        return validCodePoint(codePoint)
+          ? String.fromCodePoint(codePoint)
+          : entity;
       }
       return HTML_ENTITIES[normalized] ?? entity;
     },

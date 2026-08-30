@@ -4,6 +4,10 @@ from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from app.core.index_representation import (
+    REPRESENTATION_METADATA_POINT_ID,
+    is_reserved_metadata_payload,
+)
 from app.ports import (
     ChatModel,
     ChatRequest,
@@ -71,6 +75,8 @@ class InMemoryVectorStore(VectorStore):
     records: dict[str, VectorRecord] = field(default_factory=dict)
     dimensions: int = 4
     embedding_model: str = "fake-embedding"
+    embedding_provider: str = "fake"
+    collection_version: str | None = None
 
     def __post_init__(self) -> None:
         self.records = {} if self.records is None else self.records
@@ -87,6 +93,10 @@ class InMemoryVectorStore(VectorStore):
         query_vector = validate_vector(vector, self.dimensions)
         scored = []
         for record in self.records.values():
+            if record.point_id == str(
+                REPRESENTATION_METADATA_POINT_ID
+            ) or is_reserved_metadata_payload(record.payload):
+                continue
             record_vector = validate_vector(record.vector, self.dimensions)
             score = sum(
                 left * right for left, right in zip(query_vector, record_vector, strict=False)
@@ -96,16 +106,26 @@ class InMemoryVectorStore(VectorStore):
 
     async def upsert(self, records: Sequence[VectorRecord]) -> None:
         for record in records:
+            if record.point_id == str(
+                REPRESENTATION_METADATA_POINT_ID
+            ) or is_reserved_metadata_payload(record.payload):
+                raise ValueError("reserved vector-store metadata point cannot be indexed")
             validate_vector(record.vector, self.dimensions)
         self.records.update({record.point_id: record for record in records})
 
     async def delete(self, point_ids: Sequence[str]) -> None:
+        if any(point_id == str(REPRESENTATION_METADATA_POINT_ID) for point_id in point_ids):
+            raise ValueError("reserved vector-store metadata point cannot be deleted")
         for point_id in point_ids:
             self.records.pop(point_id, None)
 
     async def get_by_job_id(self, job_id: str) -> list[VectorRecord]:
         return [
-            record for record in self.records.values() if record.payload.get("job_id") == job_id
+            record
+            for record in self.records.values()
+            if record.point_id != str(REPRESENTATION_METADATA_POINT_ID)
+            and not is_reserved_metadata_payload(record.payload)
+            and record.payload.get("job_id") == job_id
         ]
 
     async def scan_metadata(self, cursor: str | None, limit: int) -> VectorMetadataScanPage:
@@ -113,7 +133,12 @@ class InMemoryVectorStore(VectorStore):
 
         safe_limit = bounded_scan_limit(limit)
         normalized_cursor = validate_scan_cursor(cursor)
-        point_ids = sorted(self.records)
+        point_ids = sorted(
+            point_id
+            for point_id, record in self.records.items()
+            if point_id != str(REPRESENTATION_METADATA_POINT_ID)
+            and not is_reserved_metadata_payload(record.payload)
+        )
         if normalized_cursor is None:
             start = 0
         elif normalized_cursor.isdecimal():

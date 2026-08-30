@@ -16,6 +16,8 @@ import {
   AiProviderAttemptStatus,
 } from './entities/ai-provider-attempt.entity';
 import { Phase2AiIndexingPersistence20260827160000 } from '../database/migrations/20260827160000-Phase2AiIndexingPersistence';
+import { AiProviderAttemptJobId20260828170000 } from '../database/migrations/20260828170000-AiProviderAttemptJobId';
+import { AiProviderAttemptRequestSentInvariant20260829100000 } from '../database/migrations/20260829100000-AiProviderAttemptRequestSentInvariant';
 
 type IndexingEntity =
   | typeof AiIndexOutbox
@@ -123,6 +125,7 @@ describe('AI indexing persistence metadata', () => {
       'indexSchemaVersion',
       'chunkingVersion',
       'normalizationVersion',
+      'jobId',
     ]) {
       expect(() => columnFor(AiJobIndexState, propertyName)).not.toThrow();
     }
@@ -135,6 +138,79 @@ describe('AI indexing persistence metadata', () => {
 
     expect(persistedNames).not.toMatch(
       /prompt|raw.*response|provider.*response/,
+    );
+  });
+
+  it('correlates provider attempts to jobs without deleting audit rows with the job', async () => {
+    const queries: string[] = [];
+    const queryRunner = {
+      query: jest.fn(async (sql: string) => {
+        queries.push(sql);
+        return [];
+      }),
+    } as unknown as QueryRunner;
+    const migration = new AiProviderAttemptJobId20260828170000();
+
+    await migration.up(queryRunner);
+    const upSql = queries.join('\n');
+    expect(upSql).toContain('ADD COLUMN IF NOT EXISTS "job_id" uuid NULL');
+    expect(upSql).toContain(
+      'FOREIGN KEY ("job_id") REFERENCES "jobs" ("_id") ON DELETE SET NULL',
+    );
+    expect(upSql).toContain(
+      'CREATE INDEX IF NOT EXISTS "IDX_ai_provider_attempts_job"',
+    );
+
+    const providerJobIndex = storage.indices.find(
+      (index) =>
+        index.target === AiProviderAttempt &&
+        index.name === 'IDX_ai_provider_attempts_job',
+    );
+    expect(providerJobIndex).toMatchObject({
+      columns: ['jobId', 'createdAt'],
+      where: '"job_id" IS NOT NULL',
+    });
+    expect(columnFor(AiProviderAttempt, 'jobId').options).toMatchObject({
+      name: 'job_id',
+      type: 'uuid',
+      nullable: true,
+    });
+
+    queries.length = 0;
+    await migration.down(queryRunner);
+    const downSql = queries.join('\n');
+    expect(downSql).toContain(
+      'DROP INDEX IF EXISTS "IDX_ai_provider_attempts_job"',
+    );
+    expect(downSql).toContain(
+      'DROP CONSTRAINT IF EXISTS "FK_ai_provider_attempts_job"',
+    );
+    expect(downSql).toContain('DROP COLUMN IF EXISTS "job_id"');
+  });
+
+  it('enforces request_sent for UNKNOWN provider-attempt rows', async () => {
+    const queries: string[] = [];
+    const queryRunner = {
+      query: jest.fn(async (sql: string) => {
+        queries.push(sql);
+        return [];
+      }),
+    } as unknown as QueryRunner;
+    const migration = new AiProviderAttemptRequestSentInvariant20260829100000();
+
+    await migration.up(queryRunner);
+    const upSql = queries.join('\n');
+    expect(upSql).toContain(
+      'ADD CONSTRAINT "CHK_ai_provider_attempts_unknown_request_sent"',
+    );
+    expect(upSql).toContain(
+      'CHECK ("status" <> \'UNKNOWN\' OR "request_sent" = true)',
+    );
+
+    queries.length = 0;
+    await migration.down(queryRunner);
+    expect(queries.join('\n')).toContain(
+      'DROP CONSTRAINT IF EXISTS "CHK_ai_provider_attempts_unknown_request_sent"',
     );
   });
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from app.core.errors import ProviderError
 from app.ports import EmbeddingInputType, EmbeddingModel, EmbeddingResponse
@@ -14,10 +14,20 @@ class BedrockCohereEmbeddingModel(EmbeddingModel):
     MAX_BATCH_SIZE = 96
     MAX_TEXT_CHARS = 1900
 
-    def __init__(self, region: str, model_name: str, dimensions: int = 1024) -> None:
+    def __init__(
+        self,
+        region: str,
+        model_name: str,
+        dimensions: int = 1024,
+        *,
+        access_probe: Callable[[], bool] | None = None,
+        access_verified: bool = False,
+    ) -> None:
         self.region = region
         self.model_name = model_name
         self.dimensions = dimensions
+        self._access_probe = access_probe
+        self._access_verified = access_verified
 
     def _embed_sync(
         self, texts: Sequence[str], input_type: EmbeddingInputType
@@ -72,5 +82,28 @@ class BedrockCohereEmbeddingModel(EmbeddingModel):
         vectors = await asyncio.to_thread(self._embed_sync, texts, input_type)
         return EmbeddingResponse(vectors, self.model_name, self.provider_name, self.dimensions)
 
+    @property
+    def access_verified(self) -> bool:
+        return self._access_verified
+
     async def health(self) -> bool:
-        return True  # Model access is verified by an explicit staging smoke test.
+        """Report only the result of an explicit probe; never call AWS here."""
+
+        return self._access_verified
+
+    async def check_access(self) -> bool:
+        """Run an explicitly requested, injected access probe.
+
+        Production operators can inject a smoke-test callable that performs one
+        bounded provider request. Ordinary health/readiness calls do not invoke
+        AWS and never claim unverified model access.
+        """
+
+        if self._access_probe is None:
+            return False
+        try:
+            verified = await asyncio.to_thread(self._access_probe)
+        except Exception:
+            return False
+        self._access_verified = bool(verified)
+        return self._access_verified

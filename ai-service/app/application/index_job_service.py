@@ -86,9 +86,23 @@ class IndexJobService:
             raise ValueError("vector store embedding model is required")
         if store_model != model_name:
             raise ValueError("vector store model does not match the embedding model")
+        store_provider = getattr(vector_store, "embedding_provider", None)
+        if not isinstance(store_provider, str) or not store_provider.strip():
+            raise ValueError("vector store embedding provider is required")
+        if store_provider != provider_name:
+            raise ValueError("vector store provider does not match the embedding model")
+        collection_version = getattr(vector_store, "collection_version", None)
+        if collection_version is not None:
+            if not isinstance(collection_version, str):
+                raise ValueError("vector store collection version is invalid")
+            collection_version = collection_version.strip()
+            if not collection_version or len(collection_version) > 128:
+                raise ValueError("vector store collection version is invalid")
         self._embedding_model = embedding_model
         self._vector_store = vector_store
         self._collection_name = collection_name
+        self._embedding_provider = provider_name
+        self._collection_version = collection_version
         self._clock = clock or (lambda: datetime.now(UTC))
         self._max_chunk_chars = max_chunk_chars
         self._idempotency: dict[str, tuple[str, str, str, IndexJobResponse]] = {}
@@ -206,7 +220,7 @@ class IndexJobService:
                     [chunk.text for chunk in chunks], EmbeddingInputType.DOCUMENT
                 )
                 if (
-                    embedding_response.provider != self._embedding_model.provider_name
+                    embedding_response.provider != self._embedding_provider
                     or embedding_response.model != versions[0]
                     or embedding_response.dimensions != versions[1]
                 ):
@@ -245,11 +259,14 @@ class IndexJobService:
                 metadata_hash=metadata_hash,
                 chunk_count=len(chunks),
                 embedded=embedded,
+                embedding_provider=self._embedding_provider,
                 embedding_model_version=versions[0],
                 embedding_dimensions=versions[1],
                 normalization_version=versions[2],
                 chunking_version=versions[3],
                 index_schema_version=versions[4],
+                collection_name=self._collection_name,
+                collection_version=self._collection_version,
                 request_id=UUID(request_id) if request_id is not None else None,
             )
             self._remember(
@@ -296,6 +313,14 @@ class IndexJobService:
                 deleted_point_ids=[UUID(point_id) for point_id in point_ids],
                 chunk_count=0,
                 embedded=False,
+                embedding_provider=self._embedding_provider,
+                embedding_model_version=self._embedding_model.model_name,
+                embedding_dimensions=self._embedding_model.dimensions,
+                normalization_version=NORMALIZATION_VERSION,
+                chunking_version=CHUNKING_VERSION,
+                index_schema_version=INDEX_SCHEMA_VERSION,
+                collection_name=self._collection_name,
+                collection_version=self._collection_version,
                 request_id=UUID(request_id) if request_id is not None else None,
             )
             self._remember(request.idempotency_key, "DELETE", job_id, fingerprint, response)
@@ -411,8 +436,9 @@ class IndexJobService:
         versions: tuple[str, int, str, str, str],
     ) -> list[dict[str, Any]]:
         metadata = normalized_job_metadata(job)
-        return [
-            {
+        payloads: list[dict[str, Any]] = []
+        for chunk_index, _ in enumerate(point_ids):
+            payload: dict[str, Any] = {
                 **metadata,
                 "chunk_index": chunk_index,
                 "chunk_count": chunk_count,
@@ -420,7 +446,7 @@ class IndexJobService:
                 "content_hash": content_hash,
                 "metadata_hash": metadata_hash,
                 "source_version": source_version,
-                "embedding_provider": self._embedding_model.provider_name,
+                "embedding_provider": self._embedding_provider,
                 "collection_name": self._collection_name,
                 "embedding_model_version": versions[0],
                 "embedding_dimensions": versions[1],
@@ -428,8 +454,10 @@ class IndexJobService:
                 "chunking_version": versions[3],
                 "index_schema_version": versions[4],
             }
-            for chunk_index, _ in enumerate(point_ids)
-        ]
+            if self._collection_version is not None:
+                payload["collection_version"] = self._collection_version
+            payloads.append(payload)
+        return payloads
 
     async def _get_existing(self, job_id: str) -> list[VectorRecord]:
         get_by_job_id = getattr(self._vector_store, "get_by_job_id", None)
@@ -455,8 +483,9 @@ class IndexJobService:
                 return False
             if not (
                 record.payload.get("content_hash") == content_hash
-                and record.payload.get("embedding_provider") == self._embedding_model.provider_name
+                and record.payload.get("embedding_provider") == self._embedding_provider
                 and record.payload.get("collection_name") == self._collection_name
+                and record.payload.get("collection_version") == self._collection_version
                 and record.payload.get("embedding_model_version") == versions[0]
                 and record.payload.get("embedding_dimensions") == versions[1]
                 and record.payload.get("normalization_version") == versions[2]
@@ -496,8 +525,9 @@ class IndexJobService:
             if not (
                 record.payload.get("content_hash") == content_hash
                 and record.payload.get("metadata_hash") == metadata_hash
-                and record.payload.get("embedding_provider") == self._embedding_model.provider_name
+                and record.payload.get("embedding_provider") == self._embedding_provider
                 and record.payload.get("collection_name") == self._collection_name
+                and record.payload.get("collection_version") == self._collection_version
                 and record.payload.get("embedding_model_version") == versions[0]
                 and record.payload.get("embedding_dimensions") == versions[1]
                 and record.payload.get("normalization_version") == versions[2]
@@ -568,8 +598,8 @@ class IndexJobService:
             self._idempotency.pop(oldest)
         self._idempotency[key] = (operation, job_id, fingerprint, response)
 
-    @staticmethod
     def _stale_response(
+        self,
         job_id: UUID,
         source_version: int,
         operation: Literal["UPSERT", "DELETE"],
@@ -582,6 +612,14 @@ class IndexJobService:
             source_version=source_version,
             chunk_count=0,
             embedded=False,
+            embedding_provider=self._embedding_provider,
+            embedding_model_version=self._embedding_model.model_name,
+            embedding_dimensions=self._embedding_model.dimensions,
+            normalization_version=NORMALIZATION_VERSION,
+            chunking_version=CHUNKING_VERSION,
+            index_schema_version=INDEX_SCHEMA_VERSION,
+            collection_name=self._collection_name,
+            collection_version=self._collection_version,
             request_id=UUID(request_id) if request_id is not None else None,
         )
 

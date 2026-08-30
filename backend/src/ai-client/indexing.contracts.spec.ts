@@ -3,11 +3,14 @@ import {
   assertIndexJobDeleteResponse,
   assertIndexJobUpsertRequest,
   assertIndexJobUpsertResponse,
+  assertIndexMetadataScanRequest,
+  assertIndexMetadataScanResponse,
   serializeIndexJobUpsertRequest,
 } from './contracts/indexing.contracts';
 
 const JOB_ID = '11111111-1111-4111-8111-111111111111';
 const COMPANY_ID = '22222222-2222-4222-8222-222222222222';
+const POINT_ID = '33333333-3333-4333-8333-333333333333';
 
 function backendJobProjection() {
   return {
@@ -111,6 +114,140 @@ describe('indexing contracts', () => {
       employment_type: null,
       salary_currency: null,
     });
+  });
+
+  function scanPoint(overrides: Record<string, unknown> = {}) {
+    return {
+      point_id: POINT_ID,
+      job_id: JOB_ID,
+      company_id: COMPANY_ID,
+      source_version: 7,
+      content_hash: 'a'.repeat(64),
+      metadata_hash: 'b'.repeat(64),
+      embedding_provider: 'local',
+      embedding_model_version: 'model-v1',
+      embedding_dimensions: 1024,
+      normalization_version: 'normalization-v1',
+      chunking_version: 'chunking-v1',
+      index_schema_version: 'schema-v1',
+      collection_name: 'jobs_current',
+      collection_version: 'collection-v1',
+      ...overrides,
+    };
+  }
+
+  it('strictly bounds scan cursors and rejects unknown request fields', () => {
+    expect(assertIndexMetadataScanRequest({})).toEqual({ limit: 256 });
+    expect(assertIndexMetadataScanRequest({ cursor: '7', limit: 256 })).toEqual(
+      { cursor: '7', limit: 256 },
+    );
+    expect(
+      assertIndexMetadataScanRequest({
+        cursor: '33333333-3333-4333-8333-333333333333',
+        limit: 1,
+      }),
+    ).toEqual({
+      cursor: '33333333-3333-4333-8333-333333333333',
+      limit: 1,
+    });
+
+    for (const invalid of [
+      { limit: 0 },
+      { limit: 257 },
+      { limit: true },
+      { cursor: '01' },
+      { cursor: '18446744073709551616' },
+      { cursor: 'not-a-cursor' },
+      { unexpected: 'field' },
+    ]) {
+      expect(() => assertIndexMetadataScanRequest(invalid)).toThrow(
+        AiServiceError,
+      );
+    }
+  });
+
+  it('accepts only the metadata-only scan response contract', () => {
+    expect(
+      assertIndexMetadataScanResponse({
+        points: [scanPoint()],
+        next_cursor: '8',
+        request_id: JOB_ID,
+      }),
+    ).toMatchObject({
+      points: [
+        expect.objectContaining({
+          point_id: POINT_ID,
+          content_hash: 'a'.repeat(64),
+          embedding_model_version: 'model-v1',
+          collection_name: 'jobs_current',
+          collection_version: 'collection-v1',
+        }),
+      ],
+      next_cursor: '8',
+      request_id: JOB_ID,
+    });
+
+    for (const invalid of [
+      { points: [scanPoint({ vector: [0.1] })], request_id: JOB_ID },
+      {
+        points: [scanPoint({ content_hash: 'a'.repeat(63) })],
+        request_id: JOB_ID,
+      },
+      {
+        points: [scanPoint({ embedding_dimensions: 0 })],
+        request_id: JOB_ID,
+      },
+      {
+        points: [scanPoint({ normalization_version: ' ' })],
+        request_id: JOB_ID,
+      },
+      {
+        points: [scanPoint({ collection_name: ' ' })],
+        request_id: JOB_ID,
+      },
+      {
+        points: [scanPoint({ collection_name: 'a'.repeat(256) })],
+        request_id: JOB_ID,
+      },
+      {
+        points: [scanPoint({ collection_version: 'a'.repeat(129) })],
+        request_id: JOB_ID,
+      },
+      { points: [], request_id: 'not-a-uuid' },
+      { points: [], request_id: JOB_ID, extra: true },
+    ]) {
+      expect(() => assertIndexMetadataScanResponse(invalid)).toThrow(
+        AiServiceError,
+      );
+    }
+  });
+
+  it('preserves nullable collection metadata and rejects unknown scan fields', () => {
+    expect(
+      assertIndexMetadataScanResponse({
+        points: [
+          scanPoint({
+            collection_name: null,
+            collection_version: null,
+          }),
+        ],
+        request_id: JOB_ID,
+      }),
+    ).toMatchObject({
+      points: [
+        {
+          collection_name: null,
+          collection_version: null,
+        },
+      ],
+    });
+
+    expect(() =>
+      assertIndexMetadataScanResponse({
+        points: [scanPoint({ unexpected: 'field' })],
+        request_id: JOB_ID,
+      }),
+    ).toThrow(AiServiceError);
   });
 
   it('accepts the current response without a trace_id field', () => {

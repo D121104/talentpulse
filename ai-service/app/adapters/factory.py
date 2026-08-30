@@ -41,17 +41,27 @@ def build_embedding_model(settings: Settings) -> EmbeddingModel:
 
 
 def build_vector_store(settings: Settings) -> VectorStore:
+    representation = settings.representation
     if settings.vector_store_provider is VectorStoreProvider.FAKE:
         from app.adapters.fakes import InMemoryVectorStore
 
-        return InMemoryVectorStore(dimensions=settings.effective_embedding_dimensions)
+        return InMemoryVectorStore(
+            collection_name=representation.physical_collection,
+            dimensions=representation.dimensions,
+            embedding_model=representation.model,
+            embedding_provider=representation.provider,
+            collection_version=representation.collection_version,
+        )
     return QdrantVectorStore(
         url=settings.qdrant_url,
-        collection_name=settings.qdrant_collection,
-        alias_name=settings.qdrant_alias,
+        collection_name=representation.physical_collection,
+        alias_name=representation.alias,
         api_key=settings.qdrant_api_key.get_secret_value() if settings.qdrant_api_key else None,
         timeout_seconds=settings.qdrant_timeout_seconds,
-        dimensions=settings.effective_embedding_dimensions,
-        embedding_model=settings.effective_embedding_model,
+        dimensions=representation.dimensions,
+        embedding_model=representation.model,
+        embedding_provider=representation.provider,
         auto_initialize=settings.qdrant_auto_initialize,
+        collection_version=representation.collection_version,
+        allow_legacy_metadata=settings.app_env.value == "local",
     )

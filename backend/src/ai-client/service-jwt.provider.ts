@@ -52,13 +52,12 @@ export class EnvironmentServiceJwtKeyLoader implements ServiceJwtKeyLoader {
       );
       if (!privateKey.trim()) throw new Error('empty private key');
       return privateKey.trim();
-    } catch (error) {
+    } catch {
       throw new AiServiceError(
         AiServiceErrorCode.AI_CLIENT_NOT_CONFIGURED,
         'AI service JWT private key file cannot be loaded',
         503,
         false,
-        error,
       );
     }
   }
@@ -161,7 +160,6 @@ export class FileBackedServiceJwtProvider implements ServiceJwtIssuer {
         'AI service JWT private key is invalid',
         503,
         false,
-        error,
       );
     }
   }

@@ -128,7 +128,6 @@ describe('AiIndexingService', () => {
   });
 });
 
-
 describe('AiIndexingService operational enqueue', () => {
   it('coalesces a repeated same-operation scan without allocating another source version', async () => {
     const harness = createHarness();
@@ -138,18 +137,16 @@ describe('AiIndexingService operational enqueue', () => {
       .mockResolvedValueOnce([{ source_version: '7' }])
       .mockResolvedValue([]);
 
-    const first =
-      await harness.service.enqueueWithNextSourceVersionIfNeeded({
-        aggregateType: AiIndexAggregateType.JOB,
-        aggregateId: JOB_ID,
-        operation: AiIndexOutboxOperation.UPSERT,
-      });
-    const second =
-      await harness.service.enqueueWithNextSourceVersionIfNeeded({
-        aggregateType: AiIndexAggregateType.JOB,
-        aggregateId: JOB_ID,
-        operation: AiIndexOutboxOperation.UPSERT,
-      });
+    const first = await harness.service.enqueueWithNextSourceVersionIfNeeded({
+      aggregateType: AiIndexAggregateType.JOB,
+      aggregateId: JOB_ID,
+      operation: AiIndexOutboxOperation.UPSERT,
+    });
+    const second = await harness.service.enqueueWithNextSourceVersionIfNeeded({
+      aggregateType: AiIndexAggregateType.JOB,
+      aggregateId: JOB_ID,
+      operation: AiIndexOutboxOperation.UPSERT,
+    });
 
     expect(first.enqueued).toBe(true);
     expect(second).toMatchObject({ enqueued: false, outbox: first.outbox });

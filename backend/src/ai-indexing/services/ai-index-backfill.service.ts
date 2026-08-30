@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { resolveAiIndexEnvironment } from '../../config/ai-index-environment';
 import { AiIndexingService } from '../ai-indexing.service';
 import {
   AiIndexAggregateType,
@@ -16,6 +18,7 @@ import {
 export const MAX_AI_INDEX_OPERATION_BATCH_SIZE = 100;
 
 export interface AiIndexBackfillOptions {
+  environment?: string;
   cursor?: string | null;
   limit?: number;
   now?: Date;
@@ -59,6 +62,7 @@ export class AiIndexBackfillService {
   constructor(
     private readonly projectionService: CanonicalJobProjectionService,
     private readonly aiIndexingService: AiIndexingService,
+    private readonly configService: ConfigService,
   ) {}
 
   /** Processes one bounded cursor page and returns the cursor for the caller. */
@@ -66,6 +70,7 @@ export class AiIndexBackfillService {
     options: AiIndexBackfillOptions = {},
   ): Promise<AiIndexBackfillResult> {
     const now = options.now ?? new Date();
+    this.resolveEnvironment(options.environment);
     const page = await this.projectionService.scanJobs(
       options.cursor ?? null,
       boundedBatchSize(options.limit),
@@ -79,6 +84,7 @@ export class AiIndexBackfillService {
     page: CanonicalJobScanPage,
     now = new Date(),
   ): Promise<AiIndexBackfillResult> {
+    this.resolveEnvironment();
     const counters = emptyBackfillCounters();
 
     for (const projection of page.jobs) {
@@ -120,6 +126,7 @@ export class AiIndexBackfillService {
     options: AiIndexBackfillOptions = {},
   ): Promise<AiIndexBackfillResult> {
     const now = options.now ?? new Date();
+    this.resolveEnvironment(options.environment);
     const counters = emptyBackfillCounters();
     let cursor = options.cursor ?? null;
     let hasMore = true;
@@ -135,7 +142,9 @@ export class AiIndexBackfillService {
       cursor = page.nextCursor;
       hasMore = page.hasMore;
       if (hasMore && !cursor) {
-        throw new Error('AI_INDEX_BACKFILL_CURSOR_INVALID: page did not advance');
+        throw new Error(
+          'AI_INDEX_BACKFILL_CURSOR_INVALID: page did not advance',
+        );
       }
     }
 
@@ -145,6 +154,10 @@ export class AiIndexBackfillService {
       nextCursor: cursor,
       hasMore: false,
     };
+  }
+
+  private resolveEnvironment(value?: string): string {
+    return resolveAiIndexEnvironment(this.configService, value);
   }
 
   private recordDisposition(
@@ -219,7 +232,9 @@ function addBackfillCounters(
   target: AiIndexBackfillCounters,
   source: AiIndexBackfillCounters,
 ): void {
-  for (const key of Object.keys(target) as Array<keyof AiIndexBackfillCounters>) {
+  for (const key of Object.keys(target) as Array<
+    keyof AiIndexBackfillCounters
+  >) {
     target[key] += source[key];
   }
 }

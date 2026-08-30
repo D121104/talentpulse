@@ -67,6 +67,60 @@ const indexJobDeleteRequest: IndexJobDeleteRequest = {
   source_version: 4,
 };
 
+function createAuditRecorder() {
+  const handles = [
+    { providerAttemptId: '11111111-1111-4111-8111-111111111111' },
+    { providerAttemptId: '22222222-2222-4222-8222-222222222222' },
+    { providerAttemptId: '33333333-3333-4333-8333-333333333333' },
+  ];
+  return {
+    handles,
+    start: jest.fn().mockImplementation(async () => handles.shift()),
+    markRequestSent: jest.fn().mockResolvedValue(undefined),
+    succeed: jest.fn().mockResolvedValue(undefined),
+    fail: jest.fn().mockResolvedValue(undefined),
+    unknown: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+function createPersistentAuditRecorder() {
+  const rows = new Map<
+    string,
+    {
+      requestId: string;
+      traceId: string;
+      operationAttemptId?: string | null;
+      outboxId?: string | null;
+      jobId?: string | null;
+      attemptNumber: number;
+      requestSent: boolean;
+      status: 'STARTED' | 'SUCCEEDED';
+    }
+  >();
+  const providerAttemptId = '12121212-1212-4121-8121-121212121212';
+  return {
+    rows,
+    start: jest.fn(async (input) => {
+      rows.set(providerAttemptId, {
+        ...input,
+        requestSent: false,
+        status: 'STARTED',
+      });
+      return { providerAttemptId };
+    }),
+    markRequestSent: jest.fn(async () => {
+      const row = rows.get(providerAttemptId);
+      if (row) row.requestSent = true;
+    }),
+    succeed: jest.fn(async () => {
+      const row = rows.get(providerAttemptId);
+      if (row) row.status = 'SUCCEEDED';
+    }),
+    fail: jest.fn(),
+    unknown: jest.fn(),
+  };
+}
+
 describe('AiServiceClient', () => {
   it('sends canonical JSON, service auth, and correlation headers', async () => {
     const transport: AiServiceHttpTransport = {
@@ -250,6 +304,367 @@ describe('AiServiceClient', () => {
     expect((secondBody.job as Record<string, unknown>).description).toBe(
       'Build APIs',
     );
+  });
+
+  it('records one successful provider attempt while keeping logical IDs stable and traces fresh', async () => {
+    const requestId = '99999999-9999-4999-8999-999999999999';
+    const operationAttemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const traceIds = [
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ];
+    const transport: AiServiceHttpTransport = {
+      post: jest.fn().mockImplementation(async () => ({
+        request_id: requestId,
+        job_id: indexJobRequest.job.job_id,
+        operation: 'UPSERT',
+        status: 'INDEXED',
+        source_version: indexJobRequest.source_version,
+        chunk_count: 1,
+        embedded: true,
+      })),
+    };
+    const auth: ServiceJwtIssuer = {
+      issue: jest
+        .fn()
+        .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+    };
+    const audit = createAuditRecorder();
+    const client = new AiServiceClient(
+      config as never,
+      transport,
+      auth,
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      jest.fn(() => traceIds.shift() as string),
+      jest.fn(() => operationAttemptId),
+      audit as never,
+    );
+
+    await client.indexJob(indexJobRequest, {
+      requestId,
+      operationAttemptId,
+      jobId: indexJobRequest.job.job_id,
+      attemptNumber: 2,
+    });
+    await client.indexJob(indexJobRequest, {
+      requestId,
+      operationAttemptId,
+      jobId: indexJobRequest.job.job_id,
+      attemptNumber: 3,
+    });
+
+    expect(audit.start).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        requestId,
+        operationAttemptId,
+        jobId: indexJobRequest.job.job_id,
+        attemptNumber: 2,
+      }),
+    );
+    expect(audit.start).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        requestId,
+        operationAttemptId,
+        jobId: indexJobRequest.job.job_id,
+        attemptNumber: 3,
+      }),
+    );
+    expect(audit.start.mock.calls[0][0].traceId).not.toBe(
+      audit.start.mock.calls[1][0].traceId,
+    );
+    expect(audit.markRequestSent).toHaveBeenCalledTimes(2);
+    expect(audit.succeed).toHaveBeenCalledTimes(2);
+    expect(audit.fail).not.toHaveBeenCalled();
+    expect(audit.unknown).not.toHaveBeenCalled();
+  });
+
+  it('closes pre-transport auth failures as FAILED and transport timeouts as UNKNOWN', async () => {
+    const requestId = '99999999-9999-4999-8999-999999999999';
+    const traceId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const authFailureAudit = createAuditRecorder();
+    const authFailureClient = new AiServiceClient(
+      config as never,
+      { post: jest.fn() },
+      { issue: jest.fn().mockRejectedValue({ code: 'ECONNREFUSED' }) } as never,
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => traceId,
+      () => requestId,
+      authFailureAudit as never,
+    );
+
+    await expect(
+      authFailureClient.indexJob(indexJobRequest, { requestId, traceId }),
+    ).rejects.toMatchObject({ code: 'AI_DEPENDENCY_UNAVAILABLE' });
+    expect(authFailureAudit.fail).toHaveBeenCalledWith(
+      expect.anything(),
+      'AI_DEPENDENCY_UNAVAILABLE',
+      { requestSent: false },
+    );
+    expect(authFailureAudit.unknown).not.toHaveBeenCalled();
+
+    const timeoutAudit = createAuditRecorder();
+    const timeoutClient = new AiServiceClient(
+      config as never,
+      { post: jest.fn().mockRejectedValue({ code: 'ECONNABORTED' }) },
+      {
+        issue: jest
+          .fn()
+          .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+      },
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => traceId,
+      () => requestId,
+      timeoutAudit as never,
+    );
+
+    await expect(
+      timeoutClient.indexJob(indexJobRequest, { requestId, traceId }),
+    ).rejects.toMatchObject({ code: 'AI_PROVIDER_TIMEOUT' });
+    expect(timeoutAudit.unknown).toHaveBeenCalledWith(
+      expect.anything(),
+      'AI_PROVIDER_TIMEOUT',
+      { requestSent: true },
+    );
+    expect(timeoutAudit.fail).not.toHaveBeenCalled();
+  });
+
+  it('scans metadata through the JobsIndex endpoint with auth, timeout, and correlation headers', async () => {
+    const requestId = '99999999-9999-4999-8999-999999999999';
+    const traceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const transport: AiServiceHttpTransport = {
+      post: jest.fn().mockResolvedValue({
+        points: [],
+        next_cursor: null,
+        request_id: requestId,
+      }),
+    };
+    const auth: ServiceJwtIssuer = {
+      issue: jest
+        .fn()
+        .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+    };
+    const client = new AiServiceClient(
+      config as never,
+      transport,
+      auth,
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => traceId,
+      () => requestId,
+    );
+
+    await expect(
+      client.scanIndexPoints({ cursor: '7', limit: 2 }, { requestId, traceId }),
+    ).resolves.toMatchObject({
+      points: [],
+      next_cursor: null,
+      request_id: requestId,
+    });
+
+    expect(auth.issue).toHaveBeenCalledWith(ServiceJwtScope.JobsIndex);
+    expect(transport.post).toHaveBeenCalledWith(
+      'http://ai-service:8000/internal/v1/index/points/scan',
+      { cursor: '7', limit: 2 },
+      expect.objectContaining({
+        timeoutMs: expect.any(Number),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer service-token',
+          'X-Request-ID': requestId,
+          'X-Trace-ID': traceId,
+        }),
+      }),
+    );
+  });
+
+  it('rejects a metadata scan response correlated to a different request', async () => {
+    const requestId = '99999999-9999-4999-8999-999999999999';
+    const transport: AiServiceHttpTransport = {
+      post: jest.fn().mockResolvedValue({
+        points: [],
+        next_cursor: null,
+        request_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      }),
+    };
+    const auth: ServiceJwtIssuer = {
+      issue: jest
+        .fn()
+        .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+    };
+    const client = new AiServiceClient(
+      config as never,
+      transport,
+      auth,
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      () => requestId,
+    );
+
+    await expect(
+      client.scanIndexPoints({}, { requestId }),
+    ).rejects.toMatchObject({
+      code: 'AI_INVALID_MODEL_OUTPUT',
+      status: 502,
+    });
+  });
+
+  it.each(['DELETED', 'ALREADY_DELETED'] as const)(
+    'persists the %s delete-attempt lifecycle with canonical job and outbox correlation',
+    async (status) => {
+      const requestId = '99999999-9999-4999-8999-999999999999';
+      const traceId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const operationAttemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const outboxId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+      const audit = createPersistentAuditRecorder();
+      const transport: AiServiceHttpTransport = {
+        post: jest.fn().mockResolvedValue({
+          request_id: requestId,
+          job_id: indexJobDeleteRequest.job_id,
+          operation: 'DELETE',
+          status,
+          source_version: indexJobDeleteRequest.source_version,
+          point_ids: [],
+          deleted_point_ids: [],
+          chunk_count: 0,
+          embedded: false,
+        }),
+      };
+      const client = new AiServiceClient(
+        config as never,
+        transport,
+        {
+          issue: jest
+            .fn()
+            .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+        },
+        new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+        () => traceId,
+        () => operationAttemptId,
+        audit as never,
+      );
+
+      await expect(
+        client.deleteIndexedJob(indexJobDeleteRequest, {
+          requestId,
+          operationAttemptId,
+          outboxId,
+          jobId: indexJobDeleteRequest.job_id,
+          attemptNumber: 2,
+        }),
+      ).resolves.toMatchObject({ status });
+
+      expect(audit.rows.get('12121212-1212-4121-8121-121212121212')).toEqual(
+        expect.objectContaining({
+          requestId,
+          traceId,
+          operationAttemptId,
+          outboxId,
+          jobId: indexJobDeleteRequest.job_id,
+          attemptNumber: 2,
+          requestSent: true,
+          status: 'SUCCEEDED',
+        }),
+      );
+      expect(audit.markRequestSent).toHaveBeenCalledTimes(1);
+      expect(audit.succeed).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('fails closed before HTTP when the audit handoff update is unavailable', async () => {
+    const transport: AiServiceHttpTransport = { post: jest.fn() };
+    const auth: ServiceJwtIssuer = {
+      issue: jest
+        .fn()
+        .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+    };
+    const audit = createAuditRecorder();
+    audit.markRequestSent.mockRejectedValueOnce(
+      new Error('database unavailable'),
+    );
+    const client = new AiServiceClient(
+      config as never,
+      transport,
+      auth,
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      audit as never,
+    );
+
+    await expect(
+      client.deleteIndexedJob(indexJobDeleteRequest),
+    ).rejects.toMatchObject({
+      code: 'AI_PROVIDER_AUDIT_PERSISTENCE_FAILED',
+      status: 503,
+      retryable: true,
+    });
+    expect(transport.post).not.toHaveBeenCalled();
+    expect(audit.fail).toHaveBeenCalledWith(
+      expect.anything(),
+      'AI_PROVIDER_AUDIT_PERSISTENCE_FAILED',
+      { requestSent: false },
+    );
+  });
+
+  it('surfaces a retryable audit error when a sent request cannot be terminalized', async () => {
+    const requestId = '99999999-9999-4999-8999-999999999999';
+    const audit = createAuditRecorder();
+    audit.fail.mockRejectedValueOnce(new Error('database unavailable'));
+    const transport: AiServiceHttpTransport = {
+      post: jest.fn().mockRejectedValue({ response: { status: 422 } }),
+    };
+    const client = new AiServiceClient(
+      config as never,
+      transport,
+      {
+        issue: jest
+          .fn()
+          .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+      },
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      () => requestId,
+      audit as never,
+    );
+
+    await expect(
+      client.deleteIndexedJob(indexJobDeleteRequest, { requestId }),
+    ).rejects.toMatchObject({
+      code: 'AI_PROVIDER_AUDIT_PERSISTENCE_FAILED',
+      status: 503,
+      retryable: true,
+    });
+    expect(audit.fail).toHaveBeenCalledWith(
+      expect.anything(),
+      'AI_DEPENDENCY_UNAVAILABLE',
+      { requestSent: true },
+    );
+  });
+
+  it('fails closed before HTTP when provider-attempt audit creation is unavailable', async () => {
+    const transport: AiServiceHttpTransport = { post: jest.fn() };
+    const auth: ServiceJwtIssuer = { issue: jest.fn() } as never;
+    const audit = createAuditRecorder();
+    audit.start.mockRejectedValueOnce(new Error('foreign key violation'));
+    const client = new AiServiceClient(
+      config as never,
+      transport,
+      auth,
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      audit as never,
+    );
+
+    await expect(
+      client.deleteIndexedJob(indexJobDeleteRequest),
+    ).rejects.toMatchObject({
+      code: 'AI_PROVIDER_AUDIT_PERSISTENCE_FAILED',
+      status: 503,
+      retryable: true,
+    });
+    expect(auth.issue).not.toHaveBeenCalled();
+    expect(transport.post).not.toHaveBeenCalled();
   });
 
   it('deletes through the JobsIndex endpoint without adding a RAG identity body', async () => {

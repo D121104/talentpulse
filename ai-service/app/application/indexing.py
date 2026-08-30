@@ -11,9 +11,32 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from app.core.index_representation import CHUNKING_VERSION, INDEX_SCHEMA_VERSION, NORMALIZATION_VERSION
+from app.core.index_representation import (
+    CHUNKING_VERSION,
+    INDEX_SCHEMA_VERSION,
+    NORMALIZATION_VERSION,
+)
 from app.schemas.contracts import Salary
 from app.schemas.indexing import CanonicalJobSnapshot
+
+__all__ = [
+    "CHUNKING_VERSION",
+    "DEFAULT_MAX_CHUNK_CHARS",
+    "INDEX_SCHEMA_VERSION",
+    "NORMALIZATION_VERSION",
+    "POINT_NAMESPACE",
+    "JobChunk",
+    "build_chunks",
+    "build_search_text",
+    "compute_content_hash",
+    "compute_job_content_hash",
+    "compute_metadata_hash",
+    "normalize_text",
+    "normalized_job_metadata",
+    "point_id_for_job",
+    "point_ids_for_job",
+]
+
 DEFAULT_MAX_CHUNK_CHARS = 1_900
 POINT_NAMESPACE = uuid5(NAMESPACE_URL, "https://talentpulse.ai/index/jobs")
 _MIN_BODY_BUDGET = 128

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -11,13 +11,15 @@ from app.adapters import build_chat_model, build_embedding_model, build_vector_s
 from app.application.index_job_service import IndexJobService
 from app.core.errors import ServiceError, error_response
 from app.core.logging import RequestIdMiddleware, configure_logging
-from app.core.settings import Settings, get_settings
+from app.core.settings import EmbeddingProvider, Settings, get_settings
+from app.ports import VectorPointMetadata, VectorStore
 from app.schemas import (
     IndexJobDeleteRequest,
     IndexJobResponse,
     IndexJobUpsertRequest,
     IndexMetadataScanRequest,
     IndexMetadataScanResponse,
+    IndexPointMetadata,
     RagGenerateRequest,
     RagRetrieveRequest,
 )
@@ -29,6 +31,25 @@ from app.security.dependencies import (
 from app.security.service_auth import load_public_key
 
 logger = logging.getLogger("ai-service")
+
+
+def _to_index_point_metadata(point: VectorPointMetadata) -> IndexPointMetadata:
+    return IndexPointMetadata(
+        point_id=point.point_id,
+        job_id=point.job_id,
+        company_id=point.company_id,
+        source_version=point.source_version,
+        content_hash=point.content_hash,
+        metadata_hash=point.metadata_hash,
+        embedding_provider=point.embedding_provider,
+        embedding_model_version=point.embedding_model_version,
+        embedding_dimensions=point.embedding_dimensions,
+        normalization_version=point.normalization_version,
+        chunking_version=point.chunking_version,
+        index_schema_version=point.index_schema_version,
+        collection_name=point.collection_name,
+        collection_version=point.collection_version,
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -76,10 +97,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             auth_ready = public_key is not None
         except (OSError, ValueError):
             auth_ready = False
+        embedding_model = request.app.state.embedding_model
+        if settings.embedding_provider is EmbeddingProvider.BEDROCK_COHERE:
+            provider_access = (
+                "verified" if getattr(embedding_model, "access_verified", False) else "unverified"
+            )
+        else:
+            provider_access = "not_required"
         checks = {
             "config": "ok",
             "qdrant": "ok" if qdrant_ready else "unavailable",
             "serviceAuth": "ok" if auth_ready else "misconfigured",
+            "providerAccess": provider_access,
         }
         if not qdrant_ready or not auth_ready:
             return JSONResponse(
@@ -126,9 +155,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: IndexJobUpsertRequest,
         http_request: Request,
     ) -> IndexJobResponse:
-        return await http_request.app.state.index_job_service.upsert(
-            payload, request_id=http_request.state.request_id
-        )
+        index_job_service = cast(IndexJobService, http_request.app.state.index_job_service)
+        return await index_job_service.upsert(payload, request_id=http_request.state.request_id)
 
     @app.post(
         "/internal/v1/index/jobs/delete",
@@ -139,9 +167,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: IndexJobDeleteRequest,
         http_request: Request,
     ) -> IndexJobResponse:
-        return await http_request.app.state.index_job_service.delete(
-            payload, request_id=http_request.state.request_id
-        )
+        index_job_service = cast(IndexJobService, http_request.app.state.index_job_service)
+        return await index_job_service.delete(payload, request_id=http_request.state.request_id)
 
     @app.post(
         "/internal/v1/index/points/scan",
@@ -153,27 +180,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         http_request: Request,
     ) -> IndexMetadataScanResponse:
         try:
-            page = await http_request.app.state.vector_store.scan_metadata(
-                payload.cursor, payload.limit
-            )
+            vector_store = cast(VectorStore, http_request.app.state.vector_store)
+            page = await vector_store.scan_metadata(payload.cursor, payload.limit)
             response = IndexMetadataScanResponse(
-                points=[
-                    {
-                        "point_id": point.point_id,
-                        "job_id": point.job_id,
-                        "company_id": point.company_id,
-                        "source_version": point.source_version,
-                        "content_hash": point.content_hash,
-                        "metadata_hash": point.metadata_hash,
-                        "embedding_provider": point.embedding_provider,
-                        "embedding_model_version": point.embedding_model_version,
-                        "embedding_dimensions": point.embedding_dimensions,
-                        "normalization_version": point.normalization_version,
-                        "chunking_version": point.chunking_version,
-                        "index_schema_version": point.index_schema_version,
-                    }
-                    for point in page.points
-                ],
+                points=[_to_index_point_metadata(point) for point in page.points],
                 next_cursor=page.next_cursor,
                 request_id=http_request.state.request_id,
             )

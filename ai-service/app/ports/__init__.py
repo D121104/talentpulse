@@ -1,13 +1,13 @@
 from .auth import ServiceAuthContext, ServiceTokenVerifier
 from .models import (
+    MAX_SCAN_LIMIT,
+    SCAN_METADATA_PAYLOAD_FIELDS,
     ChatModel,
     ChatRequest,
     ChatResponse,
     EmbeddingInputType,
     EmbeddingModel,
     EmbeddingResponse,
-    MAX_SCAN_LIMIT,
-    SCAN_METADATA_PAYLOAD_FIELDS,
     VectorMatch,
     VectorMetadataScanPage,
     VectorPointMetadata,

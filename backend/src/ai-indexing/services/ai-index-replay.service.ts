@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, Raw, Repository } from 'typeorm';
 import { validate as isUuid } from 'uuid';
+import { resolveAiIndexEnvironment } from '../../config/ai-index-environment';
 import {
   AiIndexAggregateType,
   AiIndexOutbox,
@@ -34,21 +36,27 @@ export class AiIndexReplayService {
   constructor(
     @InjectRepository(AiIndexOutbox)
     private readonly outboxRepository: Repository<AiIndexOutbox>,
+    private readonly configService: ConfigService = new ConfigService({
+      AI_INDEX_ENVIRONMENT: 'local',
+      AI_INDEX_OUTBOX_ENVIRONMENT: 'local',
+    }),
   ) {}
 
-  async replayOutbox(outboxId: string): Promise<boolean> {
+  async replayOutbox(outboxId: string, environment?: string): Promise<boolean> {
+    this.resolveEnvironment(environment);
     if (!isUuid(outboxId)) return false;
-    return this.outboxRepository.manager.transaction(async (manager) => {
-      const repository = manager.getRepository(AiIndexOutbox);
-      const outbox = await repository.findOne({ where: { _id: outboxId } });
-      if (!outbox || !prepareAiIndexOutboxReplay(outbox, new Date())) return false;
-      await repository.save(outbox);
-      return true;
-    });
+    return this.outboxRepository.manager.transaction((manager) =>
+      replayAiIndexOutboxAtomically(manager, outboxId, new Date()),
+    );
   }
 
   /** Replays only failed/dead commands belonging to one canonical job. */
-  async replayJob(jobId: string, limit = 100): Promise<AiIndexReplayResult> {
+  async replayJob(
+    jobId: string,
+    limit = 100,
+    environment?: string,
+  ): Promise<AiIndexReplayResult> {
+    this.resolveEnvironment(environment);
     if (!isUuid(jobId)) return emptyReplayResult();
     const boundedLimit = boundReplayLimit(limit);
     const rows = await this.outboxRepository.find({
@@ -60,25 +68,32 @@ export class AiIndexReplayService {
       order: { sourceVersion: 'ASC', _id: 'ASC' },
       take: boundedLimit,
     });
-    return this.replayRows(rows);
+    return this.replayRows(rows, environment);
   }
 
   /** Replays a bounded deterministic batch of failed/dead commands. */
-  async replayAll(limit = 100): Promise<AiIndexReplayResult> {
+  async replayAll(
+    limit = 100,
+    environment?: string,
+  ): Promise<AiIndexReplayResult> {
+    this.resolveEnvironment(environment);
     const boundedLimit = boundReplayLimit(limit);
     const rows = await this.outboxRepository.find({
       where: { status: In([...REPLAYABLE_STATUSES]) },
       order: { createdAt: 'ASC', _id: 'ASC' },
       take: boundedLimit,
     });
-    return this.replayRows(rows);
+    return this.replayRows(rows, environment);
   }
 
-  private async replayRows(rows: AiIndexOutbox[]): Promise<AiIndexReplayResult> {
+  private async replayRows(
+    rows: AiIndexOutbox[],
+    environment?: string,
+  ): Promise<AiIndexReplayResult> {
     const result = emptyReplayResult();
     result.requested = rows.length;
     for (const row of rows) {
-      if (await this.replayOutbox(row._id)) {
+      if (await this.replayOutbox(row._id, environment)) {
         result.replayed += 1;
         result.outboxIds.push(row._id);
       } else {
@@ -87,6 +102,52 @@ export class AiIndexReplayService {
     }
     return result;
   }
+
+  private resolveEnvironment(value?: string): string {
+    return resolveAiIndexEnvironment(this.configService, value);
+  }
+}
+
+/**
+ * Atomically returns one failed/dead command to the dispatcher. The conditional
+ * UPDATE is the concurrency boundary: only the caller that changes a currently
+ * replayable row receives true; all others receive false without a network
+ * call. It intentionally preserves attempts and error audit fields.
+ */
+export async function replayAiIndexOutboxAtomically(
+  manager: EntityManager,
+  outboxId: string,
+  now: Date,
+): Promise<boolean> {
+  const repository = manager.getRepository(AiIndexOutbox);
+  const result = await repository.update(
+    {
+      _id: outboxId,
+      status: In([...REPLAYABLE_STATUSES]),
+      // A fully exhausted row at the database maximum cannot receive another
+      // bounded delivery. PostgreSQL's outbox constraint also guarantees
+      // attempts <= max_attempts for all persisted rows.
+      attempts: Raw(
+        (attempts) =>
+          `(${attempts} < "max_attempts" OR ("status" = 'DEAD_LETTER' AND "max_attempts" < :maxReplayAttempts))`,
+        { maxReplayAttempts: MAX_REPLAY_ATTEMPTS },
+      ),
+    },
+    {
+      status: AiIndexOutboxStatus.PENDING,
+      nextRetryAt: now,
+      leasedAt: null,
+      leaseExpiresAt: null,
+      leaseOwner: null,
+      processedAt: null,
+      // Only a dead-letter command that exhausted its current delivery budget
+      // gets exactly one additional attempt, capped by max_attempts <= 100.
+      // Rows with remaining budget keep their existing delivery ceiling.
+      maxAttempts: () =>
+        `CASE WHEN "status" = 'DEAD_LETTER' AND "attempts" >= "max_attempts" THEN "attempts" + 1 ELSE "max_attempts" END`,
+    },
+  );
+  return result.affected === 1;
 }
 
 /** Shared state transition used by both the operational service and dispatcher. */

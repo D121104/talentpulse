@@ -22,10 +22,10 @@ from .indexing import (
     IndexJobDeleteResponse,
     IndexJobResponse,
     IndexJobUpsertRequest,
+    IndexJobUpsertResponse,
     IndexMetadataScanRequest,
     IndexMetadataScanResponse,
     IndexPointMetadata,
-    IndexJobUpsertResponse,
 )
 
 __all__ = [
