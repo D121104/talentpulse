@@ -16,12 +16,15 @@ import {
 } from './canonical-job-lifecycle';
 
 export const MAX_AI_INDEX_OPERATION_BATCH_SIZE = 100;
+export const MAX_AI_INDEX_BACKFILL_OPERATIONS = 100_000;
 
 export interface AiIndexBackfillOptions {
   environment?: string;
   cursor?: string | null;
   limit?: number;
   now?: Date;
+  dryRun?: boolean;
+  maxOperations?: number;
 }
 
 export interface AiIndexBackfillCounters {
@@ -43,9 +46,13 @@ export interface AiIndexBackfillCounters {
 }
 
 export interface AiIndexBackfillResult extends AiIndexBackfillCounters {
+  dryRun?: true;
+  upsertPlanned?: number;
+  deletePlanned?: number;
   cursor: string | null;
   nextCursor: string | null;
   hasMore: boolean;
+  operationBudgetExhausted?: true;
 }
 
 /**
@@ -70,22 +77,27 @@ export class AiIndexBackfillService {
     options: AiIndexBackfillOptions = {},
   ): Promise<AiIndexBackfillResult> {
     const now = options.now ?? new Date();
+    const maxOperations = boundedMaxOperations(options.maxOperations);
     this.resolveEnvironment(options.environment);
     const page = await this.projectionService.scanJobs(
       options.cursor ?? null,
-      boundedBatchSize(options.limit),
+      boundedPageSize(options.limit, maxOperations),
       now,
     );
-    return this.backfillPage(page, now);
+    const result = await this.backfillPage(page, now, options.dryRun === true);
+    return withOperationBudgetStatus(result, maxOperations);
   }
 
   /** Explicit page boundary useful for CLI orchestration and unit tests. */
   async backfillPage(
     page: CanonicalJobScanPage,
     now = new Date(),
+    dryRun = false,
   ): Promise<AiIndexBackfillResult> {
     this.resolveEnvironment();
     const counters = emptyBackfillCounters();
+    let upsertPlanned = 0;
+    let deletePlanned = 0;
 
     for (const projection of page.jobs) {
       counters.scanned += 1;
@@ -96,6 +108,15 @@ export class AiIndexBackfillService {
         disposition === 'ACTIVE'
           ? AiIndexOutboxOperation.UPSERT
           : AiIndexOutboxOperation.DELETE;
+      if (dryRun) {
+        if (operation === AiIndexOutboxOperation.UPSERT) {
+          upsertPlanned += 1;
+        } else {
+          deletePlanned += 1;
+        }
+        continue;
+      }
+
       const result =
         await this.aiIndexingService.enqueueWithNextSourceVersionIfNeeded({
           aggregateType: AiIndexAggregateType.JOB,
@@ -115,6 +136,7 @@ export class AiIndexBackfillService {
 
     return {
       ...counters,
+      ...(dryRun ? { dryRun: true, upsertPlanned, deletePlanned } : {}),
       cursor: page.nextCursor,
       nextCursor: page.nextCursor,
       hasMore: page.hasMore,
@@ -126,30 +148,58 @@ export class AiIndexBackfillService {
     options: AiIndexBackfillOptions = {},
   ): Promise<AiIndexBackfillResult> {
     const now = options.now ?? new Date();
+    const maxOperations = boundedMaxOperations(options.maxOperations);
     this.resolveEnvironment(options.environment);
     const counters = emptyBackfillCounters();
+    let upsertPlanned = 0;
+    let deletePlanned = 0;
     let cursor = options.cursor ?? null;
     let hasMore = true;
+    let remainingOperations = maxOperations;
 
     while (hasMore) {
       const page = await this.projectionService.scanJobs(
         cursor,
-        boundedBatchSize(options.limit),
+        boundedPageSize(options.limit, remainingOperations),
         now,
       );
-      const result = await this.backfillPage(page, now);
+      const result = await this.backfillPage(
+        page,
+        now,
+        options.dryRun === true,
+      );
       addBackfillCounters(counters, result);
-      cursor = page.nextCursor;
-      hasMore = page.hasMore;
-      if (hasMore && !cursor) {
+      upsertPlanned += result.upsertPlanned ?? 0;
+      deletePlanned += result.deletePlanned ?? 0;
+      if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor)) {
         throw new Error(
           'AI_INDEX_BACKFILL_CURSOR_INVALID: page did not advance',
         );
+      }
+      cursor = page.nextCursor;
+      hasMore = page.hasMore;
+      if (remainingOperations !== undefined) {
+        remainingOperations -= result.scanned;
+        if (remainingOperations === 0 && hasMore) {
+          return {
+            ...counters,
+            ...(options.dryRun === true
+              ? { dryRun: true, upsertPlanned, deletePlanned }
+              : {}),
+            cursor,
+            nextCursor: cursor,
+            hasMore: true,
+            operationBudgetExhausted: true,
+          };
+        }
       }
     }
 
     return {
       ...counters,
+      ...(options.dryRun === true
+        ? { dryRun: true, upsertPlanned, deletePlanned }
+        : {}),
       cursor,
       nextCursor: cursor,
       hasMore: false,
@@ -206,6 +256,46 @@ export function boundedBatchSize(value: number | undefined): number {
     throw new Error('AI_INDEX_BATCH_SIZE must be a positive safe integer');
   }
   return Math.min(value, MAX_AI_INDEX_OPERATION_BATCH_SIZE);
+}
+
+export function boundedMaxOperations(
+  value: number | undefined,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_AI_INDEX_BACKFILL_OPERATIONS
+  ) {
+    throw new Error(
+      'AI_INDEX_MAX_OPERATIONS must be an integer between 1 and 100000',
+    );
+  }
+  return value;
+}
+
+function boundedPageSize(
+  limit: number | undefined,
+  remainingOperations: number | undefined,
+): number {
+  const pageSize = boundedBatchSize(limit);
+  return remainingOperations === undefined
+    ? pageSize
+    : Math.min(pageSize, remainingOperations);
+}
+
+function withOperationBudgetStatus(
+  result: AiIndexBackfillResult,
+  maxOperations: number | undefined,
+): AiIndexBackfillResult {
+  if (
+    maxOperations !== undefined &&
+    result.scanned === maxOperations &&
+    result.hasMore
+  ) {
+    return { ...result, operationBudgetExhausted: true };
+  }
+  return result;
 }
 
 function emptyBackfillCounters(): AiIndexBackfillCounters {

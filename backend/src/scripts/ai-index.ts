@@ -21,6 +21,7 @@ const COMMANDS = new Set([
 ]);
 const MAX_LIMIT = 100;
 const MAX_DRAIN_BATCHES = 1_000;
+const MAX_BACKFILL_OPERATIONS = 100_000;
 
 export interface ParsedCliArguments {
   command: string;
@@ -32,6 +33,8 @@ export interface ParsedCliArguments {
   batchSize?: number;
   outboxId?: string;
   jobId?: string;
+  dryRun?: boolean;
+  maxOperations?: number;
 }
 
 type OperationalContext = Pick<INestApplicationContext, 'get' | 'close'>;
@@ -48,6 +51,10 @@ export function parseAiIndexArguments(argv: string[]): ParsedCliArguments {
   const parsed: ParsedCliArguments = { command };
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
+    if (argument === '--dry-run') {
+      parsed.dryRun = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith('--')) {
       throw new Error('Missing value for ' + argument);
@@ -73,6 +80,13 @@ export function parseAiIndexArguments(argv: string[]): ParsedCliArguments {
         break;
       case '--limit':
         parsed.limit = parseBoundedInteger(value, '--limit', MAX_LIMIT);
+        break;
+      case '--max-operations':
+        parsed.maxOperations = parseBoundedInteger(
+          value,
+          '--max-operations',
+          MAX_BACKFILL_OPERATIONS,
+        );
         break;
       case '--max-batches':
         parsed.maxBatches = parseBoundedInteger(
@@ -108,6 +122,12 @@ export function parseAiIndexArguments(argv: string[]): ParsedCliArguments {
   }
   if (command !== 'reconcile-qdrant' && parsed.scanRunId) {
     throw new Error('--scan-run-id is valid only for reconcile-qdrant');
+  }
+  if (command !== 'backfill' && parsed.dryRun) {
+    throw new Error('--dry-run is valid only for backfill');
+  }
+  if (command !== 'backfill' && parsed.maxOperations !== undefined) {
+    throw new Error('--max-operations is valid only for backfill');
   }
   if (command !== 'drain' && (parsed.maxBatches || parsed.batchSize)) {
     throw new Error('--max-batches and --batch-size are valid only for drain');
@@ -161,6 +181,8 @@ export async function runAiIndexCommand(
           environment,
           cursor: args.cursor,
           limit: args.limit,
+          maxOperations: args.maxOperations,
+          ...(args.dryRun ? { dryRun: true } : {}),
         });
       case 'reconcile':
         return context.get(AiIndexReconcileService).reconcileAll({

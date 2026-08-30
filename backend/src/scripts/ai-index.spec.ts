@@ -33,10 +33,81 @@ describe('parseAiIndexArguments', () => {
     });
   });
 
+  it('parses max operations with dry-run for backfill', () => {
+    expect(
+      parseAiIndexArguments([
+        'backfill',
+        '--environment',
+        'local',
+        '--max-operations',
+        '100000',
+        '--dry-run',
+      ]),
+    ).toEqual({
+      command: 'backfill',
+      environment: 'local',
+      maxOperations: 100000,
+      dryRun: true,
+    });
+  });
+
+  it('parses dry-run only for backfill', () => {
+    expect(
+      parseAiIndexArguments([
+        'backfill',
+        '--environment',
+        'local',
+        '--dry-run',
+      ]),
+    ).toEqual({ command: 'backfill', environment: 'local', dryRun: true });
+  });
+
   it.each([
     [['reconcile-qdrant'], '--environment is required'],
+    [
+      ['reconcile', '--environment', 'local', '--dry-run'],
+      '--dry-run is valid only for backfill',
+    ],
+    [
+      ['reconcile-qdrant', '--environment', 'local', '--dry-run'],
+      '--dry-run is valid only for backfill',
+    ],
+    [
+      ['replay', '--environment', 'local', '--job-id', UUID, '--dry-run'],
+      '--dry-run is valid only for backfill',
+    ],
+    [
+      ['drain', '--environment', 'local', '--dry-run'],
+      '--dry-run is valid only for backfill',
+    ],
     [['drain', '--environment', 'local', '--max-batches'], 'Missing value'],
     [['drain', '--environment', 'local', '--batch-size', '0'], '--batch-size'],
+    [
+      ['backfill', '--environment', 'local', '--max-operations', '0'],
+      '--max-operations',
+    ],
+    [
+      ['backfill', '--environment', 'local', '--max-operations', '1.5'],
+      '--max-operations',
+    ],
+    [
+      ['backfill', '--environment', 'local', '--max-operations', '100001'],
+      '--max-operations',
+    ],
+    [
+      [
+        'backfill',
+        '--environment',
+        'local',
+        '--max-operations',
+        '9007199254740992',
+      ],
+      '--max-operations',
+    ],
+    [
+      ['reconcile', '--environment', 'local', '--max-operations', '1'],
+      '--max-operations is valid only for backfill',
+    ],
     [
       ['reconcile-qdrant', '--environment', 'local', '--scan-run-id', 'bad'],
       'UUID',
@@ -121,7 +192,16 @@ describe('runAiIndexCommand', () => {
 
     await expect(
       runAiIndexCommand(
-        ['backfill', '--environment', 'local', '--limit', '4'],
+        [
+          'backfill',
+          '--environment',
+          'local',
+          '--limit',
+          '4',
+          '--max-operations',
+          '7',
+          '--dry-run',
+        ],
         harness.context as never,
       ),
     ).resolves.toEqual({ scanned: 1 });
@@ -129,6 +209,8 @@ describe('runAiIndexCommand', () => {
       environment: 'local',
       cursor: undefined,
       limit: 4,
+      maxOperations: 7,
+      dryRun: true,
     });
     expect(harness.get).toHaveBeenCalledWith(DataSource);
     expect(harness.get).toHaveBeenCalledWith(AiServiceClient);
@@ -174,6 +256,21 @@ describe('runAiIndexCommand', () => {
       scanRunId: UUID,
     });
     expect(harness.reconcileQdrantAll).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid max operations before accessing the application context', async () => {
+    const context = { get: jest.fn(), close: jest.fn() };
+
+    await expect(
+      runAiIndexCommand(
+        ['backfill', '--environment', 'local', '--max-operations', '0'],
+        context as never,
+      ),
+    ).rejects.toThrow(
+      '--max-operations must be an integer between 1 and 100000',
+    );
+    expect(context.get).not.toHaveBeenCalled();
+    expect(context.close).not.toHaveBeenCalled();
   });
 
   it('rejects a CLI environment different from its configured deployment environment', async () => {
