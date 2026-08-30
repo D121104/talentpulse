@@ -232,9 +232,14 @@ export class JobsService {
   // Create a new job posting. Validates HR's company, then notifies all followers.
   async create(createJobDto: CreateJobDto, user: IUser) {
     const userInDb = await this.usersService.findOneByEmail(user.email);
+    const isAdmin = user.role === Role.ADMIN;
+
+    if (!isAdmin && !userInDb.company) {
+      throw new BadRequestException('HR does not belong to any company');
+    }
 
     if (
-      userInDb.company &&
+      !isAdmin &&
       createJobDto.company._id.toString() !== userInDb.company._id.toString()
     ) {
       throw new BadRequestException(
@@ -486,10 +491,15 @@ export class JobsService {
 
   async update(id: string, updateJobDto: UpdateJobDto, user: IUser) {
     const userInDb = await this.usersService.findOneByEmail(user.email);
+    const isAdmin = user.role === Role.ADMIN;
+
+    if (!isAdmin && !userInDb.company) {
+      throw new BadRequestException('HR does not belong to any company');
+    }
 
     if (
-      userInDb.company &&
-      updateJobDto.company &&
+      !isAdmin &&
+      updateJobDto.company?._id &&
       updateJobDto.company._id.toString() !== userInDb.company._id.toString()
     ) {
       throw new BadRequestException(
@@ -532,6 +542,32 @@ export class JobsService {
         });
         if (!lockedJob || lockedJob.isDeleted || lockedJob.deletedAt) {
           throw new NotFoundException('Job not found');
+        }
+
+        if (!isAdmin) {
+          const requesterCompanyId = userInDb.company?._id?.toString();
+          const lockedJobCompanyId = lockedJob.company?._id?.toString();
+
+          if (!requesterCompanyId) {
+            throw new BadRequestException('HR does not belong to any company');
+          }
+
+          if (lockedJobCompanyId !== requesterCompanyId) {
+            throw new BadRequestException(
+              `Please update job of company ${
+                lockedJob.company?.name || 'this company'
+              }`,
+            );
+          }
+
+          if (
+            updateJobDto.company?._id &&
+            updateJobDto.company._id.toString() !== lockedJobCompanyId
+          ) {
+            throw new BadRequestException(
+              `Please update job of company ${userInDb.company.name}`,
+            );
+          }
         }
 
         const descriptionChanged =
@@ -579,19 +615,15 @@ export class JobsService {
 
   async remove(id: string, user: IUser) {
     const userInDb = await this.usersService.findOneByEmail(user.email);
+    const isAdmin = user.role === Role.ADMIN;
+
+    if (!isAdmin && !userInDb.company) {
+      throw new BadRequestException('HR does not belong to any company');
+    }
 
     const job = await this.activeJobQueryService.findNonDeletedById(id);
     if (!job) {
       throw new NotFoundException('Job not found');
-    }
-
-    if (
-      userInDb.company &&
-      job.company._id.toString() !== userInDb.company._id.toString()
-    ) {
-      throw new BadRequestException(
-        `Please delete job of company ${job.company.name}`,
-      );
     }
 
     const deletedAt = new Date();
@@ -603,6 +635,17 @@ export class JobsService {
       });
       if (!lockedJob || lockedJob.isDeleted || lockedJob.deletedAt) {
         throw new NotFoundException('Job not found');
+      }
+
+      if (
+        !isAdmin &&
+        lockedJob.company?._id?.toString() !== userInDb.company?._id?.toString()
+      ) {
+        throw new BadRequestException(
+          `Please delete job of company ${
+            lockedJob.company?.name || 'this company'
+          }`,
+        );
       }
 
       await jobRepository.update(id, {
@@ -635,6 +678,7 @@ export class JobsService {
       throw new NotFoundException('User not found');
     }
 
+    const isAdmin = user.role === Role.ADMIN;
     const isHrPrem = this.usersService.isHrPremium(userInDb);
     if (!isHrPrem && user.role !== Role.ADMIN) {
       throw new BadRequestException(
@@ -642,19 +686,13 @@ export class JobsService {
       );
     }
 
+    if (!isAdmin && !userInDb.company) {
+      throw new BadRequestException('HR does not belong to any company');
+    }
+
     const job = await this.activeJobQueryService.findNonDeletedById(id);
     if (!job) {
       throw new NotFoundException('Job not found');
-    }
-
-    if (
-      userInDb.company &&
-      user.role !== Role.ADMIN &&
-      job.company?._id?.toString() !== userInDb.company._id?.toString()
-    ) {
-      throw new BadRequestException(
-        'Bạn chỉ có thể đẩy TOP tin tuyển dụng thuộc công ty của mình.',
-      );
     }
 
     const now = new Date();
@@ -667,6 +705,15 @@ export class JobsService {
       });
       if (!lockedJob || lockedJob.isDeleted || lockedJob.deletedAt) {
         throw new NotFoundException('Job not found');
+      }
+
+      if (
+        !isAdmin &&
+        lockedJob.company?._id?.toString() !== userInDb.company?._id?.toString()
+      ) {
+        throw new BadRequestException(
+          'Bạn chỉ có thể đẩy TOP tin tuyển dụng thuộc công ty của mình.',
+        );
       }
 
       // `updatedAt` is part of the current canonical index payload, so a

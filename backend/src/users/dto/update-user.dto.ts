@@ -4,6 +4,10 @@ import {
   IsOptional,
   IsNotEmpty,
   IsObject,
+  IsString,
+  MaxLength,
+  MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -49,9 +53,32 @@ export class UpdateUserDto {
 }
 
 export class UpdateUserPasswordDto {
-  @IsNotEmpty()
-  oldPassword: string;
+  @ValidateIf((dto) => !dto.currentPassword)
+  @IsString()
+  @IsNotEmpty({ message: 'Current password is required' })
+  @MinLength(8, { message: 'Password must be at least 8 characters long' })
+  @MaxLength(128, { message: 'Password must not exceed 128 characters' })
+  oldPassword?: string;
 
-  @IsNotEmpty()
-  newPassword: string;
+  @ValidateIf((dto) => !dto.oldPassword)
+  @IsString()
+  @IsNotEmpty({ message: 'Current password is required' })
+  @MinLength(8, { message: 'Password must be at least 8 characters long' })
+  @MaxLength(128, { message: 'Password must not exceed 128 characters' })
+  currentPassword?: string;
+
+  @ValidateIf((dto) => !dto.password)
+  @IsString()
+  @IsNotEmpty({ message: 'New password is required' })
+  @MinLength(8, { message: 'Password must be at least 8 characters long' })
+  @MaxLength(128, { message: 'Password must not exceed 128 characters' })
+  newPassword?: string;
+
+  // Kept for compatibility with the existing frontend request payload.
+  @ValidateIf((dto) => !dto.newPassword)
+  @IsString()
+  @IsNotEmpty({ message: 'New password is required' })
+  @MinLength(8, { message: 'Password must be at least 8 characters long' })
+  @MaxLength(128, { message: 'Password must not exceed 128 characters' })
+  password?: string;
 }

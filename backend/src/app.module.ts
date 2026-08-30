@@ -76,24 +76,24 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     // PostgreSQL with TypeORM
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DB_HOST', 'localhost'),
-        port: configService.get<number>('DB_PORT', 5432),
-        username: configService.get<string>('DB_USERNAME', 'postgres'),
-        password: configService.get<string>('DB_PASSWORD', 'postgres123'),
-        database: configService.get<string>('DB_DATABASE', 'recruitment_db'),
-        autoLoadEntities: true,
-        synchronize:
-          configService.get<string>(
-            'DB_SYNCHRONIZE',
-            process.env.NODE_ENV === 'production' ? 'false' : 'true',
-          ) === 'true',
-        ssl:
-          process.env.NODE_ENV === 'production'
-            ? { rejectUnauthorized: false }
-            : false,
-      }),
+      useFactory: async (configService: ConfigService) => {
+        const nodeEnv = configService.get<string>('NODE_ENV', 'development');
+        return {
+          type: 'postgres' as const,
+          host: configService.get<string>('DB_HOST', 'localhost'),
+          port: configService.get<number>('DB_PORT', 5432),
+          username: configService.get<string>('DB_USERNAME', 'postgres'),
+          password: configService.get<string>('DB_PASSWORD', 'postgres123'),
+          database: configService.get<string>('DB_DATABASE', 'recruitment_db'),
+          autoLoadEntities: true,
+          synchronize:
+            configService.get<string>(
+              'DB_SYNCHRONIZE',
+              nodeEnv === 'development' ? 'true' : 'false',
+            ) === 'true',
+          ssl: nodeEnv !== 'development',
+        };
+      },
       inject: [ConfigService],
     }),
 

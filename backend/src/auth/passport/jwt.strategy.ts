@@ -1,11 +1,16 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
-import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { IUser } from 'src/users/users.interface';
 import { User } from 'src/users/entities/user.entity';
+import { Role } from 'src/decorator/customize';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -26,6 +31,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
     if (user.isLocked) {
       throw new ForbiddenException(user.lockedReason || 'Tài khoản đã bị khóa');
+    }
+    if (user.role === Role.HR && user.isApproved !== true) {
+      throw new ForbiddenException(
+        'Tài khoản HR đang chờ quản trị viên phê duyệt',
+      );
     }
 
     return {

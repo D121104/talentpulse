@@ -6,12 +6,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
-import { Application, ApplicationStatus } from 'src/applications/entities/application.entity';
+import {
+  Application,
+  ApplicationStatus,
+} from 'src/applications/entities/application.entity';
 import { IUser } from 'src/users/users.interface';
 import aqp from 'api-query-params';
 import { FollowCompanyDto } from './dto/follow-company.dto';
@@ -25,6 +28,11 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import {
+  AiIndexAggregateType,
+  AiIndexOutboxOperation,
+} from 'src/ai-indexing/entities';
+import { AiIndexingService } from 'src/ai-indexing/ai-indexing.service';
 
 @Injectable()
 export class CompaniesService {
@@ -46,8 +54,124 @@ export class CompaniesService {
     private readonly usersService: UsersService,
 
     private readonly activeJobQueryService: ActiveJobQueryService,
+
+    private readonly dataSource: DataSource,
+
+    private readonly aiIndexingService: AiIndexingService,
   ) {}
 
+  private toPublicCompanyResponse(company: Company) {
+    return {
+      _id: company._id,
+      name: company.name,
+      description: company.description,
+      address: company.address,
+      logo: company.logo,
+      taxCode: company.taxCode,
+      scale: company.scale,
+      isActive: company.isActive,
+      isPremium: company.isPremium,
+      premiumExpiresAt: company.premiumExpiresAt,
+      createdAt: company.createdAt,
+      updatedAt: company.updatedAt,
+    };
+  }
+
+  private toHrMemberSummary(
+    hr: IUser & { createdAt?: Date },
+    creatorId?: string,
+  ) {
+    const isLead = Boolean(
+      creatorId && hr._id?.toString() === creatorId.toString(),
+    );
+
+    return {
+      _id: hr._id,
+      name: hr.name,
+      email: hr.email,
+      avatar: hr.avatar,
+      address: hr.address,
+      role: hr.role,
+      createdAt: hr.createdAt,
+      isLead,
+      hrRole: isLead ? 'LEAD' : 'MEMBER',
+    };
+  }
+
+  private async getSanitizedCompanyHrs(companyId: string, company: Company) {
+    const hrs = await this.usersService.findAllByCompanyId(companyId);
+    const creatorId = company.createdBy?._id?.toString();
+
+    return hrs.map((hr) => this.toHrMemberSummary(hr, creatorId));
+  }
+
+  private toPublicHrMemberSummary(
+    hr: IUser & { createdAt?: Date },
+    creatorId?: string,
+  ) {
+    const isLead = Boolean(
+      creatorId && hr._id?.toString() === creatorId.toString(),
+    );
+
+    return {
+      _id: hr._id,
+      name: hr.name,
+      avatar: hr.avatar,
+      role: hr.role,
+      createdAt: hr.createdAt,
+      isLead,
+      hrRole: isLead ? 'LEAD' : 'MEMBER',
+    };
+  }
+
+  private async getPublicCompanyHrs(companyId: string, company: Company) {
+    const hrs = await this.usersService.findAllByCompanyId(companyId);
+    const creatorId = company.createdBy?._id?.toString();
+
+    return hrs.map((hr) => this.toPublicHrMemberSummary(hr, creatorId));
+  }
+
+  private assertCompanyCreator(
+    companyId: string,
+    company: Company,
+    approver: IUser,
+    message: string,
+  ) {
+    const isAssignedHr =
+      approver?.role === Role.HR &&
+      approver?.company?._id?.toString() === companyId.toString();
+    const isCreator =
+      company.createdBy?._id?.toString() === approver?._id?.toString();
+
+    if (!isAssignedHr || !isCreator) {
+      throw new BadRequestException(message);
+    }
+  }
+
+  private assertCompanyRosterAccess(
+    companyId: string,
+    company: Company,
+    user: IUser,
+  ) {
+    if (user?.role === Role.ADMIN) {
+      return;
+    }
+
+    const actorCompanyId = user?.company?._id?.toString();
+    if (
+      user?.role !== Role.HR ||
+      !actorCompanyId ||
+      actorCompanyId !== companyId.toString()
+    ) {
+      throw new BadRequestException(
+        'You are not allowed to view this company roster',
+      );
+    }
+
+    if (company._id?.toString() !== companyId.toString()) {
+      throw new BadRequestException('Company not found');
+    }
+  }
 
   // Create a new company (Admin only), invalidate Redis cache
   async create(createCompanyDto: CreateCompanyDto, user: IUser) {
@@ -122,7 +246,7 @@ export class CompaniesService {
         pages: totalPage,
         total: totalRecord,
       },
-      result: companies,
+      result: companies.map((company) => this.toPublicCompanyResponse(company)),
     };
   }
 
@@ -188,7 +312,7 @@ export class CompaniesService {
           .getCount();
 
         return {
-          ...company,
+          ...this.toPublicCompanyResponse(company),
           isFollowed,
           jobCount,
         };
@@ -249,41 +373,67 @@ export class CompaniesService {
     return user._id;
   }
 
-  async verifyCompany(companyId: string) {
-    const companyExist = await this.companyRepo.findOne({
-      where: { _id: companyId },
-    });
-    if (!companyExist) throw new BadRequestException('Company not found');
-
-    const isAlreadyActive = companyExist.isActive;
-    const newActiveStatus = !isAlreadyActive;
-
-    await this.companyRepo.update(companyId, { isActive: newActiveStatus });
-
-    // Update jobs belonging to this company with new isActive status
-    const jobs = await this.jobRepo
-      .createQueryBuilder('job')
-      .where("job.company->>'_id' = :companyId", { companyId })
-      .getMany();
-
-    for (const job of jobs) {
-      const updatedCompany = { ...job.company, isActive: newActiveStatus };
-      await this.jobRepo.update(job._id, { company: updatedCompany });
+  async verifyCompany(companyId: string, requester: IUser) {
+    if (requester.role !== Role.ADMIN) {
+      throw new BadRequestException('Only admins can verify a company');
     }
+
+    const { wasActive, isActive } = await this.dataSource.transaction(
+      async (manager) => {
+        const companyRepository = manager.getRepository(Company);
+        const company = await companyRepository.findOne({
+          where: { _id: companyId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!company || company._id?.toString() !== companyId.toString()) {
+          throw new BadRequestException('Company not found');
+        }
+
+        const wasActive = company.isActive;
+        const isActive = !wasActive;
+        await companyRepository.update(companyId, { isActive });
+
+        // Preserve the legacy JSONB snapshot for existing consumers. The
+        // canonical company row remains authoritative to the index worker.
+        const jobRepository = manager.getRepository(Job);
+        const jobs = await jobRepository
+          .createQueryBuilder('job')
+          .where("job.company->>'_id' = :companyId", { companyId })
+          .getMany();
+
+        for (const job of jobs) {
+          const updatedCompany = { ...job.company, isActive };
+          await jobRepository.update(job._id, { company: updatedCompany });
+        }
+
+        // One company event is intentional: the dispatcher enumerates the
+        // company jobs and avoids one duplicate outbox row per job.
+        await this.aiIndexingService.enqueueWithNextSourceVersion(
+          {
+            aggregateType: AiIndexAggregateType.COMPANY,
+            aggregateId: companyId,
+            operation: AiIndexOutboxOperation.REINDEX_COMPANY,
+          },
+          manager,
+        );
+
+        return { wasActive, isActive };
+      },
+    );
 
     await this.redisService.invalidateCompaniesCache();
 
-    // Notify all HRs in company
+    // Notify all HRs in company after the transaction has committed.
     const hrsInCompany = await this.usersService.findAllByCompanyId(companyId);
 
     if (hrsInCompany && hrsInCompany.length > 0) {
       for (const hr of hrsInCompany) {
         const notiObj: CreateNotificationDto = {
           userId: hr._id.toString(),
-          title: isAlreadyActive
+          title: wasActive
             ? 'Công ty của bạn đã bị khóa'
             : 'Công ty của bạn đã được duyệt',
-          content: isAlreadyActive
+          content: wasActive
             ? 'Công ty của bạn đã bị khóa bởi quản trị viên. Vui lòng liên hệ để biết thêm chi tiết.'
             : 'Công ty của bạn đã được duyệt bởi quản trị viên. Bây giờ bạn có thể đăng tuyển dụng',
           type: NotificationType.COMPANY,
@@ -298,7 +448,7 @@ export class CompaniesService {
 
     return {
       message: 'Xác thực công ty thành công',
-      isActive: newActiveStatus,
+      isActive,
     };
   }
 
@@ -341,11 +491,13 @@ export class CompaniesService {
   }
 
   async findOne(id: string) {
-    const company = await this.companyRepo.findOne({ where: { _id: id } });
+    const company = await this.companyRepo.findOne({
+      where: { _id: id, isActive: true, isDeleted: false },
+    });
 
     if (!company) throw new NotFoundException('Company not found');
 
-    const hrsInCompany = await this.getCompanyHrs(id);
+    const hrsInCompany = await this.getPublicCompanyHrs(id, company);
 
     const jobCount = await this.jobRepo
       .createQueryBuilder('job')
@@ -354,30 +506,21 @@ export class CompaniesService {
       .getCount();
 
     return {
-      ...company,
+      ...this.toPublicCompanyResponse(company),
       hrs: hrsInCompany,
       hr: hrsInCompany && hrsInCompany.length > 0 ? hrsInCompany[0] : null,
       jobCount,
     };
   }
 
-  async getCompanyHrs(companyId: string) {
+  async getCompanyHrs(companyId: string, user: IUser) {
     const company = await this.companyRepo.findOne({
       where: { _id: companyId },
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    const hrs = await this.usersService.findAllByCompanyId(companyId);
-    const creatorId = company.createdBy?._id?.toString();
-
-    return hrs.map((hr) => {
-      const isLead = Boolean(creatorId && hr._id?.toString() === creatorId);
-      return {
-        ...hr,
-        isLead,
-        hrRole: isLead ? 'LEAD' : 'MEMBER',
-      };
-    });
+    this.assertCompanyRosterAccess(companyId, company, user);
+    return this.getSanitizedCompanyHrs(companyId, company);
   }
 
   async findWithUserFollow(companyId: string) {
@@ -391,23 +534,70 @@ export class CompaniesService {
 
   async update(id: string, updateCompanyDto: UpdateCompanyDto, user: IUser) {
     const userInDb = await this.usersService.findOneByEmail(user.email);
+    const isAdmin = userInDb?.role === Role.ADMIN;
 
-    if (
-      userInDb.role !== Role.ADMIN &&
-      userInDb.company &&
-      userInDb.company._id.toString() !== id
-    ) {
-      throw new BadRequestException(
-        'You are not allowed to update this company',
-      );
+    if (!userInDb) {
+      throw new BadRequestException('User not found');
     }
 
-    const result = await this.companyRepo.update(id, {
-      ...updateCompanyDto,
-      updatedBy: {
-        _id: user._id,
-        email: user.email,
-      },
+    if (!isAdmin) {
+      const requesterCompanyId = userInDb.company?._id?.toString();
+      if (!requesterCompanyId) {
+        throw new BadRequestException('HR does not belong to any company');
+      }
+
+      if (requesterCompanyId !== id.toString()) {
+        throw new BadRequestException(
+          'You are not allowed to update this company',
+        );
+      }
+
+      if (Object.prototype.hasOwnProperty.call(updateCompanyDto, 'isActive')) {
+        throw new BadRequestException(
+          'Only admins can change company activation status',
+        );
+      }
+    }
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const companyRepository = manager.getRepository(Company);
+      const lockedCompany = await companyRepository.findOne({
+        where: { _id: id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lockedCompany || lockedCompany._id?.toString() !== id.toString()) {
+        throw new BadRequestException('Company not found');
+      }
+
+      if (
+        !isAdmin &&
+        lockedCompany._id.toString() !== userInDb.company?._id?.toString()
+      ) {
+        throw new BadRequestException(
+          'You are not allowed to update this company',
+        );
+      }
+
+      const updateResult = await companyRepository.update(id, {
+        ...updateCompanyDto,
+        updatedBy: {
+          _id: user._id,
+          email: user.email,
+        },
+      });
+
+      if (updateResult.affected !== 0) {
+        await this.aiIndexingService.enqueueWithNextSourceVersion(
+          {
+            aggregateType: AiIndexAggregateType.COMPANY,
+            aggregateId: id,
+            operation: AiIndexOutboxOperation.REINDEX_COMPANY,
+          },
+          manager,
+        );
+      }
+
+      return updateResult;
     });
 
     await this.redisService.invalidateCompaniesCache();
@@ -417,28 +607,43 @@ export class CompaniesService {
   async remove(id: string, user: IUser) {
     const userInDb = await this.usersService.findOneByEmail(user.email);
 
-    if (userInDb.role !== Role.ADMIN) {
-      if (userInDb.company && userInDb.company._id.toString() !== id) {
-        throw new BadRequestException(
-          'You are not allowed to delete this company',
-        );
-      }
+    if (!userInDb || userInDb.role !== Role.ADMIN) {
+      throw new BadRequestException('Only admins can delete a company');
     }
 
-    const company = await this.companyRepo.findOne({ where: { _id: id } });
-    if (!company) throw new BadRequestException('Company not found');
+    const deletedAt = new Date();
+    const result = await this.dataSource.transaction(async (manager) => {
+      const companyRepository = manager.getRepository(Company);
+      const lockedCompany = await companyRepository.findOne({
+        where: { _id: id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lockedCompany || lockedCompany._id?.toString() !== id.toString()) {
+        throw new BadRequestException('Company not found');
+      }
 
-    await this.companyRepo.update(id, {
-      isDeleted: true,
-      deletedAt: new Date(),
-      deletedBy: {
-        _id: user._id,
-        email: user.email,
-      },
+      await companyRepository.update(id, {
+        isDeleted: true,
+        deletedAt,
+        deletedBy: {
+          _id: user._id,
+          email: user.email,
+        },
+      });
+      const softDeleteResult = await companyRepository.softDelete(id);
+      await this.aiIndexingService.enqueueWithNextSourceVersion(
+        {
+          aggregateType: AiIndexAggregateType.COMPANY,
+          aggregateId: id,
+          operation: AiIndexOutboxOperation.REINDEX_COMPANY,
+        },
+        manager,
+      );
+      return softDeleteResult;
     });
 
     await this.redisService.invalidateCompaniesCache();
-    return await this.companyRepo.softDelete(id);
+    return result;
   }
 
   async countCompanies() {
@@ -499,11 +704,12 @@ export class CompaniesService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    if (company.createdBy?._id?.toString() !== approver._id.toString()) {
-      throw new BadRequestException(
-        'Chỉ HR Trưởng (người tạo công ty) mới có quyền duyệt yêu cầu tham gia',
-      );
-    }
+    this.assertCompanyCreator(
+      companyId,
+      company,
+      approver,
+      'Chỉ HR Trưởng (người tạo công ty) mới có quyền duyệt yêu cầu tham gia',
+    );
 
     const pending = company.pendingHrs || [];
     const request = pending.find((p) => p.userId === userId);
@@ -544,11 +750,12 @@ export class CompaniesService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    if (company.createdBy?._id?.toString() !== approver._id.toString()) {
-      throw new BadRequestException(
-        'Chỉ HR Trưởng (người tạo công ty) mới có quyền từ chối yêu cầu tham gia',
-      );
-    }
+    this.assertCompanyCreator(
+      companyId,
+      company,
+      approver,
+      'Chỉ HR Trưởng (người tạo công ty) mới có quyền từ chối yêu cầu tham gia',
+    );
 
     const pending = company.pendingHrs || [];
     const request = pending.find((p) => p.userId === userId);
@@ -584,13 +791,33 @@ export class CompaniesService {
   }
 
   // Get pending HR requests for a company
-  async getPendingHrs(companyId: string) {
+  async getPendingHrs(companyId: string, user: IUser) {
     const company = await this.companyRepo.findOne({
       where: { _id: companyId },
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    return company.pendingHrs || [];
+    if (user?.role !== Role.ADMIN) {
+      const actorCompanyId = user?.company?._id?.toString();
+      const isCompanyCreator =
+        user?.role === Role.HR &&
+        actorCompanyId === companyId.toString() &&
+        company.createdBy?._id?.toString() === user?._id?.toString();
+
+      if (!isCompanyCreator) {
+        throw new BadRequestException(
+          'Only the company creator or an admin can view pending HR requests',
+        );
+      }
+    }
+
+    return (company.pendingHrs || []).map((request) => ({
+      userId: request.userId,
+      name: request.name,
+      email: request.email,
+      avatar: request.avatar,
+      requestedAt: request.requestedAt,
+    }));
   }
 
   // Create company by HR (separate from registration)
@@ -707,15 +934,19 @@ export class CompaniesService {
 
     const isProfileComplete = Boolean(
       company.name &&
-      company.taxCode &&
-      company.scale &&
-      company.address &&
-      company.description &&
-      company.logo,
+        company.taxCode &&
+        company.scale &&
+        company.address &&
+        company.description &&
+        company.logo,
     );
 
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
 
     // Total jobs & active jobs & today jobs
     const allCompanyJobs = await this.jobRepo
@@ -763,12 +994,24 @@ export class CompaniesService {
     ).length;
 
     // 7-day breakdown (from 6 days ago up to today)
-    const dailyApplicationStats: { date: string; label: string; count: number }[] = [];
+    const dailyApplicationStats: {
+      date: string;
+      label: string;
+      count: number;
+    }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+      const dayEnd = new Date(
+        d.getFullYear(),
+        d.getMonth(),
+        d.getDate(),
+        23,
+        59,
+        59,
+        999,
+      );
 
       const count = applications.filter((app) => {
         const appDate = new Date(app.createdAt);
@@ -879,4 +1122,3 @@ export class CompaniesService {
     };
   }
 }
-

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -59,16 +60,16 @@ export class UsersController {
     example: 10,
   })
   @Get()
-  findAll(@Query() qs: string) {
-    return this.usersService.findAll(qs);
+  findAll(@Query() qs: string, @User() user: IUser) {
+    return this.usersService.findAll(qs, user);
   }
 
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get user by id' })
   @ApiBearerAuth()
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(id);
+  findOne(@Param('id') id: string, @User() user: IUser) {
+    return this.usersService.findOne(id, user);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -80,9 +81,26 @@ export class UsersController {
     @Body() updateUserDto: UpdateUserDto,
     @User() user: IUser,
   ) {
-    // Admin có thể update bất kỳ user nào
-    // User thường chỉ có thể update chính mình
-    const targetId = user.role === Role.ADMIN ? id : user._id;
+    const isAdmin = user.role === Role.ADMIN;
+
+    // Role and company assignment are administrative changes, not self-service fields.
+    if (
+      !isAdmin &&
+      Object.prototype.hasOwnProperty.call(updateUserDto, 'role')
+    ) {
+      throw new BadRequestException('Only admins can change user roles');
+    }
+    if (
+      !isAdmin &&
+      Object.prototype.hasOwnProperty.call(updateUserDto, 'company')
+    ) {
+      throw new BadRequestException(
+        'Only admins can change user company assignments',
+      );
+    }
+
+    // Admin can update any user; other users can only update themselves.
+    const targetId = isAdmin ? id : user._id;
     return this.usersService.update(targetId, updateUserDto, user);
   }
 
@@ -179,8 +197,8 @@ export class UsersController {
     example: 10,
   })
   @Get('/admin/candidates')
-  findAllCandidates(@Query() qs: string) {
-    return this.usersService.findAllCandidates(qs);
+  findAllCandidates(@Query() qs: string, @User() user: IUser) {
+    return this.usersService.findAllCandidates(qs, user);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -197,12 +215,14 @@ export class UsersController {
   @ApiOperation({ summary: 'Get pending HR accounts (Admin only)' })
   @ApiBearerAuth()
   @Get('/admin/pending-hrs')
-  findPendingHrs() {
-    return this.usersService.findPendingHrs();
+  findPendingHrs(@User() user: IUser) {
+    return this.usersService.findPendingHrs(user);
   }
 
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Boost candidate profile to the top of HR CV search' })
+  @ApiOperation({
+    summary: 'Boost candidate profile to the top of HR CV search',
+  })
   @ApiBearerAuth()
   @Post('/candidate/boost-profile')
   boostProfile(@User() user: IUser) {
@@ -226,7 +246,9 @@ export class UsersController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Update candidate job seeking & visibility settings' })
+  @ApiOperation({
+    summary: 'Update candidate job seeking & visibility settings',
+  })
   @ApiBearerAuth()
   @Patch('/candidate/settings')
   updateCandidateSettings(

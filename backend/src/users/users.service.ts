@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, ILike } from 'typeorm';
+import { Repository } from 'typeorm';
 import { RegisterUserDto } from './dto/create-user.dto';
 import { UpdateUserDto, UpdateUserPasswordDto } from './dto/update-user.dto';
 import { User, PremiumPlan } from './entities/user.entity';
@@ -30,6 +30,81 @@ export class UsersService {
     private readonly otpService: OtpsService,
     private readonly mailService: MailService,
   ) {}
+
+  private assertUserReadAccess(userId: string, actor?: IUser) {
+    // Calls without an actor are trusted internal lookups used by other services.
+    if (!actor || actor.role === Role.ADMIN) {
+      return;
+    }
+
+    if (actor._id?.toString() !== userId?.toString()) {
+      throw new ForbiddenException('You can only view your own user profile');
+    }
+  }
+
+  private assertAdminActor(actor?: IUser) {
+    // Existing internal callers do not have an HTTP actor; controller routes always pass one.
+    if (actor && actor.role !== Role.ADMIN) {
+      throw new ForbiddenException('Only admins can access this user list');
+    }
+  }
+
+  private sanitizeCompany(company: User['company']) {
+    if (!company) {
+      return company;
+    }
+
+    return {
+      _id: company._id,
+      name: company.name,
+      isActive: company.isActive,
+    };
+  }
+
+  private sanitizeUser(user: User, includeAdminFields = false) {
+    const safeUser = {
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      gender: user.gender,
+      age: user.age,
+      address: user.address,
+      avatar: user.avatar,
+      role: user.role,
+      isPremium: user.isPremium || false,
+      premiumPlan: user.premiumPlan || PremiumPlan.FREE,
+      premiumExpiresAt: user.premiumExpiresAt || undefined,
+      isVerified: user.isVerified || false,
+      verifiedAt: user.verifiedAt || undefined,
+      company: this.sanitizeCompany(user.company),
+      isApproved: user.isApproved,
+      lastBoostedAt: user.lastBoostedAt || undefined,
+      boostExpiresAt: user.boostExpiresAt || undefined,
+      isJobSeeking: user.isJobSeeking ?? true,
+      isJobRecommendation: user.isJobRecommendation ?? true,
+      allowRecruiterSearch: user.allowRecruiterSearch ?? true,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+
+    if (!includeAdminFields) {
+      return safeUser;
+    }
+
+    return {
+      ...safeUser,
+      isLocked: user.isLocked,
+      lockedAt: user.lockedAt,
+      lockedReason: user.lockedReason,
+      registrationCompany: user.registrationCompany
+        ? {
+            name: user.registrationCompany.name,
+            taxCode: user.registrationCompany.taxCode,
+            scale: user.registrationCompany.scale,
+          }
+        : user.registrationCompany,
+    };
+  }
 
   hashPassword = (password: string) => {
     const salt = bcrypt.genSaltSync(10);
@@ -72,7 +147,8 @@ export class UsersService {
     };
   }
 
-  async findAll(qs: any) {
+  async findAll(qs: any, actor?: IUser) {
+    this.assertAdminActor(actor);
     const { filter, sort } = aqp(qs);
     delete filter.current;
     delete filter.pageSize;
@@ -117,11 +193,7 @@ export class UsersService {
 
     const totalPage = Math.ceil(totalRecord / limit);
 
-    // Remove sensitive fields
-    const sanitizedUsers = users.map((u) => {
-      const { password, refreshToken, ...rest } = u;
-      return rest;
-    });
+    const sanitizedUsers = users.map((u) => this.sanitizeUser(u, true));
 
     return {
       meta: {
@@ -145,17 +217,19 @@ export class UsersService {
       `SELECT * FROM users WHERE company->>'_id' = $1 AND "isDeleted" = false LIMIT 1`,
       [companyId],
     );
-    return rows && rows.length > 0 ? rows[0] : null;
+    return rows && rows.length > 0 ? this.sanitizeUser(rows[0]) : null;
   }
 
   async findAllByCompanyId(companyId: string) {
-    return await this.userRepo.query(
+    const rows = await this.userRepo.query(
       `SELECT * FROM users WHERE company->>'_id' = $1 AND "isDeleted" = false ORDER BY "createdAt" ASC`,
       [companyId],
     );
+    return rows.map((user) => this.sanitizeUser(user));
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actor?: IUser) {
+    this.assertUserReadAccess(id, actor);
     const user = await this.userRepo.findOne({
       where: { _id: id },
     });
@@ -164,8 +238,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const { password, refreshToken, ...rest } = user;
-    return rest;
+    return this.sanitizeUser(user, actor?.role === Role.ADMIN);
   }
 
   async findUserByUsername(username: string) {
@@ -186,8 +259,60 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
+    const isAdmin = user.role === Role.ADMIN;
+    if (!isAdmin && id.toString() !== user._id.toString()) {
+      throw new ForbiddenException('You can only update your own profile');
+    }
+
+    const hasRoleUpdate = Object.prototype.hasOwnProperty.call(
+      updateUserDto,
+      'role',
+    );
+    const hasCompanyUpdate = Object.prototype.hasOwnProperty.call(
+      updateUserDto,
+      'company',
+    );
+
+    if (!isAdmin && hasRoleUpdate) {
+      throw new BadRequestException('Only admins can change user roles');
+    }
+
+    if (!isAdmin && hasCompanyUpdate) {
+      throw new BadRequestException(
+        'Only admins can change user company assignments',
+      );
+    }
+
+    const updateData: Partial<User> = {};
+    if (Object.prototype.hasOwnProperty.call(updateUserDto, 'email')) {
+      updateData.email = updateUserDto.email;
+    }
+    if (Object.prototype.hasOwnProperty.call(updateUserDto, 'name')) {
+      updateData.name = updateUserDto.name;
+    }
+    if (Object.prototype.hasOwnProperty.call(updateUserDto, 'age')) {
+      updateData.age = updateUserDto.age;
+    }
+    if (Object.prototype.hasOwnProperty.call(updateUserDto, 'gender')) {
+      updateData.gender = updateUserDto.gender;
+    }
+    if (Object.prototype.hasOwnProperty.call(updateUserDto, 'address')) {
+      updateData.address = updateUserDto.address;
+    }
+    if (Object.prototype.hasOwnProperty.call(updateUserDto, 'avatar')) {
+      updateData.avatar = updateUserDto.avatar;
+    }
+
+    // Role and company changes remain available only through the admin update path.
+    if (isAdmin && hasRoleUpdate) {
+      updateData.role = updateUserDto.role;
+    }
+    if (isAdmin && hasCompanyUpdate) {
+      updateData.company = updateUserDto.company;
+    }
+
     return await this.userRepo.update(id, {
-      ...updateUserDto,
+      ...updateData,
       updatedBy: {
         _id: user._id,
         email: user.email,
@@ -221,12 +346,23 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    if (!this.checkPassword(updateUserDto.oldPassword, user.password)) {
+    const currentPassword =
+      updateUserDto.currentPassword ?? updateUserDto.oldPassword;
+    const newPassword = updateUserDto.newPassword ?? updateUserDto.password;
+
+    if (!currentPassword || !newPassword) {
+      throw new BadRequestException(
+        'Current password and new password are required',
+      );
+    }
+
+    if (!this.checkPassword(currentPassword, user.password)) {
       throw new BadRequestException('Current password is incorrect');
     }
 
     return await this.userRepo.update(id, {
-      password: this.hashPassword(updateUserDto.newPassword),
+      password: this.hashPassword(newPassword),
+      refreshToken: null,
     });
   };
 
@@ -431,21 +567,25 @@ export class UsersService {
 
   // Get all admin users
   async findAllAdmins() {
-    return await this.userRepo.find({
+    const users = await this.userRepo.find({
       where: { role: Role.ADMIN, isDeleted: false },
     });
+    return users.map((user) => this.sanitizeUser(user, true));
   }
 
   // Get pending HR accounts (Admin only)
-  async findPendingHrs() {
-    return await this.userRepo.find({
+  async findPendingHrs(actor?: IUser) {
+    this.assertAdminActor(actor);
+    const users = await this.userRepo.find({
       where: { role: Role.HR, isApproved: false, isDeleted: false },
       order: { createdAt: 'DESC' },
     });
+    return users.map((user) => this.sanitizeUser(user, true));
   }
 
   // Get all candidates (USER role only) for Admin
-  async findAllCandidates(qs: any) {
+  async findAllCandidates(qs: any, actor?: IUser) {
+    this.assertAdminActor(actor);
     const { filter, sort } = aqp(qs);
     delete filter.current;
     delete filter.pageSize;
@@ -498,10 +638,7 @@ export class UsersService {
 
     const totalPage = Math.ceil(totalRecord / limit);
 
-    const sanitizedUsers = users.map((u) => {
-      const { password, refreshToken, ...rest } = u;
-      return rest;
-    });
+    const sanitizedUsers = users.map((u) => this.sanitizeUser(u, true));
 
     return {
       meta: {
@@ -598,8 +735,7 @@ export class UsersService {
       });
     }
 
-    const { password, refreshToken, ...rest } = savedUser;
-    return rest;
+    return this.sanitizeUser(savedUser);
   }
 
   /**
@@ -615,7 +751,9 @@ export class UsersService {
     }
 
     if (user.role !== Role.USER) {
-      throw new BadRequestException('Tính năng Đẩy Top chỉ dành cho tài khoản Ứng viên (Candidate)');
+      throw new BadRequestException(
+        'Tính năng Đẩy Top chỉ dành cho tài khoản Ứng viên (Candidate)',
+      );
     }
 
     const isPremium = this.isCandidatePremium(user);
@@ -662,7 +800,8 @@ export class UsersService {
     await this.userRepo.save(user);
 
     return {
-      message: '🚀 Đẩy top hồ sơ thành công! Hồ sơ của bạn đã được đưa lên vị trí ưu tiên hàng đầu trong tìm kiếm CV của Nhà Tuyển Dụng.',
+      message:
+        '🚀 Đẩy top hồ sơ thành công! Hồ sơ của bạn đã được đưa lên vị trí ưu tiên hàng đầu trong tìm kiếm CV của Nhà Tuyển Dụng.',
       lastBoostedAt: user.lastBoostedAt,
       boostExpiresAt: user.boostExpiresAt,
       isBoosted: true,

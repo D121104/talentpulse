@@ -50,7 +50,6 @@ export class CompaniesController {
     return this.companiesService.findOne(id);
   }
 
-
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.HR)
   @Patch(':id')
@@ -93,13 +92,13 @@ export class CompaniesController {
   @Post('/verify/:companyId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
-  verifyCompany(@Param('companyId') companyId: string) {
-    return this.companiesService.verifyCompany(companyId);
+  verifyCompany(@Param('companyId') companyId: string, @User() user: IUser) {
+    return this.companiesService.verifyCompany(companyId, user);
   }
 
   @Get('/by-admin/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.HR)
+  @Roles(Role.ADMIN)
   getAllByAdmin(@Query() qs: any) {
     return this.companiesService.getAllByAdmin(qs);
   }
@@ -107,8 +106,8 @@ export class CompaniesController {
   @Get(':id/hrs')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.HR)
-  getCompanyHrs(@Param('id') id: string) {
-    return this.companiesService.getCompanyHrs(id);
+  getCompanyHrs(@Param('id') id: string, @User() user: IUser) {
+    return this.companiesService.getCompanyHrs(id, user);
   }
 
   @Post('hr/create')
@@ -153,8 +152,8 @@ export class CompaniesController {
   @Get(':id/pending-hrs')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.HR, Role.ADMIN)
-  getPendingHrs(@Param('id') id: string) {
-    return this.companiesService.getPendingHrs(id);
+  getPendingHrs(@Param('id') id: string, @User() user: IUser) {
+    return this.companiesService.getPendingHrs(id, user);
   }
 
   @Get(':id/is-creator')
