@@ -20,6 +20,13 @@ Parameters:
     Description: >-
       Set true only after immutable application images have been pushed to
       the output ECR repositories.
+  IndexingPublisherScheduleEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Set true only after the publisher migration, SQS VPC egress, and the
+      indexing worker have been verified in the target environment.
   BackendLambdaImageUri:
     Type: String
     Default: "example.invalid/talentpulse/placeholder@sha256:00000000000000\
@@ -121,6 +128,9 @@ Parameters:
 
 Conditions:
   DeployApplicationWorkloads: !Equals [!Ref DeployWorkloads, 'true']
+  EnableIndexingPublisherSchedule: !Equals
+    - !Ref IndexingPublisherScheduleEnabled
+    - 'true'
 
 Globals:
   Function:
@@ -194,6 +204,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-indexing-worker'
+      RetentionInDays: !Ref LogRetentionInDays
+
+  IndexingPublisherFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-indexing-publisher'
       RetentionInDays: !Ref LogRetentionInDays
 
   BackfillTaskLogGroup:
@@ -357,6 +373,47 @@ Resources:
                   - sqs:DeleteMessage
                   - sqs:GetQueueAttributes
                   - sqs:ReceiveMessage
+                Resource: !GetAtt IndexingQueue.Arn
+        - PolicyName: manage-vpc-network-interfaces
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+
+  IndexingPublisherFunctionRole:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-function-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt IndexingPublisherFunctionLogGroup.Arn
+        - PolicyName: publish-indexing-queue-notifications
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
                 Resource: !GetAtt IndexingQueue.Arn
         - PolicyName: manage-vpc-network-interfaces
           PolicyDocument:
@@ -735,6 +792,49 @@ Resources:
             FunctionResponseTypes: [ReportBatchItemFailures]
             ScalingConfig:
               MaximumConcurrency: 5
+
+  IndexingPublisherFunction:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-indexing-publisher'
+      PackageType: Image
+      ImageUri: !Ref BackendLambdaImageUri
+      ImageConfig:
+        Command: [dist/lambda-outbox-publisher.handler]
+      Role: !GetAtt IndexingPublisherFunctionRole.Arn
+      ReservedConcurrentExecutions: 1
+      MemorySize: 1024
+      Timeout: 60
+      LoggingConfig:
+        LogGroup: !Ref IndexingPublisherFunctionLogGroup
+        LogFormat: Text
+      Environment:
+        Variables:
+          NODE_ENV: staging
+          DB_HOST: !Ref DatabaseHost
+          DB_PORT: !Ref DatabasePort
+          DB_USERNAME: !Ref DatabaseUsername
+          DB_DATABASE: !Ref DatabaseName
+          DB_SYNCHRONIZE: 'false'
+          REDIS_ENABLED: 'false'
+          RUN_BACKGROUND_JOBS: 'false'
+          RUN_INDEXING_WORKER: 'false'
+          AI_INDEX_ENVIRONMENT: !Ref StageName
+          AI_INDEX_OUTBOX_ENVIRONMENT: !Ref StageName
+          AI_INDEX_QUEUE_URL: !Ref IndexingQueue
+          AI_INDEX_PUBLISHER_ID: !Sub '${AWS::StackName}-indexing-publisher'
+          AI_INDEX_PUBLISH_LEASE_MS: '120000'
+          DB_PASSWORD: !Sub >-
+            {{resolve:secretsmanager:${BackendRuntimeSecretArn}:SecretString:dbPassword}}
+      Events:
+        PublishPendingOutbox:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+            Enabled: !If [EnableIndexingPublisherSchedule, true, false]
+            Description: >-
+              Publish bounded pending AI indexing outbox notifications.
 
   BackfillTaskExecutionRole:
     Condition: DeployApplicationWorkloads

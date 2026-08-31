@@ -10,6 +10,7 @@ import { AiIndexBackfillService } from '../ai-indexing/services/ai-index-backfil
 import { AiIndexReplayService } from '../ai-indexing/services/ai-index-replay.service';
 import { AiIndexDrainService } from '../ai-indexing/services/ai-index-drain.service';
 import { AiIndexReconcileService } from '../ai-indexing/services/ai-index-reconcile.service';
+import { AiIndexPublisherService } from '../ai-indexing/services/ai-index-publisher.service';
 import { resolveAiIndexEnvironment } from '../config/ai-index-environment';
 
 const COMMANDS = new Set([
@@ -18,6 +19,7 @@ const COMMANDS = new Set([
   'reconcile-qdrant',
   'replay',
   'drain',
+  'publish',
 ]);
 const MAX_LIMIT = 100;
 const MAX_DRAIN_BATCHES = 1_000;
@@ -47,7 +49,7 @@ export function parseAiIndexArguments(argv: string[]): ParsedCliArguments {
   const command = argv[0];
   if (!command || !COMMANDS.has(command)) {
     throw new Error(
-      'Usage: ai-index <backfill|reconcile|reconcile-qdrant|replay|drain> [options]',
+      'Usage: ai-index <backfill|reconcile|reconcile-qdrant|replay|drain|publish> [options]',
     );
   }
 
@@ -132,11 +134,14 @@ export function parseAiIndexArguments(argv: string[]): ParsedCliArguments {
   if (command !== 'backfill' && parsed.maxOperations !== undefined) {
     throw new Error('--max-operations is valid only for backfill');
   }
-  if (command !== 'drain' && (parsed.maxBatches || parsed.batchSize)) {
-    throw new Error('--max-batches and --batch-size are valid only for drain');
+  if (command !== 'drain' && parsed.maxBatches) {
+    throw new Error('--max-batches is valid only for drain');
   }
-  if (parsed.limit && command === 'drain') {
-    throw new Error('--limit is not valid for drain');
+  if (!['drain', 'publish'].includes(command) && parsed.batchSize) {
+    throw new Error('--batch-size is valid only for drain and publish');
+  }
+  if (parsed.limit && ['drain', 'publish'].includes(command)) {
+    throw new Error('--limit is not valid for drain or publish');
   }
   if (
     parsed.cursor &&
@@ -173,7 +178,14 @@ export async function runAiIndexCommand(
   try {
     const config = context.get(ConfigService);
     const environment = resolveAiIndexEnvironment(config, args.environment);
-    // Resolve hard production prerequisites before selecting a command. This
+    if (args.command === 'publish') {
+      return context.get(AiIndexPublisherService).publish({
+        environment,
+        batchSize: args.batchSize,
+      });
+    }
+
+    // Resolve hard production prerequisites before selecting an AI command. This
     // forbids a Qdrant reconciliation path with a hand-built/no-op AI client.
     context.get(DataSource);
     context.get(AiServiceClient);

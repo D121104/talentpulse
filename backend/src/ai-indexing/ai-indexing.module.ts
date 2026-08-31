@@ -13,6 +13,11 @@ import { AiIndexReplayService } from './services/ai-index-replay.service';
 import { AiIndexLifecycleSweepService } from './services/ai-index-lifecycle-sweep.service';
 import { AiIndexDrainService } from './services/ai-index-drain.service';
 import { AiIndexingService } from './ai-indexing.service';
+import {
+  AiIndexSqsPublisherAdapter,
+  AiIndexSqsPublisherToken,
+} from './ai-index-sqs.publisher';
+import { AiIndexPublisherService } from './services/ai-index-publisher.service';
 import { AiIndexOutbox, AiJobIndexState } from './entities';
 
 /**
@@ -37,6 +42,8 @@ import { AiIndexOutbox, AiJobIndexState } from './entities';
     AiIndexReplayService,
     AiIndexLifecycleSweepService,
     AiIndexDrainService,
+    AiIndexPublisherService,
+    { provide: AiIndexSqsPublisherToken, useClass: AiIndexSqsPublisherAdapter },
   ],
   exports: [
     AiIndexingService,
@@ -47,6 +54,8 @@ import { AiIndexOutbox, AiJobIndexState } from './entities';
     AiIndexReplayService,
     AiIndexLifecycleSweepService,
     AiIndexDrainService,
+    AiIndexPublisherService,
+    AiIndexSqsPublisherToken,
     AiProviderAttemptModule,
     TypeOrmModule,
   ],

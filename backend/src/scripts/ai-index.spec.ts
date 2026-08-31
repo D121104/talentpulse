@@ -6,6 +6,7 @@ import { AiIndexBackfillService } from '../ai-indexing/services/ai-index-backfil
 import { AiIndexReplayService } from '../ai-indexing/services/ai-index-replay.service';
 import { AiIndexDrainService } from '../ai-indexing/services/ai-index-drain.service';
 import { AiIndexReconcileService } from '../ai-indexing/services/ai-index-reconcile.service';
+import { AiIndexPublisherService } from '../ai-indexing/services/ai-index-publisher.service';
 import { parseAiIndexArguments, runAiIndexCommand } from './ai-index';
 
 const UUID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -31,6 +32,18 @@ describe('parseAiIndexArguments', () => {
       scanRunId: UUID,
       limit: 10,
     });
+  });
+
+  it('parses one bounded initial-publication batch', () => {
+    expect(
+      parseAiIndexArguments([
+        'publish',
+        '--environment',
+        'staging',
+        '--batch-size',
+        '10',
+      ]),
+    ).toEqual({ command: 'publish', environment: 'staging', batchSize: 10 });
   });
 
   it('parses max operations with dry-run for backfill', () => {
@@ -156,6 +169,7 @@ describe('runAiIndexCommand', () => {
       orphanDetection: 'IN_PROGRESS',
     });
     const drain = jest.fn().mockResolvedValue({ status: 'COMPLETED' });
+    const publish = jest.fn().mockResolvedValue({ published: 1 });
     const get = jest.fn((token: unknown) => {
       if (token === ConfigService) {
         return {
@@ -174,6 +188,7 @@ describe('runAiIndexCommand', () => {
         return { reconcileQdrantAll, reconcileQdrantPage };
       }
       if (token === AiIndexDrainService) return { drain };
+      if (token === AiIndexPublisherService) return { publish };
       if (token === AiIndexReplayService) return {};
       throw new Error('unexpected token');
     });
@@ -184,6 +199,7 @@ describe('runAiIndexCommand', () => {
       reconcileQdrantAll,
       reconcileQdrantPage,
       drain,
+      publish,
     };
   }
 
@@ -216,6 +232,25 @@ describe('runAiIndexCommand', () => {
     expect(harness.get).toHaveBeenCalledWith(AiServiceClient);
     expect(harness.get).toHaveBeenCalledWith(AiProviderAttemptRecorderToken);
     expect(harness.context.close).not.toHaveBeenCalled();
+  });
+
+  it('runs one bounded publish command without constructing AI client dependencies', async () => {
+    const harness = createContext();
+
+    await expect(
+      runAiIndexCommand(
+        ['publish', '--environment', 'local', '--batch-size', '10'],
+        harness.context as never,
+      ),
+    ).resolves.toEqual({ published: 1 });
+    expect(harness.publish).toHaveBeenCalledWith({
+      environment: 'local',
+      batchSize: 10,
+    });
+    expect(harness.get).not.toHaveBeenCalledWith(AiServiceClient);
+    expect(harness.get).not.toHaveBeenCalledWith(
+      AiProviderAttemptRecorderToken,
+    );
   });
 
   it('accepts a canonical numeric Qdrant offset only for Qdrant reconciliation', () => {

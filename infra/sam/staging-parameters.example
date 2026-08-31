@@ -1,0 +1,28 @@
+# EXAMPLE ONLY: replace every <...> placeholder before use.
+# This file is not shell-ready and contains no secret values.
+# All template parameters are listed so it can be translated into an approved
+# CI/CD parameter mechanism or reviewed sam deploy --parameter-overrides input.
+StageName=staging
+DeployWorkloads=false
+IndexingPublisherScheduleEnabled=false
+BackendLambdaImageUri=<backend-lambda-repository>@sha256:<64-hex-digest>
+AiLambdaImageUri=<ai-lambda-repository>@sha256:<64-hex-digest>
+BackfillImageUri=<backfill-repository>@sha256:<64-hex-digest>
+VpcSubnetIds=<private-subnet-id-1>,<private-subnet-id-2>
+VpcSecurityGroupIds=<workload-security-group-id>
+DatabaseHost=<staging-postgresql-hostname>
+DatabasePort=5432
+DatabaseName=<staging-database-name>
+DatabaseUsername=<staging-database-username>
+BackendRuntimeSecretArn=arn:aws:secretsmanager:<aws-region>:<account-id>:secret:<backend-runtime-secret-name>
+AiRuntimeSecretArn=arn:aws:secretsmanager:<aws-region>:<account-id>:secret:<ai-runtime-secret-name>
+QdrantUrl=https://<staging-qdrant-hostname>
+QdrantCollection=<preflighted-physical-staging-collection>
+QdrantAlias=<staging-qdrant-alias>
+QdrantCollectionVersion=<staging-collection-version>
+AiServiceIssuer=talentpulse-api
+AiServiceAudience=talentpulse-ai
+AiServiceJwtKeyId=<service-jwt-key-id>
+FrontendUrl=https://<staging-frontend-origin>
+BackfillMaxOperations=1000
+LogRetentionInDays=30

@@ -77,6 +77,9 @@ plans/
 
 # Local development secrets (including generated AI service key pairs)
 .secrets/
+infra/sam/staging-parameters.local
+infra/sam/backend-runtime-secret.local.json
+infra/sam/ai-runtime-secret.local.json
 
 # Certificates and private keys
 *.pem

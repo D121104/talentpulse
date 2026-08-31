@@ -46,6 +46,14 @@ export enum AiIndexOutboxStatus {
 @Index('IDX_ai_index_outbox_lease', ['leaseExpiresAt'], {
   where: '"status" = \'PROCESSING\'',
 })
+@Index(
+  'IDX_ai_index_outbox_publish',
+  ['status', 'nextRetryAt', 'publishNextRetryAt', 'createdAt'],
+  { where: '"status" = \'PENDING\' AND "published_at" IS NULL' },
+)
+@Index('IDX_ai_index_outbox_publish_lease', ['publishLeaseExpiresAt'], {
+  where: '"status" = \'PENDING\' AND "published_at" IS NULL',
+})
 export class AiIndexOutbox {
   @PrimaryGeneratedColumn('uuid')
   _id: string;
@@ -133,6 +141,61 @@ export class AiIndexOutbox {
 
   @Column({ name: 'processed_at', type: 'timestamptz', nullable: true })
   processedAt: Date | null;
+
+  /** Delivery metadata for initial SQS publication, separate from AI dispatch. */
+  @Column({ name: 'published_at', type: 'timestamptz', nullable: true })
+  publishedAt: Date | null;
+
+  @Column({ name: 'publish_attempts', type: 'integer', default: 0 })
+  publishAttempts: number;
+
+  @Column({
+    name: 'publish_next_retry_at',
+    type: 'timestamptz',
+    default: () => 'CURRENT_TIMESTAMP',
+  })
+  publishNextRetryAt: Date;
+
+  @Column({ name: 'publish_leased_at', type: 'timestamptz', nullable: true })
+  publishLeasedAt: Date | null;
+
+  @Column({
+    name: 'publish_lease_expires_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  publishLeaseExpiresAt: Date | null;
+
+  @Column({
+    name: 'publish_lease_owner',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  publishLeaseOwner: string | null;
+
+  @Column({
+    name: 'last_publish_error_code',
+    type: 'varchar',
+    length: 80,
+    nullable: true,
+  })
+  lastPublishErrorCode: string | null;
+
+  @Column({
+    name: 'last_publish_error_message',
+    type: 'varchar',
+    length: 1000,
+    nullable: true,
+  })
+  lastPublishErrorMessage: string | null;
+
+  @Column({
+    name: 'last_publish_error_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  lastPublishErrorAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

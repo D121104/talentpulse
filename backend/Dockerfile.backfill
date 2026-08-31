@@ -1,0 +1,24 @@
+# Build with --platform=linux/amd64; the Fargate task definition targets X86_64.
+FROM node:22-bookworm-slim AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json nest-cli.json tsconfig.json tsconfig.build.json ./
+RUN npm ci --include=dev
+
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY --chown=node:node --from=build /app/dist ./dist
+COPY --chown=node:node --from=build /app/node_modules ./node_modules
+COPY --chown=node:node --from=build /app/package.json ./package.json
+
+USER node
+
+CMD ["node", "dist/tasks/ai-index-backfill.task.js"]

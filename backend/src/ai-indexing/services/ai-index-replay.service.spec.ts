@@ -34,6 +34,15 @@ function createOutbox(overrides: Partial<AiIndexOutbox> = {}): AiIndexOutbox {
     lastErrorMessage: 'timeout retained',
     lastErrorAt: new Date('2026-08-29T11:56:00.000Z'),
     processedAt: null,
+    publishedAt: new Date('2026-08-29T11:57:00.000Z'),
+    publishAttempts: 4,
+    publishNextRetryAt: new Date('2026-08-29T12:10:00.000Z'),
+    publishLeasedAt: new Date('2026-08-29T11:57:00.000Z'),
+    publishLeaseExpiresAt: new Date('2026-08-29T11:58:00.000Z'),
+    publishLeaseOwner: 'publisher-1',
+    lastPublishErrorCode: 'SQS_TIMEOUT',
+    lastPublishErrorMessage: 'publish timeout',
+    lastPublishErrorAt: new Date('2026-08-29T11:58:00.000Z'),
     createdAt: new Date('2026-08-29T11:00:00.000Z'),
     updatedAt: new Date('2026-08-29T11:00:00.000Z'),
     ...overrides,
@@ -131,13 +140,44 @@ describe('AiIndexReplayService', () => {
       status: AiIndexOutboxStatus.PENDING,
       attempts: 2,
       maxAttempts: 3,
+      lastAttemptAt: new Date('2026-08-29T11:55:00.000Z'),
       lastErrorCode: 'AI_PROVIDER_TIMEOUT',
       lastErrorMessage: 'timeout retained',
+      lastErrorAt: new Date('2026-08-29T11:56:00.000Z'),
+      publishAttempts: 4,
     });
     expect(row.leasedAt).toBeNull();
     expect(row.leaseExpiresAt).toBeNull();
     expect(row.leaseOwner).toBeNull();
     expect(row.nextRetryAt).toBeInstanceOf(Date);
+    expect(row.publishedAt).toBeNull();
+    expect(row.publishNextRetryAt).toBeInstanceOf(Date);
+    expect(row.publishLeasedAt).toBeNull();
+    expect(row.publishLeaseExpiresAt).toBeNull();
+    expect(row.publishLeaseOwner).toBeNull();
+    expect(row.lastPublishErrorCode).toBeNull();
+    expect(row.lastPublishErrorMessage).toBeNull();
+    expect(row.lastPublishErrorAt).toBeNull();
+  });
+
+  it('makes a replayed row eligible for an initial publication claim', () => {
+    const now = new Date('2026-08-31T12:00:00.000Z');
+    const row = createOutbox({
+      status: AiIndexOutboxStatus.FAILED,
+      publishedAt: new Date('2026-08-31T11:57:00.000Z'),
+      publishNextRetryAt: new Date('2026-08-31T12:10:00.000Z'),
+      publishLeaseExpiresAt: new Date('2026-08-31T12:05:00.000Z'),
+    });
+
+    expect(prepareAiIndexOutboxReplay(row, now)).toBe(true);
+
+    // These are the publisher's claim predicates, exercised against the
+    // shared transition without duplicating the publisher implementation.
+    expect(row.status).toBe(AiIndexOutboxStatus.PENDING);
+    expect(row.publishedAt).toBeNull();
+    expect(row.nextRetryAt.getTime()).toBeLessThanOrEqual(now.getTime());
+    expect(row.publishNextRetryAt.getTime()).toBeLessThanOrEqual(now.getTime());
+    expect(row.publishLeaseExpiresAt).toBeNull();
   });
 
   it('replays dead-letter rows with exactly one additional bounded attempt', async () => {

@@ -11,7 +11,7 @@ uncompressed ZIP limit. Deploy it as a Lambda container image. The ZIP command
 is retained only as a size check and will fail instead of producing an invalid
 deployment artifact.
 
-## 1. Build and publish the Lambda container image
+## 1. Build the Lambda container image
 
 Prerequisites:
 
@@ -24,24 +24,20 @@ Build the Linux Lambda image from the `backend` directory:
 npm run package:lambda-image
 ```
 
-Create an ECR repository once:
+## Staging ECR and SAM deployment
 
-```powershell
-aws ecr create-repository --repository-name talentpulse-api
+Do not push or deploy a mutable `latest` image tag. Every workload image URI
+must be immutable and use the form:
+
+```text
+<ecr-repository-uri>@sha256:<64-hex-character-digest>
 ```
 
-Authenticate Docker, tag, and push the image. Replace the account and region:
-
-```powershell
-aws ecr get-login-password --region <aws-region> |
-  docker login --username AWS --password-stdin <aws-account-id>.dkr.ecr.<aws-region>.amazonaws.com
-
-docker tag talentpulse-api:lambda <aws-account-id>.dkr.ecr.<aws-region>.amazonaws.com/talentpulse-api:latest
-docker push <aws-account-id>.dkr.ecr.<aws-region>.amazonaws.com/talentpulse-api:latest
-```
-
-Create the Lambda function with package type `Image`, select the pushed ECR
-image, then configure the function settings listed below.
+`infra/sam/template.yaml` is authoritative for the SAM stack, image URI
+parameters, and Lambda resources. Follow `docs/STAGING_MANUAL_DEPLOYMENT.md`
+for the staging bootstrap, image push and digest resolution, scan review, and
+SAM deployment procedure. Do not create the ECR repositories or Lambda
+functions manually when deploying that stack.
 
 ## 2. ZIP package check
 
@@ -63,13 +59,14 @@ The command performs these steps:
 Do not run `npm ci --omit=dev` before `npm run build`. Nest CLI, TypeScript,
 and type declarations are dev dependencies required during compilation.
 
-## 3. Create the Lambda function
+## 3. Lambda configuration notes
 
-Use these AWS Lambda settings:
+The SAM template configures the deployed Lambda resources. These settings are
+useful when reviewing the resulting Lambda configuration:
 
 | Setting | Value |
 | --- | --- |
-| Runtime | Node.js 20.x |
+| Runtime | Node.js 22.x |
 | Architecture | x86_64 unless all native dependencies are built for arm64 |
 | Handler | `dist/lambda.handler` |
 | Timeout | Start at 30 seconds |

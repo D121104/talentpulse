@@ -1,16 +1,16 @@
 # TalentPulse staging SAM stack
 
-`template.yaml` is a deliberately small SAM/CloudFormation stack for the existing
-serverless topology. It creates infrastructure only; it does not create a VPC,
-PostgreSQL/RDS, Qdrant, Secrets Manager values, an ECS cluster, or an ECS
-service. It grants the FastAPI Lambda only the two Bedrock model invocations
-used by the configured staging application; it does not grant Bedrock access to
-either NestJS role.
+`template.yaml` is a deliberately small SAM/CloudFormation stack for the
+existing serverless topology. It creates infrastructure only; it does not
+create a VPC, PostgreSQL/RDS, Qdrant, Secrets Manager values, an ECS
+cluster, or an ECS service. It grants the FastAPI Lambda only the two Bedrock
+model invocations used by the configured staging application; it does not grant
+Bedrock access to any NestJS role.
 
 ## Topology
 
-- **PublicApi** is an HTTP API with only `/` and `/{proxy+}` routes to the NestJS
-  Lambda image (`backend/src/lambda.ts`, image default command
+- **PublicApi** is an HTTP API with only `/` and `/{proxy+}` routes to
+  the NestJS Lambda image (`backend/src/lambda.ts`, image default command
   `dist/lambda.handler`). Its conditional HTTP API Lambda-proxy integrations,
   routes, and invoke permissions are raw CloudFormation resources rather than
   nested SAM `HttpApi` events. This keeps bootstrap resources unconditional and
@@ -23,6 +23,11 @@ either NestJS role.
   **not** expose `/health/live` or `/health/ready`. FastAPI's existing
   service-JWT dependencies
   remain the authorization boundary for every exposed AI route.
+- **IndexingPublisherFunction** is a separate scheduled NestJS Lambda using
+  `dist/lambda-outbox-publisher.handler`. It publishes a bounded batch of
+  UUID-only `{"outboxId":"..."}` notifications from PostgreSQL outbox rows
+  to `IndexingQueue`; `rate(1 minute)` is disabled by default through
+  `IndexingPublisherScheduleEnabled=false`.
 - **IndexingQueue** is an SQS *standard* queue with a DLQ. The NestJS worker
   uses `dist/lambda-sqs.handler`, a maximum batch size of 10, and
   `ReportBatchItemFailures`, matching `backend/src/lambda-sqs.ts`.
@@ -38,8 +43,9 @@ log groups with configurable retention, and narrowly scoped execution roles.
 Supply existing staging-only resources when deploying:
 
 1. **Private subnets and security groups** that can reach the dedicated staging
-   PostgreSQL database and make required HTTPS egress calls. No VPC resources
-   are created here.
+   PostgreSQL database, make required HTTPS egress calls, and reach SQS.
+   VPC-attached publisher Lambda traffic needs either NAT egress or an SQS
+   interface VPC endpoint. No VPC resources are created here.
 2. A dedicated staging PostgreSQL database. The application's unscoped index
    outbox requires `AI_INDEX_ENVIRONMENT` and `AI_INDEX_OUTBOX_ENVIRONMENT` to
    both be `staging` (or the chosen `StageName`); do not point this stack at a
@@ -82,8 +88,9 @@ this stack.
 ## Images
 
 Every image parameter requires an OCI digest URI, for example
-`repository-uri@sha256:<64-hex-digest>`; tags are rejected. The first deployment
-uses the safe default `DeployWorkloads=false`, which creates the ECR repositories
+`repository-uri@sha256:<64-hex-digest>`; tags are rejected. The first
+deployment uses the safe default `DeployWorkloads=false`, which creates the
+ECR repositories
 and shared infrastructure without creating any Lambda or ECS workload that would
 reference a not-yet-pushed image. Push immutable images to the output ECR
 repositories, then update the stack with `DeployWorkloads=true` and matching
@@ -97,30 +104,36 @@ secret values.
   NestJS HTTP handler as its default Lambda command.
 - `AiLambdaImageUri` must use `ai-service/Dockerfile.lambda` and has
   `app.lambda_handler.handler` as its default Lambda command.
-- `BackfillImageUri` must be an **ECS-compatible** backend image in the
-  created backfill repository. It must run a normal Node entrypoint, not the
-  Lambda runtime entrypoint, so the task command can execute
-  `node dist/tasks/ai-index-backfill.task.js ...`. The repository currently
-  provides a Lambda Dockerfile only; building this distinct Fargate-compatible
-  image is an external image-build concern and is intentionally not solved by
-  this IaC-only change.
+- `BackfillImageUri` must be built from `backend/Dockerfile.backfill`, the
+  distinct **ECS-compatible** backend image in the created backfill repository.
+  It uses a normal Node entrypoint (not the Lambda runtime) so the task command
+  can execute `node dist/tasks/ai-index-backfill.task.js ...`.
 
 ## Deploy
+
+`staging-parameters.example` lists every template parameter with non-secret
+placeholders, including `IndexingPublisherScheduleEnabled`; it is not
+shell-ready until every placeholder is replaced.
+`backend-runtime-secret.example.json` and `ai-runtime-secret.example.json`
+document the required Secrets Manager JSON shapes only. Do not upload their
+placeholders as runtime secrets.
 
 Validate before deploying, then pass non-secret values through your approved CI
 parameter mechanism. The following uses placeholders only:
 
 ```bash
 sam validate --template-file infra/sam/template.yaml
-# Bootstrap repositories, queues, APIs, and logs first. Supply the same non-secret
-# external-resource parameters shown below, but leave DeployWorkloads unset (false).
+# Bootstrap repositories, queues, APIs, and logs first. Supply the same
+# non-secret external-resource parameters shown below, but leave
+# DeployWorkloads unset (false).
 sam deploy \
   --template-file infra/sam/template.yaml \
   --stack-name talentpulse-staging-serverless \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides DeployWorkloads=false '<external-resource-parameters>'
 
-# After pushing the three digest-pinned images, deploy the application workloads.
+# After pushing the three digest-pinned images, deploy the application
+# workloads.
 sam deploy \
   --template-file infra/sam/template.yaml \
   --stack-name talentpulse-staging-serverless \
@@ -148,10 +161,12 @@ sam deploy \
 Use the output `BackfillTaskDefinitionArn` with an approved, explicitly invoked
 ECS `run-task` workflow. Keep `--max-operations` bounded; the stack default is
 1,000 and the application rejects values greater than 100,000. This task only
-enqueues transactional outbox work. A separate, authorized producer must send
-UUID-only `{"outboxId":"..."}` notifications to `IndexingQueue`; this template
-does not invent a producer because the current application contains the
-consumer only.
+enqueues transactional outbox work. The scheduled publisher then publishes
+UUID-only notifications. During controlled validation or recovery, use the
+bounded application command `npm run ai-index -- publish --environment staging
+--batch-size 10`; normal production flow must not use manual `aws sqs
+send-message`. Enable the schedule only after migration, SQS egress, publisher,
+and worker validation succeeds.
 
 ## Operational notes
 
@@ -164,15 +179,16 @@ consumer only.
 - Lambda secrets use CloudFormation Secrets Manager dynamic references. The
   deployment principal resolves each JSON key during a stack operation, and the
   resulting value becomes Lambda environment configuration (encrypted at rest
-  by Lambda). Consequently, the three Lambda execution roles intentionally do
+  by Lambda). Consequently, the Lambda execution roles intentionally do
   **not** have `secretsmanager:GetSecretValue`; restrict both the deployment
   principal and access to Lambda configuration. Secret rotation does not update
   Lambda environment configuration by itself, so redeploy after rotation.
-- Fargate secrets use ECS `ContainerDefinition.Secrets`: its **execution role**
-  reads the referenced JSON keys when a task starts, while the task role has no
-  Secrets Manager permission. Start a new task after rotation. If the backend
-  secret uses a customer-managed KMS key, grant the execution role `kms:Decrypt`
-  on that externally managed key before running a task; no key ARN is added here.
+- Fargate secrets use ECS `ContainerDefinition.Secrets`: its **execution
+  role** reads the referenced JSON keys when a task starts, while the task
+  role has no Secrets Manager permission. Start a new task after rotation. If
+  the backend secret uses a customer-managed KMS key, grant the execution role
+  `kms:Decrypt` on that externally managed key before running a task; no key
+  ARN is added here.
 - The AI Lambda explicitly sets the same `BEDROCK_CHAT_MODEL` Nova Lite model
   used by the application defaults. Its execution role is limited to
   `bedrock:InvokeModel` for that model and the configured Cohere embedding
@@ -182,13 +198,20 @@ consumer only.
 - Both Lambda APIs and the worker receive VPC configuration because they require
   external staging services. Ensure the supplied subnet routing/DNS and security
   groups provide only the needed database and HTTPS egress paths.
+- The publisher has a dedicated role: logs, required Lambda VPC ENI actions,
+  and `sqs:SendMessage` only to `IndexingQueue`. It has reserved concurrency
+  one and no SQS receive/delete/visibility permissions, Bedrock permission,
+  Qdrant credentials, or Secrets Manager runtime read permission. Its database
+  password is supplied through the same CloudFormation dynamic reference used
+  by the other Lambdas.
 - The worker source does not produce SQS messages. Its IAM role can only poll
-  the stack's source queue; the public Lambda and backfill task have no SQS send
-  permission.
+  the stack source queue; the public Lambda and backfill task have no SQS send
+  permission. Do not replace the publisher with manual `aws sqs send-message`
+  in normal production operation.
 
 ## References
 
-- SAM HTTP APIs: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-httpapi.html
-- SAM SQS partial-batch failures: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-function-sqs.html
-- ECS Fargate task definitions: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ecs-taskdefinition.html
-- CloudFormation Secrets Manager dynamic references: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/dynamic-references-secretsmanager.html
+- [SAM HTTP APIs](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-httpapi.html)
+- [SAM SQS partial-batch failures](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-function-sqs.html)
+- [ECS Fargate task definitions](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ecs-taskdefinition.html)
+- [CloudFormation Secrets Manager dynamic references](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/dynamic-references-secretsmanager.html)

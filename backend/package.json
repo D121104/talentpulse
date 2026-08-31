@@ -30,6 +30,7 @@
     "ai-index:backfill-task": "ts-node -r tsconfig-paths/register src/tasks/ai-index-backfill.task.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1121.0",
     "@codegenie/serverless-express": "^4.17.1",
     "@nestjs-modules/mailer": "^1.11.2",
     "@nestjs/bull": "^10.0.1",

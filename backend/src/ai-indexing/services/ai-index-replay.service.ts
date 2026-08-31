@@ -112,7 +112,8 @@ export class AiIndexReplayService {
  * Atomically returns one failed/dead command to the dispatcher. The conditional
  * UPDATE is the concurrency boundary: only the caller that changes a currently
  * replayable row receives true; all others receive false without a network
- * call. It intentionally preserves attempts and error audit fields.
+ * call. It preserves consumer attempts and error audit fields while resetting
+ * independent publisher state so the replay can produce a fresh SQS notification.
  */
 export async function replayAiIndexOutboxAtomically(
   manager: EntityManager,
@@ -140,6 +141,17 @@ export async function replayAiIndexOutboxAtomically(
       leaseExpiresAt: null,
       leaseOwner: null,
       processedAt: null,
+      // Replay must re-arm initial SQS publication even when a previous
+      // notification was sent but the consumer later failed or dead-lettered.
+      // Keep publishAttempts as independent publication audit history.
+      publishedAt: null,
+      publishNextRetryAt: now,
+      publishLeasedAt: null,
+      publishLeaseExpiresAt: null,
+      publishLeaseOwner: null,
+      lastPublishErrorCode: null,
+      lastPublishErrorMessage: null,
+      lastPublishErrorAt: null,
       // Only a dead-letter command that exhausted its current delivery budget
       // gets exactly one additional attempt, capped by max_attempts <= 100.
       // Rows with remaining budget keep their existing delivery ceiling.
@@ -172,6 +184,17 @@ export function prepareAiIndexOutboxReplay(
   outbox.leaseExpiresAt = null;
   outbox.leaseOwner = null;
   outbox.processedAt = null;
+  // Re-arm publication independently of the consumer state. publishAttempts
+  // remains cumulative audit history, while a replay deliberately discards a
+  // prior publication success, lease, and error state.
+  outbox.publishedAt = null;
+  outbox.publishNextRetryAt = now;
+  outbox.publishLeasedAt = null;
+  outbox.publishLeaseExpiresAt = null;
+  outbox.publishLeaseOwner = null;
+  outbox.lastPublishErrorCode = null;
+  outbox.lastPublishErrorMessage = null;
+  outbox.lastPublishErrorAt = null;
   // lastAttemptAt and lastError* intentionally remain as audit history.
   return true;
 }

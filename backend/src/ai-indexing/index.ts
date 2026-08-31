@@ -11,3 +11,5 @@ export * from './services/canonical-job-lifecycle';
 export * from './services/ai-index-lifecycle-sweep.service';
 export * from './services/ai-index-drain.service';
 export * from './services/ai-provider-attempt-recorder.service';
+export * from './services/ai-index-publisher.service';
+export * from './ai-index-sqs.publisher';
