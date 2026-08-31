@@ -1,0 +1,892 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Minimal staging topology for TalentPulse public API, AI API, indexing
+  worker, and bounded backfill task.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: staging
+    AllowedPattern: '^[a-z][a-z0-9-]{0,31}$'
+    ConstraintDescription: >-
+      Must start with a lowercase letter and contain only lowercase letters,
+      digits, and hyphens.
+  DeployWorkloads:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Set true only after immutable application images have been pushed to
+      the output ECR repositories.
+  BackendLambdaImageUri:
+    Type: String
+    Default: "example.invalid/talentpulse/placeholder@sha256:00000000000000\
+      00000000000000000000000000000000000000000000000000"
+    AllowedPattern: '^.+@sha256:[A-Fa-f0-9]{64}$'
+    ConstraintDescription: >-
+      Must be an immutable OCI image URI pinned by sha256 digest.
+  AiLambdaImageUri:
+    Type: String
+    Default: "example.invalid/talentpulse/placeholder@sha256:00000000000000\
+      00000000000000000000000000000000000000000000000000"
+    AllowedPattern: '^.+@sha256:[A-Fa-f0-9]{64}$'
+    ConstraintDescription: >-
+      Must be an immutable OCI image URI pinned by sha256 digest.
+  BackfillImageUri:
+    Type: String
+    Default: "example.invalid/talentpulse/placeholder@sha256:00000000000000\
+      00000000000000000000000000000000000000000000000000"
+    AllowedPattern: '^.+@sha256:[A-Fa-f0-9]{64}$'
+    ConstraintDescription: >-
+      Must be an immutable OCI image URI pinned by sha256 digest.
+  VpcSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Existing private subnets with egress to the external database, AI API,
+      and Qdrant Cloud.
+  VpcSecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: >-
+      Existing security groups permitted to reach the external database and
+      required HTTPS egress.
+  DatabaseHost:
+    Type: String
+    MinLength: 1
+    Description: >-
+      Existing staging PostgreSQL hostname; no database is provisioned by
+      this stack.
+  DatabasePort:
+    Type: Number
+    Default: 5432
+    MinValue: 1
+    MaxValue: 65535
+  DatabaseName:
+    Type: String
+    MinLength: 1
+  DatabaseUsername:
+    Type: String
+    MinLength: 1
+  BackendRuntimeSecretArn:
+    Type: String
+    AllowedPattern: '^arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+$'
+    NoEcho: true
+    Description: >-
+      Existing secret ARN with the required backend JSON keys; the secret
+      value is never stored in this template.
+  AiRuntimeSecretArn:
+    Type: String
+    AllowedPattern: '^arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+$'
+    NoEcho: true
+    Description: >-
+      Existing secret ARN with qdrantApiKey and serviceJwtPublicKey JSON
+      keys.
+  QdrantUrl:
+    Type: String
+    AllowedPattern: '^https://.+'
+    ConstraintDescription: Staging Qdrant endpoint must use HTTPS.
+  QdrantCollection:
+    Type: String
+    MinLength: 1
+  QdrantAlias:
+    Type: String
+    MinLength: 1
+  QdrantCollectionVersion:
+    Type: String
+    MinLength: 1
+  AiServiceIssuer:
+    Type: String
+    Default: talentpulse-api
+  AiServiceAudience:
+    Type: String
+    Default: talentpulse-ai
+  AiServiceJwtKeyId:
+    Type: String
+    MinLength: 1
+  FrontendUrl:
+    Type: String
+    Description: HTTPS frontend origin used by the NestJS CORS configuration.
+  BackfillMaxOperations:
+    Type: Number
+    Default: 1000
+    MinValue: 1
+    MaxValue: 100000
+    Description: >-
+      Per-task backfill operation cap, enforced again by the application.
+  LogRetentionInDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+
+Conditions:
+  DeployApplicationWorkloads: !Equals [!Ref DeployWorkloads, 'true']
+
+Globals:
+  Function:
+    Architectures: [x86_64]
+    VpcConfig:
+      SecurityGroupIds: !Ref VpcSecurityGroupIds
+      SubnetIds: !Ref VpcSubnetIds
+
+Resources:
+  BackendLambdaImageRepository:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'talentpulse/${StageName}/backend-lambda'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+  AiLambdaImageRepository:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'talentpulse/${StageName}/ai-lambda'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+  BackfillImageRepository:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'talentpulse/${StageName}/backfill'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+  PublicApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-public-api'
+      RetentionInDays: !Ref LogRetentionInDays
+
+  AiApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-ai-api'
+      RetentionInDays: !Ref LogRetentionInDays
+
+  PublicApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-public-api'
+      RetentionInDays: !Ref LogRetentionInDays
+
+  AiApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-ai-api'
+      RetentionInDays: !Ref LogRetentionInDays
+
+  IndexingWorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-indexing-worker'
+      RetentionInDays: !Ref LogRetentionInDays
+
+  BackfillTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}-index-backfill'
+      RetentionInDays: !Ref LogRetentionInDays
+
+  PublicApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      FailOnWarnings: true
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt PublicApiAccessLogGroup.Arn
+        Format: "{\"requestId\":\"$context.requestId\",\"routeKey\":\"$cont\
+          ext.routeKey\",\"status\":\"$context.status\",\"responseLength\":\
+          \"$context.responseLength\",\"integrationError\":\"$context.integr\
+          ationErrorMessage\"}"
+
+  AiApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      FailOnWarnings: true
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt AiApiAccessLogGroup.Arn
+        Format: "{\"requestId\":\"$context.requestId\",\"routeKey\":\"$cont\
+          ext.routeKey\",\"status\":\"$context.status\",\"responseLength\":\
+          \"$context.responseLength\",\"integrationError\":\"$context.integr\
+          ationErrorMessage\"}"
+
+  IndexingDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-${StageName}-indexing-dlq'
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  IndexingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-${StageName}-indexing'
+      VisibilityTimeout: 1800
+      MessageRetentionPeriod: 345600
+      ReceiveMessageWaitTimeSeconds: 20
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt IndexingDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  PublicApiFunctionRole:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-function-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt PublicApiFunctionLogGroup.Arn
+        - PolicyName: manage-vpc-network-interfaces
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+
+  AiApiFunctionRole:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-function-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt AiApiFunctionLogGroup.Arn
+        - PolicyName: manage-vpc-network-interfaces
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+        - PolicyName: invoke-configured-bedrock-models
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:\
+                    :foundation-model/cohere.embed-multilingual-v3"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:\
+                    :foundation-model/amazon.nova-lite-v1:0"
+
+  IndexingWorkerFunctionRole:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-function-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt IndexingWorkerFunctionLogGroup.Arn
+        - PolicyName: poll-indexing-queue
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ChangeMessageVisibility
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                Resource: !GetAtt IndexingQueue.Arn
+        - PolicyName: manage-vpc-network-interfaces
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+
+  PublicApiFunction:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-public-api'
+      PackageType: Image
+      ImageUri: !Ref BackendLambdaImageUri
+      Role: !GetAtt PublicApiFunctionRole.Arn
+      MemorySize: 1024
+      Timeout: 29
+      LoggingConfig:
+        LogGroup: !Ref PublicApiFunctionLogGroup
+        LogFormat: Text
+      Environment:
+        Variables:
+          NODE_ENV: staging
+          DB_HOST: !Ref DatabaseHost
+          DB_PORT: !Ref DatabasePort
+          DB_USERNAME: !Ref DatabaseUsername
+          DB_DATABASE: !Ref DatabaseName
+          DB_SYNCHRONIZE: 'false'
+          REDIS_ENABLED: 'false'
+          RUN_BACKGROUND_JOBS: 'false'
+          RUN_INDEXING_WORKER: 'false'
+          AI_INDEX_ENVIRONMENT: !Ref StageName
+          AI_INDEX_OUTBOX_ENVIRONMENT: !Ref StageName
+          URL_FRONTEND: !Ref FrontendUrl
+          AI_SERVICE_URL: !Sub "https://${AiApi}.execute-api.${AWS::Region}\
+            .${AWS::URLSuffix}"
+          AI_SERVICE_ISSUER: !Ref AiServiceIssuer
+          AI_SERVICE_AUDIENCE: !Ref AiServiceAudience
+          AI_SERVICE_JWT_ALGORITHM: RS256
+          AI_SERVICE_JWT_TTL_SECONDS: '60'
+          AI_SERVICE_JWT_KID: !Ref AiServiceJwtKeyId
+          AI_SERVICE_TIMEOUT_MS: '15000'
+          DB_PASSWORD: !Sub "{{resolve:secretsmanager:${BackendRuntimeSecre\
+            tArn}:SecretString:dbPassword}}"
+          JWT_SECRET: !Sub "{{resolve:secretsmanager:${BackendRuntimeSecret\
+            Arn}:SecretString:jwtSecret}}"
+          JWT_REFRESH_SECRET: !Sub "{{resolve:secretsmanager:${BackendRunti\
+            meSecretArn}:SecretString:jwtRefreshSecret}}"
+          JWT_ACCESS_TOKEN_SECRET: !Sub "{{resolve:secretsmanager:${Backend\
+            RuntimeSecretArn}:SecretString:jwtAccessTokenSecret}}"
+          CLOUD_NAME: !Sub "{{resolve:secretsmanager:${BackendRuntimeSecret\
+            Arn}:SecretString:cloudName}}"
+          API_KEY: !Sub "{{resolve:secretsmanager:${BackendRuntimeSecretArn\
+            }:SecretString:cloudinaryApiKey}}"
+          API_SECRET: !Sub "{{resolve:secretsmanager:${BackendRuntimeSecret\
+            Arn}:SecretString:cloudinaryApiSecret}}"
+          EMAIL_HOST: !Sub "{{resolve:secretsmanager:${BackendRuntimeSecret\
+            Arn}:SecretString:emailHost}}"
+          EMAIL_AUTH_USER: !Sub "{{resolve:secretsmanager:${BackendRuntimeS\
+            ecretArn}:SecretString:emailAuthUser}}"
+          EMAIL_AUTH_PASSWORD: !Sub "{{resolve:secretsmanager:${BackendRunt\
+            imeSecretArn}:SecretString:emailAuthPassword}}"
+          GOOGLE_CLIENT_ID: !Sub "{{resolve:secretsmanager:${BackendRuntime\
+            SecretArn}:SecretString:googleClientId}}"
+          GOOGLE_CLIENT_SECRET: !Sub "{{resolve:secretsmanager:${BackendRun\
+            timeSecretArn}:SecretString:googleClientSecret}}"
+          GOOGLE_CALLBACK_URL: !Sub "{{resolve:secretsmanager:${BackendRunt\
+            imeSecretArn}:SecretString:googleCallbackUrl}}"
+          PAYOS_CLIENT_ID: !Sub "{{resolve:secretsmanager:${BackendRuntimeS\
+            ecretArn}:SecretString:payosClientId}}"
+          PAYOS_API_KEY: !Sub "{{resolve:secretsmanager:${BackendRuntimeSec\
+            retArn}:SecretString:payosApiKey}}"
+          PAYOS_CHECKSUM_KEY: !Sub "{{resolve:secretsmanager:${BackendRunti\
+            meSecretArn}:SecretString:payosChecksumKey}}"
+          AI_SERVICE_JWT_PRIVATE_KEY: !Sub "{{resolve:secretsmanager:${Back\
+            endRuntimeSecretArn}:SecretString:aiServiceJwtPrivateKey}}"
+
+  AiApiFunction:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-ai-api'
+      PackageType: Image
+      ImageUri: !Ref AiLambdaImageUri
+      Role: !GetAtt AiApiFunctionRole.Arn
+      MemorySize: 2048
+      Timeout: 29
+      LoggingConfig:
+        LogGroup: !Ref AiApiFunctionLogGroup
+        LogFormat: Text
+      Environment:
+        Variables:
+          APP_ENV: staging
+          CHAT_MODEL_PROVIDER: bedrock
+          BEDROCK_REGION: !Ref AWS::Region
+          BEDROCK_CHAT_MODEL: amazon.nova-lite-v1:0
+          EMBEDDING_PROVIDER: bedrock_cohere
+          BEDROCK_EMBEDDING_MODEL: cohere.embed-multilingual-v3
+          BEDROCK_EMBEDDING_DIMENSIONS: '1024'
+          VECTOR_STORE_PROVIDER: qdrant
+          QDRANT_URL: !Ref QdrantUrl
+          QDRANT_COLLECTION: !Ref QdrantCollection
+          QDRANT_ALIAS: !Ref QdrantAlias
+          QDRANT_COLLECTION_VERSION: !Ref QdrantCollectionVersion
+          QDRANT_AUTO_INITIALIZE: 'false'
+          QDRANT_TIMEOUT_SECONDS: '3'
+          AI_SERVICE_AUTH_ISSUER: !Ref AiServiceIssuer
+          AI_SERVICE_AUTH_AUDIENCE: !Ref AiServiceAudience
+          AI_SERVICE_AUTH_KEY_ID: !Ref AiServiceJwtKeyId
+          QDRANT_API_KEY: !Sub "{{resolve:secretsmanager:${AiRuntimeSecretA\
+            rn}:SecretString:qdrantApiKey}}"
+          AI_SERVICE_AUTH_PUBLIC_KEY: !Sub "{{resolve:secretsmanager:${AiRu\
+            ntimeSecretArn}:SecretString:serviceJwtPublicKey}}"
+
+  PublicApiRootIntegration:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref PublicApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}\
+        :lambda:path/2015-03-31/functions/${PublicApiFunction.Arn}/invocatio\
+        ns"
+      PayloadFormatVersion: '2.0'
+
+  PublicApiRootRoute:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref PublicApi
+      RouteKey: 'ANY /'
+      Target: !Join ['/', ['integrations', !Ref PublicApiRootIntegration]]
+
+  PublicApiRootInvokePermission:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt PublicApiFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${A\
+        WS::AccountId}:${PublicApi}/$default/*/"
+
+  PublicApiProxyIntegration:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref PublicApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}\
+        :lambda:path/2015-03-31/functions/${PublicApiFunction.Arn}/invocatio\
+        ns"
+      PayloadFormatVersion: '2.0'
+
+  PublicApiProxyRoute:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref PublicApi
+      RouteKey: 'ANY /{proxy+}'
+      Target: !Join ['/', ['integrations', !Ref PublicApiProxyIntegration]]
+
+  PublicApiProxyInvokePermission:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt PublicApiFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${A\
+        WS::AccountId}:${PublicApi}/$default/*/*"
+
+  AiApiRagRetrieveIntegration:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AiApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}\
+        :lambda:path/2015-03-31/functions/${AiApiFunction.Arn}/invocations"
+      PayloadFormatVersion: '2.0'
+
+  AiApiRagRetrieveRoute:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AiApi
+      RouteKey: 'POST /internal/v1/rag/retrieve'
+      Target: !Join ['/', ['integrations', !Ref AiApiRagRetrieveIntegration]]
+
+  AiApiRagRetrieveInvokePermission:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt AiApiFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${A\
+        WS::AccountId}:${AiApi}/$default/POST/internal/v1/rag/retrieve"
+
+  AiApiRagGenerateIntegration:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AiApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}\
+        :lambda:path/2015-03-31/functions/${AiApiFunction.Arn}/invocations"
+      PayloadFormatVersion: '2.0'
+
+  AiApiRagGenerateRoute:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AiApi
+      RouteKey: 'POST /internal/v1/rag/generate'
+      Target: !Join ['/', ['integrations', !Ref AiApiRagGenerateIntegration]]
+
+  AiApiRagGenerateInvokePermission:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt AiApiFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${A\
+        WS::AccountId}:${AiApi}/$default/POST/internal/v1/rag/generate"
+
+  AiApiIndexUpsertIntegration:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AiApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}\
+        :lambda:path/2015-03-31/functions/${AiApiFunction.Arn}/invocations"
+      PayloadFormatVersion: '2.0'
+
+  AiApiIndexUpsertRoute:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AiApi
+      RouteKey: 'POST /internal/v1/index/jobs/upsert'
+      Target: !Join ['/', ['integrations', !Ref AiApiIndexUpsertIntegration]]
+
+  AiApiIndexUpsertInvokePermission:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt AiApiFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${A\
+        WS::AccountId}:${AiApi}/$default/POST/internal/v1/index/jobs/upsert"
+
+  AiApiIndexDeleteIntegration:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AiApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}\
+        :lambda:path/2015-03-31/functions/${AiApiFunction.Arn}/invocations"
+      PayloadFormatVersion: '2.0'
+
+  AiApiIndexDeleteRoute:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AiApi
+      RouteKey: 'POST /internal/v1/index/jobs/delete'
+      Target: !Join ['/', ['integrations', !Ref AiApiIndexDeleteIntegration]]
+
+  AiApiIndexDeleteInvokePermission:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt AiApiFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${A\
+        WS::AccountId}:${AiApi}/$default/POST/internal/v1/index/jobs/delete"
+
+  AiApiIndexScanIntegration:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AiApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}\
+        :lambda:path/2015-03-31/functions/${AiApiFunction.Arn}/invocations"
+      PayloadFormatVersion: '2.0'
+
+  AiApiIndexScanRoute:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AiApi
+      RouteKey: 'POST /internal/v1/index/points/scan'
+      Target: !Join ['/', ['integrations', !Ref AiApiIndexScanIntegration]]
+
+  AiApiIndexScanInvokePermission:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt AiApiFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${A\
+        WS::AccountId}:${AiApi}/$default/POST/internal/v1/index/points/scan"
+
+  IndexingWorkerFunction:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-indexing-worker'
+      PackageType: Image
+      ImageUri: !Ref BackendLambdaImageUri
+      ImageConfig:
+        Command: [dist/lambda-sqs.handler]
+      Role: !GetAtt IndexingWorkerFunctionRole.Arn
+      MemorySize: 1024
+      Timeout: 300
+      LoggingConfig:
+        LogGroup: !Ref IndexingWorkerFunctionLogGroup
+        LogFormat: Text
+      Environment:
+        Variables:
+          NODE_ENV: staging
+          DB_HOST: !Ref DatabaseHost
+          DB_PORT: !Ref DatabasePort
+          DB_USERNAME: !Ref DatabaseUsername
+          DB_DATABASE: !Ref DatabaseName
+          DB_SYNCHRONIZE: 'false'
+          REDIS_ENABLED: 'false'
+          RUN_BACKGROUND_JOBS: 'false'
+          RUN_INDEXING_WORKER: 'false'
+          AI_INDEX_ENVIRONMENT: !Ref StageName
+          AI_INDEX_OUTBOX_ENVIRONMENT: !Ref StageName
+          AI_INDEX_WORKER_ID: !Sub '${AWS::StackName}-indexing-worker'
+          AI_SERVICE_URL: !Sub "https://${AiApi}.execute-api.${AWS::Region}\
+            .${AWS::URLSuffix}"
+          AI_SERVICE_ISSUER: !Ref AiServiceIssuer
+          AI_SERVICE_AUDIENCE: !Ref AiServiceAudience
+          AI_SERVICE_JWT_ALGORITHM: RS256
+          AI_SERVICE_JWT_TTL_SECONDS: '60'
+          AI_SERVICE_JWT_KID: !Ref AiServiceJwtKeyId
+          AI_SERVICE_TIMEOUT_MS: '15000'
+          DB_PASSWORD: !Sub "{{resolve:secretsmanager:${BackendRuntimeSecre\
+            tArn}:SecretString:dbPassword}}"
+          AI_SERVICE_JWT_PRIVATE_KEY: !Sub "{{resolve:secretsmanager:${Back\
+            endRuntimeSecretArn}:SecretString:aiServiceJwtPrivateKey}}"
+      Events:
+        IndexingQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt IndexingQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
+            ScalingConfig:
+              MaximumConcurrency: 5
+
+  BackfillTaskExecutionRole:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: pull-backfill-image-and-write-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt BackfillImageRepository.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt BackfillTaskLogGroup.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref BackendRuntimeSecretArn
+
+  BackfillTaskRole:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  BackfillTaskDefinition:
+    Condition: DeployApplicationWorkloads
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-${StageName}-index-backfill'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt BackfillTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt BackfillTaskRole.Arn
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ContainerDefinitions:
+        - Name: index-backfill
+          Image: !Ref BackfillImageUri
+          Essential: true
+          Command:
+            - node
+            - dist/tasks/ai-index-backfill.task.js
+            - --environment
+            - !Ref StageName
+            - --max-operations
+            - !Ref BackfillMaxOperations
+          Environment:
+            - Name: NODE_ENV
+              Value: staging
+            - Name: DB_HOST
+              Value: !Ref DatabaseHost
+            - Name: DB_PORT
+              Value: !Ref DatabasePort
+            - Name: DB_USERNAME
+              Value: !Ref DatabaseUsername
+            - Name: DB_DATABASE
+              Value: !Ref DatabaseName
+            - Name: DB_SYNCHRONIZE
+              Value: 'false'
+            - Name: REDIS_ENABLED
+              Value: 'false'
+            - Name: RUN_BACKGROUND_JOBS
+              Value: 'false'
+            - Name: RUN_INDEXING_WORKER
+              Value: 'false'
+            - Name: AI_INDEX_ENVIRONMENT
+              Value: !Ref StageName
+            - Name: AI_INDEX_OUTBOX_ENVIRONMENT
+              Value: !Ref StageName
+            - Name: AI_SERVICE_URL
+              Value: !Sub "https://${AiApi}.execute-api.${AWS::Region}.${AW\
+                S::URLSuffix}"
+            - Name: AI_SERVICE_ISSUER
+              Value: !Ref AiServiceIssuer
+            - Name: AI_SERVICE_AUDIENCE
+              Value: !Ref AiServiceAudience
+            - Name: AI_SERVICE_JWT_ALGORITHM
+              Value: RS256
+            - Name: AI_SERVICE_JWT_TTL_SECONDS
+              Value: '60'
+            - Name: AI_SERVICE_JWT_KID
+              Value: !Ref AiServiceJwtKeyId
+            - Name: AI_SERVICE_TIMEOUT_MS
+              Value: '15000'
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub '${BackendRuntimeSecretArn}:dbPassword::'
+            - Name: AI_SERVICE_JWT_PRIVATE_KEY
+              ValueFrom: !Sub "${BackendRuntimeSecretArn}:aiServiceJwtPriva\
+                teKey::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackfillTaskLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: index-backfill
+
+Outputs:
+  PublicApiUrl:
+    Description: Public NestJS HTTP API base URL.
+    Value: !Sub "https://${PublicApi}.execute-api.${AWS::Region}.${AWS::URL\
+      Suffix}"
+  AiApiUrl:
+    Description: >-
+      Internal FastAPI HTTP API base URL; FastAPI service JWT validation
+      remains required.
+    Value: !Sub 'https://${AiApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  IndexingQueueUrl:
+    Description: Standard SQS queue for UUID-only indexing outbox notifications.
+    Value: !Ref IndexingQueue
+  IndexingQueueArn:
+    Description: Standard SQS queue ARN.
+    Value: !GetAtt IndexingQueue.Arn
+  IndexingDeadLetterQueueUrl:
+    Description: SQS dead-letter queue URL.
+    Value: !Ref IndexingDeadLetterQueue
+  BackfillTaskDefinitionArn:
+    Condition: DeployApplicationWorkloads
+    Description: >-
+      Run this bounded task explicitly in an existing ECS cluster; no ECS
+      service is created.
+    Value: !Ref BackfillTaskDefinition
+  BackendLambdaRepositoryUri:
+    Description: ECR repository URI for the NestJS Lambda image.
+    Value: !GetAtt BackendLambdaImageRepository.RepositoryUri
+  AiLambdaRepositoryUri:
+    Description: ECR repository URI for the FastAPI Lambda image.
+    Value: !GetAtt AiLambdaImageRepository.RepositoryUri
+  BackfillRepositoryUri:
+    Description: ECR repository URI for the ECS-compatible backfill image.
+    Value: !GetAtt BackfillImageRepository.RepositoryUri
