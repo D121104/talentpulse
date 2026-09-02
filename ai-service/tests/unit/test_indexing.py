@@ -19,7 +19,11 @@ from app.application.indexing import (
     point_ids_for_job,
 )
 from app.core.errors import ServiceError
-from app.schemas import IndexJobDeleteRequest, IndexJobUpsertRequest
+from app.schemas import (
+    IndexJobDeleteRequest,
+    IndexJobUpsertRequest,
+    IndexMetadataScanRequest,
+)
 
 JOB_ID = UUID("11111111-1111-4111-8111-111111111111")
 COMPANY_ID = UUID("22222222-2222-4222-8222-222222222222")
@@ -69,6 +73,19 @@ def service() -> tuple[IndexJobService, FakeEmbeddingModel, InMemoryVectorStore]
     embedding = FakeEmbeddingModel(dimensions=4)
     store = InMemoryVectorStore(dimensions=4)
     return IndexJobService(embedding, store, clock=lambda: NOW), embedding, store
+
+
+def test_metadata_scan_request_validates_optional_canonical_job_filter() -> None:
+    filtered = IndexMetadataScanRequest.model_validate({"job_id": str(JOB_ID), "limit": 1})
+
+    assert filtered.job_id == JOB_ID
+    assert filtered.cursor is None
+    assert IndexMetadataScanRequest.model_validate({}).limit == 256
+
+    with pytest.raises(ValueError):
+        IndexMetadataScanRequest.model_validate({"job_id": "not-a-uuid"})
+    with pytest.raises(ValueError):
+        IndexMetadataScanRequest.model_validate({"job_id": 123})
 
 
 def test_snapshot_is_bounded_and_rejects_unknown_nested_company_fields() -> None:

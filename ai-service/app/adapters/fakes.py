@@ -3,6 +3,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from app.core.index_representation import (
     REPRESENTATION_METADATA_POINT_ID,
@@ -128,16 +129,20 @@ class InMemoryVectorStore(VectorStore):
             and record.payload.get("job_id") == job_id
         ]
 
-    async def scan_metadata(self, cursor: str | None, limit: int) -> VectorMetadataScanPage:
+    async def scan_metadata(
+        self, cursor: str | None, limit: int, job_id: str | None = None
+    ) -> VectorMetadataScanPage:
         """Mirror the bounded provider scan without returning vectors or text."""
 
         safe_limit = bounded_scan_limit(limit)
         normalized_cursor = validate_scan_cursor(cursor)
+        normalized_job_id = _normalize_job_id(job_id)
         point_ids = sorted(
             point_id
             for point_id, record in self.records.items()
             if point_id != str(REPRESENTATION_METADATA_POINT_ID)
             and not is_reserved_metadata_payload(record.payload)
+            and (normalized_job_id is None or record.payload.get("job_id") == normalized_job_id)
         )
         if normalized_cursor is None:
             start = 0
@@ -160,3 +165,14 @@ class InMemoryVectorStore(VectorStore):
             else None
         )
         return VectorMetadataScanPage(metadata, next_cursor)
+
+def _normalize_job_id(job_id: str | None) -> str | None:
+    if job_id is None:
+        return None
+    try:
+        parsed = UUID(job_id)
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("job_id must be a UUID") from exc
+    if str(parsed) != job_id.lower():
+        raise ValueError("job_id must use canonical UUID notation")
+    return str(parsed)

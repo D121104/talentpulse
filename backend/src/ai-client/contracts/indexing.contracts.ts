@@ -153,6 +153,8 @@ export interface IndexJobResponse {
 }
 
 export interface IndexMetadataScanRequest {
+  /** Optional canonical job UUID filter; omitted for an unfiltered scan. */
+  job_id?: string | null;
   /** Opaque Qdrant cursor; UUID and canonical numeric offsets are supported. */
   cursor?: string | null;
   /** FastAPI defaults this to MAX_INDEX_SCAN_LIMIT when omitted. */
@@ -266,7 +268,7 @@ const DELETE_REQUEST_KEYS = new Set([
   'source_version',
 ]);
 
-const SCAN_REQUEST_KEYS = new Set(['cursor', 'limit']);
+const SCAN_REQUEST_KEYS = new Set(['job_id', 'cursor', 'limit']);
 const SCAN_POINT_KEYS = new Set([
   'point_id',
   'job_id',
@@ -1367,6 +1369,14 @@ export function assertIndexMetadataScanRequest(
   const request = ensureRecord(value, 'request');
   ensureKeys(request, SCAN_REQUEST_KEYS, 'request');
   return {
+    ...(hasOwn(request, 'job_id')
+      ? {
+          job_id:
+            request.job_id === null
+              ? null
+              : ensureUuid(request.job_id, 'job_id'),
+        }
+      : {}),
     ...(hasOwn(request, 'cursor')
       ? { cursor: ensureScanCursor(request.cursor, 'cursor') }
       : {}),

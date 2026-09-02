@@ -181,7 +181,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> IndexMetadataScanResponse:
         try:
             vector_store = cast(VectorStore, http_request.app.state.vector_store)
-            page = await vector_store.scan_metadata(payload.cursor, payload.limit)
+            page = await vector_store.scan_metadata(
+                payload.cursor,
+                payload.limit,
+                str(payload.job_id) if payload.job_id is not None else None,
+            )
             response = IndexMetadataScanResponse(
                 points=[_to_index_point_metadata(point) for point in page.points],
                 next_cursor=page.next_cursor,

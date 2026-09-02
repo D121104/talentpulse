@@ -244,8 +244,9 @@ IndexJobDeleteResponse = IndexJobResponse
 
 
 class IndexMetadataScanRequest(ContractModel):
-    """Bounded cursor request for operational Qdrant reconciliation scans."""
+    """Bounded metadata scan request with an optional canonical job filter."""
 
+    job_id: UuidValue | None = None
     cursor: Annotated[str, Field(min_length=1, max_length=128)] | None = None
     limit: int = Field(default=MAX_SCAN_LIMIT, ge=1, le=MAX_SCAN_LIMIT)
 

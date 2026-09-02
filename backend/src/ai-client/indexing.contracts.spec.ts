@@ -142,6 +142,9 @@ describe('indexing contracts', () => {
       { cursor: '7', limit: 256 },
     );
     expect(
+      assertIndexMetadataScanRequest({ job_id: JOB_ID, limit: 1 }),
+    ).toEqual({ job_id: JOB_ID, limit: 1 });
+    expect(
       assertIndexMetadataScanRequest({
         cursor: '33333333-3333-4333-8333-333333333333',
         limit: 1,
@@ -158,6 +161,8 @@ describe('indexing contracts', () => {
       { cursor: '01' },
       { cursor: '18446744073709551616' },
       { cursor: 'not-a-cursor' },
+      { job_id: 'not-a-uuid' },
+      { job_id: true },
       { unexpected: 'field' },
     ]) {
       expect(() => assertIndexMetadataScanRequest(invalid)).toThrow(

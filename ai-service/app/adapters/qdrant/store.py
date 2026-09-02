@@ -980,22 +980,41 @@ class QdrantVectorStore(VectorStore):
             records.append(VectorRecord(point_id, vector, payload))
         return records
 
-    async def scan_metadata(self, cursor: str | None, limit: int) -> VectorMetadataScanPage:
+    async def scan_metadata(
+        self, cursor: str | None, limit: int, job_id: str | None = None
+    ) -> VectorMetadataScanPage:
         """Scroll bounded reconciliation metadata without vectors or job text."""
 
         safe_limit = bounded_scan_limit(limit)
         normalized_cursor = validate_scan_cursor(cursor)
+        normalized_job_id = None
+        if job_id is not None:
+            try:
+                normalized_job_id = _canonical_uuid(job_id, "job_id")
+            except ValueError as exc:
+                raise ProviderError("Job ID is invalid") from exc
         offset = _qdrant_offset(normalized_cursor)
         try:
             from qdrant_client import models
 
+            must = (
+                [
+                    models.FieldCondition(
+                        key="job_id",
+                        match=models.MatchValue(value=normalized_job_id),
+                    )
+                ]
+                if normalized_job_id is not None
+                else []
+            )
             response = await asyncio.to_thread(
                 self._client.scroll,
                 collection_name=self.alias_name,
                 offset=offset,
                 limit=safe_limit,
                 scroll_filter=models.Filter(
-                    must_not=[models.HasIdCondition(has_id=[str(REPRESENTATION_METADATA_POINT_ID)])]
+                    must=cast(Any, must),
+                    must_not=[models.HasIdCondition(has_id=[str(REPRESENTATION_METADATA_POINT_ID)])],
                 ),
                 with_payload=list(SCAN_METADATA_PAYLOAD_FIELDS),
                 with_vectors=False,

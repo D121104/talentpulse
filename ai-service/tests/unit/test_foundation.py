@@ -1029,6 +1029,56 @@ async def test_qdrant_scan_maps_safe_metadata_and_cursor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_qdrant_scan_filters_by_job_id_and_keeps_safe_read_options() -> None:
+    point_id = uuid4()
+    target_job_id = uuid4()
+    payload = {
+        "job_id": str(target_job_id),
+        "company_id": str(uuid4()),
+        "source_version": 7,
+        "content_hash": "a" * 64,
+        "metadata_hash": "b" * 64,
+        "embedding_provider": "fake",
+        "embedding_model_version": "fake-embedding",
+        "embedding_dimensions": 4,
+        "normalization_version": "normalization-v1",
+        "chunking_version": "chunking-v1",
+        "index_schema_version": "schema-v1",
+        "title": "must not cross the metadata boundary",
+        "description": "must not cross the metadata boundary",
+        "skills": ["must not cross the metadata boundary"],
+    }
+    calls: dict[str, object] = {}
+
+    def scroll(**kwargs: object) -> tuple[list[SimpleNamespace], None]:
+        calls.update(kwargs)
+        return [SimpleNamespace(id=point_id, payload=payload)], None
+
+    store = QdrantVectorStore.__new__(QdrantVectorStore)
+    store.collection_name = "jobs_fake_v1"
+    store.alias_name = "jobs_current"
+    store.dimensions = 4
+    store.embedding_model = "fake-embedding"
+    store.embedding_provider = "fake"
+    store.collection_version = "collection-v1"
+    store.allow_legacy_metadata = False
+    store.auto_initialize = False
+    store._client = SimpleNamespace(scroll=scroll)
+
+    page = await store.scan_metadata(None, 1, str(target_job_id))
+
+    query_filter = calls["scroll_filter"]
+    assert query_filter.must is not None
+    assert query_filter.must[0].key == "job_id"
+    assert query_filter.must[0].match.value == str(target_job_id)
+    assert query_filter.must_not[0].has_id == [str(REPRESENTATION_METADATA_POINT_ID)]
+    assert calls["with_vectors"] is False
+    assert calls["with_payload"] == list(SCAN_METADATA_PAYLOAD_FIELDS)
+    assert page.points[0].job_id == target_job_id
+    assert not hasattr(page.points[0], "title")
+
+
+@pytest.mark.asyncio
 async def test_qdrant_scan_accepts_a_terminal_page_with_no_cursor() -> None:
     point_id = uuid4()
     payload = {

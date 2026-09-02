@@ -455,7 +455,10 @@ describe('AiServiceClient', () => {
     );
 
     await expect(
-      client.scanIndexPoints({ cursor: '7', limit: 2 }, { requestId, traceId }),
+      client.scanIndexPoints(
+        { cursor: '7', limit: 2, job_id: indexJobRequest.job.job_id },
+        { requestId, traceId },
+      ),
     ).resolves.toMatchObject({
       points: [],
       next_cursor: null,
@@ -465,7 +468,7 @@ describe('AiServiceClient', () => {
     expect(auth.issue).toHaveBeenCalledWith(ServiceJwtScope.JobsIndex);
     expect(transport.post).toHaveBeenCalledWith(
       'http://ai-service:8000/internal/v1/index/points/scan',
-      { cursor: '7', limit: 2 },
+      { cursor: '7', limit: 2, job_id: indexJobRequest.job.job_id },
       expect.objectContaining({
         timeoutMs: expect.any(Number),
         headers: expect.objectContaining({
