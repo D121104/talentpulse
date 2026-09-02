@@ -1,4 +1,6 @@
 import { ConfigService } from '@nestjs/config';
+import { SELF_DECLARED_DEPS_METADATA } from '@nestjs/common/constants';
+import { AiIndexDispatcherService } from './ai-index-dispatcher.service';
 import { AiIndexDrainService } from './ai-index-drain.service';
 
 function config(
@@ -18,6 +20,12 @@ function config(
 }
 
 describe('AiIndexDrainService', () => {
+  it('declares the concrete dispatcher provider token for Nest injection', () => {
+    expect(
+      Reflect.getMetadata(SELF_DECLARED_DEPS_METADATA, AiIndexDrainService),
+    ).toContainEqual({ index: 0, param: AiIndexDispatcherService });
+  });
+
   it('stops after the first empty batch and aggregates dispatcher statuses', async () => {
     const processBatch = jest
       .fn()

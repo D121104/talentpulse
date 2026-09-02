@@ -27,7 +27,8 @@ import { MailModule } from 'src/mail/mail.module';
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
         signOptions: {
-          expiresIn: ms(configService.get<string>('JWT_EXPIRES_IN')) / 1000,
+         expiresIn:
+           ms(configService.get<string>('JWT_EXPIRES_IN', '1d')) / 1000,
         },
       }),
       inject: [ConfigService],
@@ -38,7 +39,9 @@ import { MailModule } from 'src/mail/mail.module';
         secret: configService.get<string>('JWT_REFRESH_SECRET'),
         signOptions: {
           expiresIn:
-            ms(configService.get<string>('JWT_REFRESH_EXPIRES_IN')) / 1000,
+           ms(
+             configService.get<string>('JWT_REFRESH_EXPIRES_IN', '7d'),
+           ) / 1000,
         },
       }),
       inject: [ConfigService],

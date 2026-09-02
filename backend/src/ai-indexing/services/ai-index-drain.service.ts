@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { resolveAiIndexEnvironment } from '../../config/ai-index-environment';
 import {
@@ -33,6 +33,7 @@ type AiIndexBatchDispatcher = Pick<AiIndexDispatcherService, 'processBatch'>;
 @Injectable()
 export class AiIndexDrainService {
   constructor(
+    @Inject(AiIndexDispatcherService)
     private readonly dispatcher: AiIndexBatchDispatcher,
     private readonly configService: ConfigService,
   ) {}

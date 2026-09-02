@@ -112,8 +112,10 @@ secret values.
 ## Deploy
 
 `staging-parameters.example` lists every template parameter with non-secret
-placeholders, including `IndexingPublisherScheduleEnabled`; it is not
-shell-ready until every placeholder is replaced.
+placeholders, including `IndexingPublisherScheduleEnabled` and
+`SecretRefreshVersion`; it is not shell-ready until every placeholder is
+replaced. Change `SecretRefreshVersion` to a new non-secret value after
+rotating runtime secrets so Lambda dynamic references are resolved again.
 `backend-runtime-secret.example.json` and `ai-runtime-secret.example.json`
 document the required Secrets Manager JSON shapes only. Do not upload their
 placeholders as runtime secrets.

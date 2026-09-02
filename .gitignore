@@ -61,9 +61,12 @@ scratch/
 
 # Local agent configuration and state
 .kilo/
+session.json
+.agents/skills/fastapi/
 
 # Generated Graphify artifacts and cache
 graphify-out/
+infra/sam/.aws-sam/
 
 # Local plans and planning notes
 *PLAN*.md

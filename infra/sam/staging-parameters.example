@@ -26,3 +26,4 @@ AiServiceJwtKeyId=<service-jwt-key-id>
 FrontendUrl=https://<staging-frontend-origin>
 BackfillMaxOperations=1000
 LogRetentionInDays=30
+SecretRefreshVersion=initial

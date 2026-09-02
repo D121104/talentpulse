@@ -312,20 +312,27 @@ class QdrantVectorStore(VectorStore):
         config = getattr(info, "config", None)
         params = getattr(config, "params", None)
         vectors = getattr(params, "vectors", None)
-        if isinstance(vectors, dict) or vectors is None:
+        if vectors is None:
+            return None
+        if isinstance(vectors, Mapping):
+            if len(vectors) != 1 or "" not in vectors:
+                return None
+            vectors = vectors[""]
+        if (
+            _member(vectors, "size", _MISSING) is _MISSING
+            or _member(vectors, "distance", _MISSING) is _MISSING
+        ):
             return None
         return vectors
 
     def _collection_vector_size(self, info: Any) -> int | None:
         vectors = self._collection_vector_config(info)
-        size = getattr(vectors, "size", None)
+        size = _member(vectors, "size", None)
         return int(size) if isinstance(size, int) and not isinstance(size, bool) else None
 
     def _collection_distance(self, info: Any) -> str | None:
         vectors = self._collection_vector_config(info)
-        if vectors is None:
-            return None
-        distance = getattr(vectors, "distance", None)
+        distance = _member(vectors, "distance", None)
         if distance is None:
             return None
         return str(getattr(distance, "value", distance))

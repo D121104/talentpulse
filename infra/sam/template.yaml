@@ -125,12 +125,20 @@ Parameters:
     Type: Number
     Default: 30
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+  SecretRefreshVersion:
+    Type: String
+    Default: initial
+    Description: >-
+      Change this non-secret value after rotating runtime Secrets Manager
+      values so Lambda environment dynamic references are resolved again.
 
 Conditions:
   DeployApplicationWorkloads: !Equals [!Ref DeployWorkloads, 'true']
-  EnableIndexingPublisherSchedule: !Equals
-    - !Ref IndexingPublisherScheduleEnabled
-    - 'true'
+  EnableIndexingPublisherSchedule: !And
+    - !Condition DeployApplicationWorkloads
+    - !Equals
+      - !Ref IndexingPublisherScheduleEnabled
+      - 'true'
 
 Globals:
   Function:
@@ -446,6 +454,7 @@ Resources:
       Environment:
         Variables:
           NODE_ENV: staging
+          NODE_EXTRA_CA_CERTS: /var/task/rds-combined-ca-bundle.pem
           DB_HOST: !Ref DatabaseHost
           DB_PORT: !Ref DatabasePort
           DB_USERNAME: !Ref DatabaseUsername
@@ -499,6 +508,7 @@ Resources:
             meSecretArn}:SecretString:payosChecksumKey}}"
           AI_SERVICE_JWT_PRIVATE_KEY: !Sub "{{resolve:secretsmanager:${Back\
             endRuntimeSecretArn}:SecretString:aiServiceJwtPrivateKey}}"
+          SECRET_REFRESH_VERSION: !Ref SecretRefreshVersion
 
   AiApiFunction:
     Condition: DeployApplicationWorkloads
@@ -536,6 +546,7 @@ Resources:
             rn}:SecretString:qdrantApiKey}}"
           AI_SERVICE_AUTH_PUBLIC_KEY: !Sub "{{resolve:secretsmanager:${AiRu\
             ntimeSecretArn}:SecretString:serviceJwtPublicKey}}"
+          SECRET_REFRESH_VERSION: !Ref SecretRefreshVersion
 
   PublicApiRootIntegration:
     Condition: DeployApplicationWorkloads
@@ -760,6 +771,7 @@ Resources:
       Environment:
         Variables:
           NODE_ENV: staging
+          NODE_EXTRA_CA_CERTS: /var/task/rds-combined-ca-bundle.pem
           DB_HOST: !Ref DatabaseHost
           DB_PORT: !Ref DatabasePort
           DB_USERNAME: !Ref DatabaseUsername
@@ -783,6 +795,7 @@ Resources:
             tArn}:SecretString:dbPassword}}"
           AI_SERVICE_JWT_PRIVATE_KEY: !Sub "{{resolve:secretsmanager:${Back\
             endRuntimeSecretArn}:SecretString:aiServiceJwtPrivateKey}}"
+          SECRET_REFRESH_VERSION: !Ref SecretRefreshVersion
       Events:
         IndexingQueueEvent:
           Type: SQS
@@ -812,6 +825,7 @@ Resources:
       Environment:
         Variables:
           NODE_ENV: staging
+          NODE_EXTRA_CA_CERTS: /var/task/rds-combined-ca-bundle.pem
           DB_HOST: !Ref DatabaseHost
           DB_PORT: !Ref DatabasePort
           DB_USERNAME: !Ref DatabaseUsername
@@ -827,14 +841,27 @@ Resources:
           AI_INDEX_PUBLISH_LEASE_MS: '120000'
           DB_PASSWORD: !Sub >-
             {{resolve:secretsmanager:${BackendRuntimeSecretArn}:SecretString:dbPassword}}
-      Events:
-        PublishPendingOutbox:
-          Type: Schedule
-          Properties:
-            Schedule: rate(1 minute)
-            Enabled: !If [EnableIndexingPublisherSchedule, true, false]
-            Description: >-
-              Publish bounded pending AI indexing outbox notifications.
+          SECRET_REFRESH_VERSION: !Ref SecretRefreshVersion
+
+  IndexingPublisherSchedule:
+    Condition: EnableIndexingPublisherSchedule
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Publish bounded pending AI indexing outbox notifications.
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt IndexingPublisherFunction.Arn
+          Id: !Sub '${AWS::StackName}-indexing-publisher'
+
+  IndexingPublisherSchedulePermission:
+    Condition: EnableIndexingPublisherSchedule
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref IndexingPublisherFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt IndexingPublisherSchedule.Arn
 
   BackfillTaskExecutionRole:
     Condition: DeployApplicationWorkloads
@@ -908,6 +935,8 @@ Resources:
           Environment:
             - Name: NODE_ENV
               Value: staging
+            - Name: NODE_EXTRA_CA_CERTS
+              Value: /app/rds-combined-ca-bundle.pem
             - Name: DB_HOST
               Value: !Ref DatabaseHost
             - Name: DB_PORT

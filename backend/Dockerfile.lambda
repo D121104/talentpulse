@@ -3,6 +3,10 @@ FROM public.ecr.aws/lambda/nodejs:22 AS build
 
 WORKDIR ${LAMBDA_TASK_ROOT}
 
+RUN curl --fail --silent --show-error --location \
+      https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+      --output /tmp/rds-combined-ca-bundle.pem
+
 COPY package.json package-lock.json nest-cli.json tsconfig.json tsconfig.build.json ./
 RUN npm ci --include=dev
 
@@ -16,5 +20,6 @@ WORKDIR ${LAMBDA_TASK_ROOT}
 COPY --from=build ${LAMBDA_TASK_ROOT}/dist ./dist
 COPY --from=build ${LAMBDA_TASK_ROOT}/node_modules ./node_modules
 COPY --from=build ${LAMBDA_TASK_ROOT}/package.json ./package.json
+COPY --from=build /tmp/rds-combined-ca-bundle.pem ./rds-combined-ca-bundle.pem
 
 CMD ["dist/lambda.handler"]

@@ -499,6 +499,40 @@ def test_qdrant_foundation_rejects_incompatible_vector_configuration() -> None:
         assert store._ensure_foundation_sync() is False
 
 
+def test_qdrant_collection_vector_config_accepts_only_one_unnamed_vector() -> None:
+    store = QdrantVectorStore.__new__(QdrantVectorStore)
+    valid_config = {
+        "size": 4,
+        "distance": "Cosine",
+        "on_disk": True,
+    }
+    valid_info = SimpleNamespace(
+        config=SimpleNamespace(
+            params=SimpleNamespace(vectors={"": valid_config}),
+        )
+    )
+
+    assert store._collection_vector_config(valid_info) == valid_config
+    assert store._collection_vector_size(valid_info) == 4
+    assert store._collection_distance(valid_info) == "Cosine"
+
+    for vectors in (
+        {},
+        {"named": valid_config},
+        {"": valid_config, "named": valid_config},
+        {"": {"size": 4}},
+        {"": None},
+        {"": []},
+        {"size": 4, "distance": "Cosine"},
+    ):
+        info = SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(vectors=vectors),
+            )
+        )
+        assert store._collection_vector_config(info) is None
+
+
 def test_in_memory_store_hides_reserved_marker_from_search_and_scan() -> None:
     import asyncio
 
