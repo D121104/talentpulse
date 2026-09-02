@@ -81,6 +81,8 @@ export interface AiIndexCallOptions {
   /** Provider/model labels used only for bounded audit metadata. */
   provider?: string;
   model?: string;
+  /** Bypasses provider-attempt persistence for explicitly read-only metadata scans. */
+  readOnly?: boolean;
 }
 
 @Injectable()
@@ -179,10 +181,20 @@ export class AiServiceClient {
     options?: AiIndexCallOptions,
   ): Promise<IndexMetadataScanResponse> {
     assertIndexMetadataScanRequest(request);
+    const serialized = serializeIndexMetadataScanRequest(request);
+    if (options?.readOnly) {
+      return this.callIndexingReadOnly(
+        '/internal/v1/index/points/scan',
+        ServiceJwtScope.JobsIndex,
+        serialized,
+        assertIndexMetadataScanResponse,
+        options,
+      );
+    }
     return this.callIndexing(
       '/internal/v1/index/points/scan',
       ServiceJwtScope.JobsIndex,
-      serializeIndexMetadataScanRequest(request),
+      serialized,
       assertIndexMetadataScanResponse,
       options,
     );
@@ -217,6 +229,49 @@ export class AiServiceClient {
         );
         const validated = validateResponse(response);
         this.assertResponseCorrelation(validated, request, requestId, traceId);
+        return validated;
+      } catch (error) {
+        throw mapAiClientError(error);
+      }
+    });
+  }
+
+  /** Executes a protected inspection request without creating provider-attempt rows. */
+  private async callIndexingReadOnly<TRequest, TResponse>(
+    path: string,
+    scope: ServiceJwtScope,
+    request: TRequest,
+    validateResponse: (value: unknown) => TResponse,
+    options?: AiIndexCallOptions,
+  ): Promise<TResponse> {
+    this.assertConfigured();
+    const requestId = this.indexCorrelationId(
+      options?.requestId ?? this.createOperationAttemptId(),
+      'request_id',
+    );
+    const traceId = this.indexCorrelationId(
+      options?.traceId ?? this.createTraceId(),
+      'trace_id',
+    );
+    return this.circuit.execute(async () => {
+      try {
+        const token = await this.auth.issue(scope);
+        const response = await this.transport.post<unknown>(
+          `${this.config.baseUrl}${path}`,
+          request,
+          {
+            timeoutMs: this.config.timeoutMs,
+            headers: {
+              Authorization: `Bearer ${token.token}`,
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'X-Request-ID': requestId,
+              'X-Trace-ID': traceId,
+            },
+          },
+        );
+        const validated = validateResponse(response);
+        this.assertIndexResponseCorrelation(validated, requestId);
         return validated;
       } catch (error) {
         throw mapAiClientError(error);

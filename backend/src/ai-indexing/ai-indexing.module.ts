@@ -18,6 +18,7 @@ import {
   AiIndexSqsPublisherToken,
 } from './ai-index-sqs.publisher';
 import { AiIndexPublisherService } from './services/ai-index-publisher.service';
+import { AiIndexVerificationService } from './services/ai-index-verification.service';
 import { AiIndexOutbox, AiJobIndexState } from './entities';
 
 /**
@@ -43,6 +44,7 @@ import { AiIndexOutbox, AiJobIndexState } from './entities';
     AiIndexLifecycleSweepService,
     AiIndexDrainService,
     AiIndexPublisherService,
+    AiIndexVerificationService,
     { provide: AiIndexSqsPublisherToken, useClass: AiIndexSqsPublisherAdapter },
   ],
   exports: [
@@ -55,6 +57,7 @@ import { AiIndexOutbox, AiJobIndexState } from './entities';
     AiIndexLifecycleSweepService,
     AiIndexDrainService,
     AiIndexPublisherService,
+    AiIndexVerificationService,
     AiIndexSqsPublisherToken,
     AiProviderAttemptModule,
     TypeOrmModule,

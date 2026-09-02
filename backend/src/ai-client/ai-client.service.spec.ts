@@ -480,6 +480,41 @@ describe('AiServiceClient', () => {
     );
   });
 
+  it('scans read-only metadata without creating provider-attempt audit rows', async () => {
+    const requestId = '99999999-9999-4999-8999-999999999999';
+    const traceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const audit = createAuditRecorder();
+    const client = new AiServiceClient(
+      config as never,
+      {
+        post: jest.fn().mockResolvedValue({
+          points: [],
+          next_cursor: null,
+          request_id: requestId,
+        }),
+      },
+      {
+        issue: jest
+          .fn()
+          .mockResolvedValue({ token: 'service-token', claims: {} as never }),
+      },
+      new AiCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 }),
+      () => traceId,
+      () => requestId,
+      audit,
+    );
+
+    await expect(
+      client.scanIndexPoints(
+        { job_id: indexJobRequest.job.job_id, limit: 2 },
+        { readOnly: true, requestId, traceId },
+      ),
+    ).resolves.toMatchObject({ points: [], request_id: requestId });
+    expect(audit.start).not.toHaveBeenCalled();
+    expect(audit.markRequestSent).not.toHaveBeenCalled();
+    expect(audit.succeed).not.toHaveBeenCalled();
+  });
+
   it('rejects a metadata scan response correlated to a different request', async () => {
     const requestId = '99999999-9999-4999-8999-999999999999';
     const transport: AiServiceHttpTransport = {

@@ -7,7 +7,12 @@ import { AiIndexReplayService } from '../ai-indexing/services/ai-index-replay.se
 import { AiIndexDrainService } from '../ai-indexing/services/ai-index-drain.service';
 import { AiIndexReconcileService } from '../ai-indexing/services/ai-index-reconcile.service';
 import { AiIndexPublisherService } from '../ai-indexing/services/ai-index-publisher.service';
-import { parseAiIndexArguments, runAiIndexCommand } from './ai-index';
+import { AiIndexVerificationService } from '../ai-indexing/services/ai-index-verification.service';
+import {
+  formatAiIndexOperationalError,
+  parseAiIndexArguments,
+  runAiIndexCommand,
+} from './ai-index';
 
 const UUID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
@@ -75,7 +80,64 @@ describe('parseAiIndexArguments', () => {
     ).toEqual({ command: 'backfill', environment: 'local', dryRun: true });
   });
 
+  it('parses a staging-only, read-only exact verification request', () => {
+    expect(
+      parseAiIndexArguments([
+        'verify',
+        '--environment',
+        'staging',
+        '--outbox-id',
+        UUID,
+        '--job-id',
+        UUID,
+        '--company-id',
+        UUID,
+        '--qdrant',
+        '--limit',
+        '10',
+        '--dry-run',
+      ]),
+    ).toEqual({
+      command: 'verify',
+      environment: 'staging',
+      outboxId: UUID,
+      jobId: UUID,
+      companyId: UUID,
+      qdrant: true,
+      limit: 10,
+      dryRun: true,
+    });
+  });
+
   it.each([
+    [
+      [
+        'verify',
+        '--environment',
+        'staging',
+        '--outbox-id',
+        'bad',
+        '--job-id',
+        UUID,
+        '--company-id',
+        UUID,
+        '--dry-run',
+      ],
+      '--outbox-id must be a UUID',
+    ],
+    [
+      [
+        'verify',
+        '--environment',
+        'staging',
+        '--outbox-id',
+        UUID,
+        '--job-id',
+        UUID,
+        '--dry-run',
+      ],
+      'verify requires --outbox-id, --job-id, and --company-id',
+    ],
     [['reconcile-qdrant'], '--environment is required'],
     [
       ['reconcile', '--environment', 'local', '--dry-run'],
@@ -87,11 +149,11 @@ describe('parseAiIndexArguments', () => {
     ],
     [
       ['replay', '--environment', 'local', '--job-id', UUID, '--dry-run'],
-      '--dry-run is valid only for backfill',
+      '--dry-run is valid only for backfill and verify',
     ],
     [
       ['drain', '--environment', 'local', '--dry-run'],
-      '--dry-run is valid only for backfill',
+      '--dry-run is valid only for backfill and verify',
     ],
     [['drain', '--environment', 'local', '--max-batches'], 'Missing value'],
     [['drain', '--environment', 'local', '--batch-size', '0'], '--batch-size'],
@@ -170,6 +232,7 @@ describe('runAiIndexCommand', () => {
     });
     const drain = jest.fn().mockResolvedValue({ status: 'COMPLETED' });
     const publish = jest.fn().mockResolvedValue({ published: 1 });
+    const verify = jest.fn().mockResolvedValue({ target: { found: true } });
     const get = jest.fn((token: unknown) => {
       if (token === ConfigService) {
         return {
@@ -189,6 +252,7 @@ describe('runAiIndexCommand', () => {
       }
       if (token === AiIndexDrainService) return { drain };
       if (token === AiIndexPublisherService) return { publish };
+      if (token === AiIndexVerificationService) return { verify };
       if (token === AiIndexReplayService) return {};
       throw new Error('unexpected token');
     });
@@ -200,6 +264,7 @@ describe('runAiIndexCommand', () => {
       reconcileQdrantPage,
       drain,
       publish,
+      verify,
     };
   }
 
@@ -317,5 +382,95 @@ describe('runAiIndexCommand', () => {
         harness.context as never,
       ),
     ).rejects.toThrow('AI_INDEX_ENVIRONMENT_MISMATCH');
+  });
+
+  it('fails closed before query access when verify is not staging', async () => {
+    const harness = createContext('local');
+
+    await expect(
+      runAiIndexCommand(
+        [
+          'verify',
+          '--environment',
+          'local',
+          '--outbox-id',
+          UUID,
+          '--job-id',
+          UUID,
+          '--company-id',
+          UUID,
+          '--dry-run',
+        ],
+        harness.context as never,
+      ),
+    ).rejects.toThrow('AI_INDEX_VERIFY_STAGING_ONLY');
+    expect(harness.get).toHaveBeenCalledWith(ConfigService);
+    expect(harness.get).not.toHaveBeenCalledWith(DataSource);
+    expect(harness.verify).not.toHaveBeenCalled();
+  });
+
+  it('forwards an exact staging verification request without replay services', async () => {
+    const harness = createContext('staging');
+
+    await expect(
+      runAiIndexCommand(
+        [
+          'verify',
+          '--environment',
+          'staging',
+          '--outbox-id',
+          UUID,
+          '--job-id',
+          UUID,
+          '--company-id',
+          UUID,
+          '--qdrant',
+          '--limit',
+          '3',
+          '--dry-run',
+        ],
+        harness.context as never,
+      ),
+    ).resolves.toEqual({ target: { found: true } });
+    expect(harness.verify).toHaveBeenCalledWith({
+      outboxId: UUID,
+      jobId: UUID,
+      companyId: UUID,
+      verifyQdrant: true,
+      qdrantLimit: 3,
+    });
+  });
+});
+
+
+describe('formatAiIndexOperationalError', () => {
+  it('returns a fixed safe error for an unknown operational failure', () => {
+    const rawError = new Error(
+      'password authentication failed for user postgres at 10.0.0.5; job=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    );
+
+    expect(formatAiIndexOperationalError(rawError)).toBe(
+      'AI_INDEX_COMMAND_FAILED: Command failed.',
+    );
+  });
+
+  it('returns fixed safe verification failure codes without target identifiers', () => {
+    expect(
+      formatAiIndexOperationalError({ code: 'AI_INDEX_VERIFY_STAGING_ONLY' }),
+    ).toBe('AI_INDEX_VERIFY_STAGING_ONLY: Verification is restricted to staging.');
+    expect(
+      formatAiIndexOperationalError({
+        code: 'AI_INDEX_VERIFY_TARGET_NOT_FOUND_OR_MISMATCH',
+      }),
+    ).toBe(
+      'AI_INDEX_VERIFY_TARGET_NOT_FOUND_OR_MISMATCH: Verification target was not found or did not match.',
+    );
+    expect(
+      formatAiIndexOperationalError({
+        code: 'AI_INDEX_VERIFY_QDRANT_UNAVAILABLE',
+      }),
+    ).toBe(
+      'AI_INDEX_VERIFY_QDRANT_UNAVAILABLE: Qdrant verification is unavailable.',
+    );
   });
 });
