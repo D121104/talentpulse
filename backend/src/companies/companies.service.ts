@@ -11,7 +11,10 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
-import { Application, ApplicationStatus } from 'src/applications/entities/application.entity';
+import {
+  Application,
+  ApplicationStatus,
+} from 'src/applications/entities/application.entity';
 import { IUser } from 'src/users/users.interface';
 import aqp from 'api-query-params';
 import { FollowCompanyDto } from './dto/follow-company.dto';
@@ -25,6 +28,7 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
 
 @Injectable()
 export class CompaniesService {
@@ -46,8 +50,9 @@ export class CompaniesService {
     private readonly usersService: UsersService,
 
     private readonly activeJobQueryService: ActiveJobQueryService,
-  ) {}
 
+    private readonly jobIndexingService: JobIndexingService,
+  ) {}
 
   // Create a new company (Admin only), invalidate Redis cache
   async create(createCompanyDto: CreateCompanyDto, user: IUser) {
@@ -269,6 +274,7 @@ export class CompaniesService {
     for (const job of jobs) {
       const updatedCompany = { ...job.company, isActive: newActiveStatus };
       await this.jobRepo.update(job._id, { company: updatedCompany });
+      await this.jobIndexingService.enqueue(job._id);
     }
 
     await this.redisService.invalidateCompaniesCache();
@@ -411,6 +417,7 @@ export class CompaniesService {
     });
 
     await this.redisService.invalidateCompaniesCache();
+    await this.enqueueCompanyJobs(id);
     return result;
   }
 
@@ -437,8 +444,18 @@ export class CompaniesService {
       },
     });
 
+    const result = await this.companyRepo.softDelete(id);
     await this.redisService.invalidateCompaniesCache();
-    return await this.companyRepo.softDelete(id);
+    await this.enqueueCompanyJobs(id);
+    return result;
+  }
+
+  private async enqueueCompanyJobs(companyId: string): Promise<void> {
+    const jobs = await this.jobRepo
+      .createQueryBuilder('job')
+      .where("job.company->>'_id' = :companyId", { companyId })
+      .getMany();
+    for (const job of jobs) await this.jobIndexingService.enqueue(job._id);
   }
 
   async countCompanies() {
@@ -707,15 +724,19 @@ export class CompaniesService {
 
     const isProfileComplete = Boolean(
       company.name &&
-      company.taxCode &&
-      company.scale &&
-      company.address &&
-      company.description &&
-      company.logo,
+        company.taxCode &&
+        company.scale &&
+        company.address &&
+        company.description &&
+        company.logo,
     );
 
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
 
     // Total jobs & active jobs & today jobs
     const allCompanyJobs = await this.jobRepo
@@ -763,12 +784,24 @@ export class CompaniesService {
     ).length;
 
     // 7-day breakdown (from 6 days ago up to today)
-    const dailyApplicationStats: { date: string; label: string; count: number }[] = [];
+    const dailyApplicationStats: {
+      date: string;
+      label: string;
+      count: number;
+    }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+      const dayEnd = new Date(
+        d.getFullYear(),
+        d.getMonth(),
+        d.getDate(),
+        23,
+        59,
+        59,
+        999,
+      );
 
       const count = applications.filter((app) => {
         const appDate = new Date(app.createdAt);
@@ -879,4 +912,3 @@ export class CompaniesService {
     };
   }
 }
-

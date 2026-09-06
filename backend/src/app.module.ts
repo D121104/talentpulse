@@ -31,8 +31,12 @@ import { ActiveJobsModule } from './active-jobs/active-jobs.module';
 import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 import { PaymentsModule } from './payments/payments.module';
 import { CandidateAccessModule } from './candidate-access/candidate-access.module';
+import { CandidateAssistantModule } from './candidate-assistant/candidate-assistant.module';
 import { areQueueWorkersEnabled } from './config/runtime-flags';
 import { createRedisConnectionOptions } from './redis/redis.module';
+import { createPostgresSslOptions } from './database/postgres-ssl';
+import { JobIndexingModule } from './job-indexing/job-indexing.module';
+import { JobIndexingSubscriber } from './job-indexing/job-indexing.subscriber';
 
 const queueWorkersEnabled = areQueueWorkersEnabled();
 
@@ -87,10 +91,10 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
             'DB_SYNCHRONIZE',
             process.env.NODE_ENV === 'production' ? 'false' : 'true',
           ) === 'true',
-        ssl:
-          process.env.NODE_ENV === 'production'
-            ? { rejectUnauthorized: false }
-            : false,
+        ssl: createPostgresSslOptions({
+          NODE_ENV: configService.get<string>('NODE_ENV', 'development'),
+          DB_SSL_CA_FILE: configService.get<string>('DB_SSL_CA_FILE'),
+        }),
       }),
       inject: [ConfigService],
     }),
@@ -116,6 +120,8 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     AiCvConsentsModule,
     PaymentsModule,
     CandidateAccessModule,
+    CandidateAssistantModule,
+    JobIndexingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

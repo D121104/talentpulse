@@ -1,5 +1,17 @@
 import { UserCvParseProcessor, UserCvParseJobData } from './cv-parse.processor';
 import { CVParseStatus } from './cv-parse-status';
+import { aiContentVersion } from './cv-parse.processor';
+
+jest.mock('src/ai-matching/cv-download', () => ({
+  CvDownloadError: class CvDownloadError extends Error {
+    code: string;
+    constructor(code: string) {
+      super(code);
+      this.code = code;
+    }
+  },
+  downloadTrustedCv: jest.fn().mockResolvedValue(Buffer.from('%PDF-test')),
+}));
 
 describe('UserCvParseProcessor', () => {
   const cvId = 'cv-1';
@@ -10,24 +22,33 @@ describe('UserCvParseProcessor', () => {
     contentVersion: 'version-1',
   };
 
-  function setup(cv: any = {
-    _id: cvId,
-    url: jobData.expectedUrl,
-    contentVersion: jobData.contentVersion,
-    isDeleted: false,
-    deletedAt: null,
-  }) {
+  function setup(
+    cv: any = {
+      _id: cvId,
+      url: jobData.expectedUrl,
+      contentVersion: jobData.contentVersion,
+      isDeleted: false,
+      deletedAt: null,
+      fileType: 'pdf',
+      contentHash: null,
+      skills: ['TypeScript'],
+      education: [],
+      experience: [],
+      certificates: [],
+    },
+  ) {
     const userCvRepo = {
       findOne: jest.fn().mockResolvedValue(cv),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     } as any;
     const aiMatchingService = {
-      extractTextFromFile: jest.fn(),
-      extractSectionsFromText: jest.fn(),
+      parseCv: jest.fn(),
     } as any;
 
     return {
-      processor: new UserCvParseProcessor(userCvRepo, aiMatchingService),
+      processor: new UserCvParseProcessor(userCvRepo, aiMatchingService, {
+        get: jest.fn().mockReturnValue(undefined),
+      } as any),
       userCvRepo,
       aiMatchingService,
     };
@@ -44,6 +65,7 @@ describe('UserCvParseProcessor', () => {
       contentVersion: 'version-2',
       isDeleted: false,
       deletedAt: null,
+      fileType: 'pdf',
     });
     await stale.processor.handleParse({ data: jobData } as any);
     expect(stale.userCvRepo.update).not.toHaveBeenCalled();
@@ -61,7 +83,16 @@ describe('UserCvParseProcessor', () => {
 
   it('marks the current CV as failed for empty parsed content', async () => {
     const { processor, userCvRepo, aiMatchingService } = setup();
-    aiMatchingService.extractTextFromFile.mockResolvedValue('  too short  ');
+    aiMatchingService.parseCv.mockResolvedValue({
+      cv_id: cvId,
+      content_version: aiContentVersion(jobData.contentVersion),
+      media_type: 'application/pdf',
+      content_sha256:
+        '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
+      extracted_text: '  too short  ',
+      text_char_count: 12,
+      parser_version: 'test',
+    });
 
     await expect(
       processor.handleParse({ data: jobData } as any),
@@ -82,12 +113,15 @@ describe('UserCvParseProcessor', () => {
   it('stores parsed content and READY status for the current CV', async () => {
     const { processor, userCvRepo, aiMatchingService } = setup();
     const parsedText = 'A sufficiently long parsed resume body';
-    aiMatchingService.extractTextFromFile.mockResolvedValue(parsedText);
-    aiMatchingService.extractSectionsFromText.mockReturnValue({
-      skills: ['TypeScript'],
-      education: [],
-      experience: ['Backend'],
-      certificates: [],
+    aiMatchingService.parseCv.mockResolvedValue({
+      cv_id: cvId,
+      content_version: aiContentVersion(jobData.contentVersion),
+      media_type: 'application/pdf',
+      content_sha256:
+        '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
+      extracted_text: parsedText,
+      text_char_count: parsedText.length,
+      parser_version: 'test',
     });
 
     await processor.handleParse({ data: jobData } as any);
@@ -100,9 +134,9 @@ describe('UserCvParseProcessor', () => {
       }),
       expect.objectContaining({
         parsedText,
-        contentHash: expect.any(String),
+        contentHash:
+          '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
         parseStatus: CVParseStatus.READY,
-        skills: ['TypeScript'],
       }),
     );
   });
@@ -114,16 +148,23 @@ describe('UserCvParseProcessor', () => {
       contentVersion: jobData.contentVersion,
       isDeleted: false,
       deletedAt: null,
-    };
-    const { processor, userCvRepo, aiMatchingService } = setup(currentCv);
-    aiMatchingService.extractTextFromFile.mockResolvedValue(
-      'A sufficiently long parsed resume body',
-    );
-    aiMatchingService.extractSectionsFromText.mockReturnValue({
+      fileType: 'pdf',
+      contentHash: null,
       skills: [],
       education: [],
       experience: [],
       certificates: [],
+    };
+    const { processor, userCvRepo, aiMatchingService } = setup(currentCv);
+    aiMatchingService.parseCv.mockResolvedValue({
+      cv_id: cvId,
+      content_version: aiContentVersion(jobData.contentVersion),
+      media_type: 'application/pdf',
+      content_sha256:
+        '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
+      extracted_text: 'A sufficiently long parsed resume body',
+      text_char_count: 40,
+      parser_version: 'test',
     });
     userCvRepo.findOne
       .mockResolvedValueOnce(currentCv)
@@ -140,14 +181,15 @@ describe('UserCvParseProcessor', () => {
 
   it('guards the READY write when the update loses a version race', async () => {
     const { processor, userCvRepo, aiMatchingService } = setup();
-    aiMatchingService.extractTextFromFile.mockResolvedValue(
-      'A sufficiently long parsed resume body',
-    );
-    aiMatchingService.extractSectionsFromText.mockReturnValue({
-      skills: [],
-      education: [],
-      experience: [],
-      certificates: [],
+    aiMatchingService.parseCv.mockResolvedValue({
+      cv_id: cvId,
+      content_version: aiContentVersion(jobData.contentVersion),
+      media_type: 'application/pdf',
+      content_sha256:
+        '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
+      extracted_text: 'A sufficiently long parsed resume body',
+      text_char_count: 40,
+      parser_version: 'test',
     });
     userCvRepo.update
       .mockResolvedValueOnce({ affected: 1 })
@@ -172,9 +214,7 @@ describe('UserCvParseProcessor', () => {
 
   it('guards the FAILED write when the update loses a deletion race', async () => {
     const { processor, userCvRepo, aiMatchingService } = setup();
-    aiMatchingService.extractTextFromFile.mockRejectedValue(
-      new Error('DOWNLOAD_FAILED'),
-    );
+    aiMatchingService.parseCv.mockRejectedValue(new Error('DOWNLOAD_FAILED'));
     userCvRepo.update
       .mockResolvedValueOnce({ affected: 1 })
       .mockResolvedValueOnce({ affected: 0 });

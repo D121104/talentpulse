@@ -18,20 +18,13 @@ export class AIMatchingService implements OnModuleInit {
   private modelLoadPromise: Promise<void> | null = null;
 
   async onModuleInit() {
-    // Queue workers are the only startup path that needs the embedding model
-    // and document parsers. Avoid downloading Xenova in API-only runtimes.
-    if (!areQueueWorkersEnabled()) {
-      this.logger.log('Background workers disabled; skipping AI model preload');
-      return;
+    // CV parsing and matching are delegated to the FastAPI sidecar. Keep this
+    // legacy service lazy so the active Bull processors never download Xenova.
+    if (areQueueWorkersEnabled()) {
+      this.logger.log(
+        'FastAPI owns active CV parsing and matching; legacy AI remains lazy',
+      );
     }
-
-    // Preload the model and parsers for the CV worker.
-    void this.loadModel().catch(() => {
-      // loadModel logs the provider-specific failure; keep startup from
-      // producing an unhandled promise rejection.
-    });
-    void this.loadPdfParser();
-    void this.loadMammoth();
   }
 
   /**
@@ -120,8 +113,6 @@ export class AIMatchingService implements OnModuleInit {
         }
       }
 
-      
-
       // Download PDF file
       this.logger.log('Downloading PDF');
       const response = await axios.get(pdfUrl, {
@@ -190,8 +181,6 @@ export class AIMatchingService implements OnModuleInit {
    * Extract text from uploaded file (PDF or DOCX)
    */
   async extractTextFromFile(fileUrl: string): Promise<string> {
-    
-
     const cleanUrl = fileUrl.split('?')[0].split('#')[0].toLowerCase();
 
     if (cleanUrl.endsWith('.pdf')) {
@@ -616,5 +605,3 @@ export class AIMatchingService implements OnModuleInit {
     };
   }
 }
-
-

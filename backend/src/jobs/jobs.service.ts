@@ -30,6 +30,7 @@ import {
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
 
 @Injectable()
 export class JobsService {
@@ -53,6 +54,8 @@ export class JobsService {
     private readonly cvProcessingService: CVProcessingService,
 
     private readonly activeJobQueryService: ActiveJobQueryService,
+
+    private readonly jobIndexingService: JobIndexingService,
   ) {}
 
   async getAll() {
@@ -280,6 +283,7 @@ export class JobsService {
     });
 
     const savedJob = await this.jobRepo.save(newJob);
+    await this.jobIndexingService.enqueue(savedJob._id);
 
     // Send notification to all users following this company about the new job
     if (company.usersFollow && company.usersFollow.length > 0) {
@@ -507,17 +511,11 @@ export class JobsService {
       },
     });
 
+    await this.jobIndexingService.enqueue(id);
+
     // Re-process all CVs only when description has changed
     if (descriptionChanged) {
-      const updatedJob = await this.activeJobQueryService.findNonDeletedById(id);
-      if (updatedJob) {
-        await this.cvProcessingService.reprocessAllCVsForJob(id, {
-          name: updatedJob.name,
-          description: updatedJob.description,
-          skills: updatedJob.skills || [],
-          level: updatedJob.level,
-        });
-      }
+      await this.cvProcessingService.reprocessAllCVsForJob(id);
     }
 
     return result;
@@ -549,8 +547,10 @@ export class JobsService {
       },
     });
 
+    const result = await this.jobRepo.softDelete(id);
     await this.redisService.invalidateJobsCache();
-    return await this.jobRepo.softDelete(id);
+    await this.jobIndexingService.enqueue(id);
+    return result;
   }
 
   async boostJob(id: string, user: IUser) {
@@ -587,6 +587,7 @@ export class JobsService {
     job.updatedAt = now;
 
     const savedJob = await this.jobRepo.save(job);
+    await this.jobIndexingService.enqueue(savedJob._id);
     await this.redisService.invalidateJobsCache();
 
     return {

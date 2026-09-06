@@ -57,6 +57,18 @@ export class Application {
   @Column({ type: 'text', nullable: true })
   coverLetter: string;
 
+  @Column({ type: 'boolean', nullable: true })
+  aiRankingConsentGranted: boolean | null;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  aiRankingConsentVersion: string | null;
+
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  aiRankingConsentPolicyHash: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  aiRankingConsentAt: Date | null;
+
   @Column({
     type: 'enum',
     enum: ApplicationStatus,

@@ -21,23 +21,26 @@ describe('AIMatchingService.onModuleInit', () => {
   it.each([
     ['Redis is disabled', 'false', 'true'],
     ['background jobs are disabled', 'true', 'false'],
-  ])('does not preload parsers or the Xenova model when %s', async (_reason, redisEnabled, backgroundJobs) => {
-    process.env.REDIS_ENABLED = redisEnabled;
-    process.env.RUN_BACKGROUND_JOBS = backgroundJobs;
+  ])(
+    'does not preload parsers or the Xenova model when %s',
+    async (_reason, redisEnabled, backgroundJobs) => {
+      process.env.REDIS_ENABLED = redisEnabled;
+      process.env.RUN_BACKGROUND_JOBS = backgroundJobs;
 
-    const service = new AIMatchingService();
-    const loadModel = jest.spyOn(service as any, 'loadModel');
-    const loadPdfParser = jest.spyOn(service as any, 'loadPdfParser');
-    const loadMammoth = jest.spyOn(service as any, 'loadMammoth');
+      const service = new AIMatchingService();
+      const loadModel = jest.spyOn(service as any, 'loadModel');
+      const loadPdfParser = jest.spyOn(service as any, 'loadPdfParser');
+      const loadMammoth = jest.spyOn(service as any, 'loadMammoth');
 
-    await service.onModuleInit();
+      await service.onModuleInit();
 
-    expect(loadModel).not.toHaveBeenCalled();
-    expect(loadPdfParser).not.toHaveBeenCalled();
-    expect(loadMammoth).not.toHaveBeenCalled();
-  });
+      expect(loadModel).not.toHaveBeenCalled();
+      expect(loadPdfParser).not.toHaveBeenCalled();
+      expect(loadMammoth).not.toHaveBeenCalled();
+    },
+  );
 
-  it('preloads the model and parsers when workers are enabled', async () => {
+  it('does not preload the legacy model or parsers when workers are enabled', async () => {
     process.env.REDIS_ENABLED = 'true';
     process.env.RUN_BACKGROUND_JOBS = 'true';
 
@@ -54,8 +57,8 @@ describe('AIMatchingService.onModuleInit', () => {
 
     await service.onModuleInit();
 
-    expect(loadModel).toHaveBeenCalledTimes(1);
-    expect(loadPdfParser).toHaveBeenCalledTimes(1);
-    expect(loadMammoth).toHaveBeenCalledTimes(1);
+    expect(loadModel).not.toHaveBeenCalled();
+    expect(loadPdfParser).not.toHaveBeenCalled();
+    expect(loadMammoth).not.toHaveBeenCalled();
   });
 });

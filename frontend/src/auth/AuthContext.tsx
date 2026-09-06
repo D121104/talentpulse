@@ -74,8 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     completeGoogleLogin: async (code) =>
       applySession(await authApi.exchangeGoogleCode(code)),
     logout: async () => {
+      const token = accessToken;
+      clearSession();
       try {
-        if (accessToken) await authApi.logout(accessToken);
+        if (token) await authApi.logout(token);
       } finally {
         clearSession();
       }

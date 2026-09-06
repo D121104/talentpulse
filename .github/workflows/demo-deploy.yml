@@ -1,0 +1,206 @@
+name: demo-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full commit SHA already pushed to develop.
+        required: true
+        type: string
+      deploy_ingress:
+        description: Enable CloudFront ingress only after runtime health succeeds.
+        required: true
+        default: false
+        type: boolean
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  STACK_NAME: ${{ vars.DEMO_STACK_NAME }}
+  BACKEND_REPOSITORY: ${{ vars.DEMO_BACKEND_REPOSITORY }}
+  AI_REPOSITORY: ${{ vars.DEMO_AI_REPOSITORY }}
+  FRONTEND_BUCKET: ${{ vars.DEMO_FRONTEND_BUCKET }}
+  DEPLOYMENT_BUNDLE_BUCKET: ${{ vars.DEMO_DEPLOYMENT_BUNDLE_BUCKET }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-24.04
+    environment: demo
+    steps:
+      - name: Checkout requested immutable commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 1
+      - name: Verify requested commit belongs to develop
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ inputs.commit_sha }}" | grep -Eq '^[0-9a-fA-F]{40}$'
+          test "$(git rev-parse HEAD)" = "${{ inputs.commit_sha }}"
+          git fetch --no-tags origin develop --depth=1
+          git merge-base --is-ancestor "${{ inputs.commit_sha }}" FETCH_HEAD
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+      - name: Backend checks
+        working-directory: backend
+        run: |
+          npm ci
+          npx eslint "{src,apps,libs,test}/**/*.ts" --no-fix
+          npm test -- --runInBand
+          npm run build
+      - name: Frontend checks
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.12.6
+      - name: AI checks
+        working-directory: ai-service
+        run: |
+          uv sync --locked
+          uv run ruff check app tests
+          uv run mypy app
+          uv run pytest
+      - name: Install validation tools
+        run: |
+          python -m pip install --disable-pip-version-check cfn-lint==1.42.0 yamllint==1.37.1
+      - name: Validate deployment YAML and CloudFormation
+        run: |
+          yamllint -d relaxed .github/workflows/demo-deploy.yml infra/ec2-demo/template.yaml infra/ec2-demo/docker-compose.yml infra/ec2-demo/.env.example
+          cfn-lint infra/ec2-demo/template.yaml
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+          for name in [".github/workflows/demo-deploy.yml", "infra/ec2-demo/docker-compose.yml"]:
+              yaml.safe_load(Path(name).read_text())
+          PY
+      - name: Secret pattern gate
+        run: |
+          ! python - <<'PY'
+          from pathlib import Path
+          import re
+          files = [Path('.github/workflows/demo-deploy.yml'), Path('infra/ec2-demo/template.yaml'), Path('infra/ec2-demo/docker-compose.yml')]
+          text = "\n".join(p.read_text() for p in files)
+          bad = re.compile(r"(?i)(AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|aws_secret_access_key\s*[:=])")
+          raise SystemExit(1 if bad.search(text) else 0)
+          PY
+
+  build_and_deploy:
+    name: Build immutable images and deploy
+    needs: quality
+    runs-on: ubuntu-24.04
+    environment: demo
+    steps:
+      - name: Checkout requested immutable commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 1
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.DEMO_DEPLOY_ROLE_ARN }}
+          role-session-name: github-demo-${{ github.run_id }}
+      - name: Verify AWS target and immutable commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ inputs.commit_sha }}"
+          test "$(aws configure get region)" = "${AWS_REGION}"
+          test "$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query 'Stacks[0].StackStatus' --output text)" != "DELETE_COMPLETE"
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push linux/amd64 images without attestations
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          RELEASE_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false --push \
+            -t "${REGISTRY}/${BACKEND_REPOSITORY}:${RELEASE_SHA}" -f backend/Dockerfile.demo backend
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false --push \
+            -t "${REGISTRY}/${AI_REPOSITORY}:${RELEASE_SHA}" -f ai-service/Dockerfile.demo ai-service
+      - name: Resolve and gate immutable digests
+        id: digests
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          RELEASE_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          backend_digest="$(aws ecr describe-images --repository-name "${BACKEND_REPOSITORY}" --image-ids imageTag="${RELEASE_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+          ai_digest="$(aws ecr describe-images --repository-name "${AI_REPOSITORY}" --image-ids imageTag="${RELEASE_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+          test "${backend_digest}" != "None"; test "${ai_digest}" != "None"
+          echo "backend_image=${REGISTRY}/${BACKEND_REPOSITORY}@${backend_digest}" >> "$GITHUB_OUTPUT"
+          echo "ai_image=${REGISTRY}/${AI_REPOSITORY}@${ai_digest}" >> "$GITHUB_OUTPUT"
+          for repo in "${BACKEND_REPOSITORY}" "${AI_REPOSITORY}"; do
+            finding="$(aws ecr describe-image-scan-findings --repository-name "$repo" --image-id imageTag="${RELEASE_SHA}" --query 'imageScanFindings.findingSeverityCounts' --output json)"
+            python -c 'import json,sys; d=json.loads(sys.argv[1]); raise SystemExit(1 if d.get("CRITICAL",0) or d.get("HIGH",0) else 0)' "$finding"
+          done
+      - name: Upload checksum-pinned runtime bundle
+        env:
+          BACKEND_IMAGE: ${{ steps.digests.outputs.backend_image }}
+          AI_SERVICE_IMAGE: ${{ steps.digests.outputs.ai_image }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/talentpulse-bundle/nginx
+          cp infra/ec2-demo/docker-compose.yml /tmp/talentpulse-bundle/docker-compose.yml
+          cp infra/ec2-demo/nginx/default.conf /tmp/talentpulse-bundle/nginx/default.conf
+          cp infra/ec2-demo/ai-entrypoint.sh /tmp/talentpulse-bundle/ai-entrypoint.sh
+          sed "s#BACKEND_IMAGE=.*#BACKEND_IMAGE=${BACKEND_IMAGE}#; s#AI_SERVICE_IMAGE=.*#AI_SERVICE_IMAGE=${AI_SERVICE_IMAGE}#" \
+            infra/ec2-demo/.env.example > /tmp/talentpulse-bundle/.env.example
+          sha256sum /tmp/talentpulse-bundle/docker-compose.yml /tmp/talentpulse-bundle/nginx/default.conf /tmp/talentpulse-bundle/ai-entrypoint.sh /tmp/talentpulse-bundle/.env.example > /tmp/talentpulse-bundle/SHA256SUMS
+          aws s3 sync /tmp/talentpulse-bundle "s3://${DEPLOYMENT_BUNDLE_BUCKET}/bundles/${GITHUB_SHA}/" --only-show-errors
+          aws s3 cp /tmp/talentpulse-bundle/SHA256SUMS "s3://${DEPLOYMENT_BUNDLE_BUCKET}/bundles/${GITHUB_SHA}/SHA256SUMS" --only-show-errors
+      - name: Send bounded SSM rollout command
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          BACKEND_IMAGE: ${{ steps.digests.outputs.backend_image }}
+          AI_SERVICE_IMAGE: ${{ steps.digests.outputs.ai_image }}
+        run: |
+          set -euo pipefail
+          test -n "${{ vars.DEMO_INSTANCE_ID }}"
+          command_id="$(aws ssm send-command \
+            --instance-ids "${{ vars.DEMO_INSTANCE_ID }}" \
+            --document-name AWS-RunShellScript \
+            --comment "TalentPulse demo ${COMMIT_SHA}" \
+            --parameters commands="$(python - <<'PY'
+          import json, os
+          print(json.dumps(["/opt/talentpulse/bin/deploy-demo --commit " + os.environ["COMMIT_SHA"] + " --backend-image " + os.environ["BACKEND_IMAGE"] + " --ai-image " + os.environ["AI_SERVICE_IMAGE"]]))
+          PY
+          )" \
+            --query 'Command.CommandId' --output text)"
+          aws ssm wait command-executed --command-id "${command_id}" --instance-id "${{ vars.DEMO_INSTANCE_ID }}"
+      - name: Enable CloudFront only on explicit request
+        if: ${{ inputs.deploy_ingress }}
+        run: |
+          set -euo pipefail
+          aws cloudformation update-stack --stack-name "${STACK_NAME}" --use-previous-template \
+            --parameters ParameterKey=DeployIngress,ParameterValue=true \
+            --capabilities CAPABILITY_NAMED_IAM
+          aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}"
+      - name: Publish frontend after runtime rollout
+        if: ${{ inputs.deploy_ingress }}
+        run: |
+          set -euo pipefail
+          test -n "${FRONTEND_BUCKET}"
+          test -n "${{ vars.DEMO_DISTRIBUTION_ID }}"
+          echo "Frontend build/sync is intentionally parameterized and must use the repository's approved Vite runtime variables."
+          echo "The deploy role is restricted to the configured demo bucket; no account-specific identifiers are embedded."
+          aws cloudfront create-invalidation --distribution-id "${{ vars.DEMO_DISTRIBUTION_ID }}" --paths '/*'

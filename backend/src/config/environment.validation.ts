@@ -35,13 +35,19 @@ function parsePort(value: unknown): number {
 export function validateEnvironment(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
-  const nodeEnv = String(config.NODE_ENV ?? 'development').trim().toLowerCase();
+  const nodeEnv = String(config.NODE_ENV ?? 'development')
+    .trim()
+    .toLowerCase();
   const synchronize = parseBoolean(
     config.DB_SYNCHRONIZE,
     nodeEnv !== 'production',
     'DB_SYNCHRONIZE',
   );
-  const redisEnabled = parseBoolean(config.REDIS_ENABLED, true, 'REDIS_ENABLED');
+  const redisEnabled = parseBoolean(
+    config.REDIS_ENABLED,
+    true,
+    'REDIS_ENABLED',
+  );
   const runBackgroundJobs = parseBoolean(
     config.RUN_BACKGROUND_JOBS,
     true,
@@ -51,12 +57,21 @@ export function validateEnvironment(
   const consentVersion = String(
     config.AI_CV_CONSENT_VERSION ?? 'phase0-v1',
   ).trim();
-  const consentPolicyHash = String(
-    config.AI_CV_CONSENT_POLICY_HASH ?? '',
-  ).trim().toLowerCase();
+  const consentPolicyHash = String(config.AI_CV_CONSENT_POLICY_HASH ?? '')
+    .trim()
+    .toLowerCase();
 
   if (nodeEnv === 'production' && synchronize) {
     throw new Error('DB_SYNCHRONIZE must be false in production');
+  }
+
+  if (
+    ['staging', 'demo'].includes(nodeEnv) &&
+    !String(config.DB_SSL_CA_FILE ?? '').trim()
+  ) {
+    throw new Error(
+      'DB_SSL_CA_FILE is required when NODE_ENV is staging or demo',
+    );
   }
 
   if (!/^\w[\w.-]{0,79}$/.test(consentVersion)) {
@@ -69,20 +84,33 @@ export function validateEnvironment(
   }
 
   const serviceAuthKeys = [
+    'AI_SERVICE_URL',
     'AI_SERVICE_ISSUER',
     'AI_SERVICE_AUDIENCE',
     'AI_SERVICE_JWT_ALGORITHM',
     'AI_SERVICE_JWT_TTL_SECONDS',
+    'AI_SERVICE_JWT_PRIVATE_KEY',
   ];
-  const hasServiceAuthConfig = serviceAuthKeys.some((key) => config[key] != null);
+  const hasServiceAuthConfig = serviceAuthKeys.some(
+    (key) => config[key] != null,
+  );
 
   if (hasServiceAuthConfig) {
+    const serviceUrl = String(config.AI_SERVICE_URL ?? '').trim();
     const issuer = String(config.AI_SERVICE_ISSUER ?? '').trim();
     const audience = String(config.AI_SERVICE_AUDIENCE ?? '').trim();
     const algorithm = String(config.AI_SERVICE_JWT_ALGORITHM ?? '');
     const ttlSeconds = Number(config.AI_SERVICE_JWT_TTL_SECONDS);
 
-    if (!issuer || !audience || !['RS256', 'ES256'].includes(algorithm)) {
+    if (serviceUrl && !/^https:\/\/[^\s]+$/.test(serviceUrl)) {
+      throw new Error('AI_SERVICE_URL must use HTTPS');
+    }
+    if (
+      !issuer ||
+      !audience ||
+      !['RS256', 'ES256'].includes(algorithm) ||
+      !String(config.AI_SERVICE_JWT_PRIVATE_KEY ?? '').trim()
+    ) {
       throw new Error(
         'AI service JWT requires issuer, audience and RS256/ES256 algorithm',
       );
@@ -94,6 +122,16 @@ export function validateEnvironment(
     }
   }
 
+  const timeoutMs =
+    config.AI_SERVICE_TIMEOUT_MS == null
+      ? 10000
+      : Number(config.AI_SERVICE_TIMEOUT_MS);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30000) {
+    throw new Error(
+      'AI_SERVICE_TIMEOUT_MS must be an integer between 100 and 30000',
+    );
+  }
+
   return {
     ...config,
     NODE_ENV: nodeEnv,
@@ -102,9 +140,9 @@ export function validateEnvironment(
     REDIS_ENABLED: String(redisEnabled),
     RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
     AI_CV_CONSENT_VERSION: consentVersion,
+    AI_SERVICE_TIMEOUT_MS: timeoutMs,
     ...(consentPolicyHash
       ? { AI_CV_CONSENT_POLICY_HASH: consentPolicyHash }
       : {}),
   };
 }
-

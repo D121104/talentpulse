@@ -1,0 +1,200 @@
+name: talentpulse-demo
+
+services:
+  nginx:
+    image: nginx:1.27.5-alpine
+    restart: unless-stopped
+    init: true
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - private
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/origin-health >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    image: ${BACKEND_IMAGE:-talentpulse-backend:local}
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile.demo
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: staging
+      PORT: "8000"
+      DB_HOST: ${DB_HOST:?DB_HOST is required}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_DATABASE: ${DB_DATABASE:-talentpulse_demo}
+      DB_SYNCHRONIZE: "false"
+      REDIS_ENABLED: "true"
+      REDIS_TLS: ${REDIS_TLS:-false}
+      REDIS_HOST: valkey
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      RUN_BACKGROUND_JOBS: "true"
+      RUN_INDEXING_WORKER: "true"
+      AI_INDEX_ENVIRONMENT: demo
+      AI_INDEX_OUTBOX_ENVIRONMENT: demo
+      # The current backend validator requires HTTPS whenever the AI service is configured.
+      AI_SERVICE_URL: https://ai-service:8000
+      AI_SERVICE_ISSUER: ${AI_SERVICE_ISSUER:?AI_SERVICE_ISSUER is required}
+      AI_SERVICE_AUDIENCE: ${AI_SERVICE_AUDIENCE:?AI_SERVICE_AUDIENCE is required}
+      AI_SERVICE_JWT_ALGORITHM: ${AI_SERVICE_JWT_ALGORITHM:-RS256}
+      AI_SERVICE_JWT_TTL_SECONDS: ${AI_SERVICE_JWT_TTL_SECONDS:-60}
+      AI_SERVICE_JWT_PRIVATE_KEY: ${AI_SERVICE_JWT_PRIVATE_KEY:?AI_SERVICE_JWT_PRIVATE_KEY is required}
+      AI_SERVICE_TIMEOUT_MS: ${AI_SERVICE_TIMEOUT_MS:-10000}
+      NODE_EXTRA_CA_CERTS: /run/secrets/ai-ca-cert
+      URL_FRONTEND: ${URL_FRONTEND:?URL_FRONTEND is required}
+      COOKIE_SECURE: "true"
+      COOKIE_SAME_SITE: lax
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+    secrets:
+      - ai-ca-cert
+    depends_on:
+      valkey:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    networks:
+      - private
+    mem_limit: 2304m
+    cpus: 1.25
+    pids_limit: 512
+    logging: *default-logging
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:8000/api/health')
+          .then(r => process.exit(r.ok ? 0 : 1))
+          .catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  ai-service:
+    image: ${AI_SERVICE_IMAGE:-talentpulse-ai-service:local}
+    build:
+      context: ../../ai-service
+      dockerfile: Dockerfile.demo
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --ssl-keyfile
+      - /run/secrets/ai-tls-key
+      - --ssl-certfile
+      - /run/secrets/ai-tls-cert
+    restart: unless-stopped
+    init: true
+    secrets:
+      - ai-tls-key
+      - ai-tls-cert
+    environment:
+      # Current FastAPI create_app requires injected production adapters for
+      # Cohere/Qdrant/Bedrock. These explicit local-safe values prevent a false
+      # healthy container until that adapter factory is wired.
+      AI_ENVIRONMENT: development
+      AI_AUTH_REQUIRED: "true"
+      AI_JWT_PUBLIC_KEY: ${AI_JWT_PUBLIC_KEY:?AI_JWT_PUBLIC_KEY is required}
+      AI_JWT_ALGORITHMS: '["RS256"]'
+      AI_JWT_ISSUER: ${AI_SERVICE_ISSUER:?AI_SERVICE_ISSUER is required}
+      AI_JWT_AUDIENCE: ${AI_SERVICE_AUDIENCE:?AI_SERVICE_AUDIENCE is required}
+      AI_REQUIRED_SCOPE: ai:cv
+      AI_EMBEDDING_PROVIDER: deterministic
+      AI_VECTOR_STORE_PROVIDER: memory
+      AI_GENERATION_PROVIDER: deterministic
+      AI_COHERE_MODEL: embed-multilingual-v3.0
+      AI_COHERE_DIMENSIONS: "1024"
+      AI_QDRANT_URL: ${AI_QDRANT_URL:?AI_QDRANT_URL is required}
+      AI_QDRANT_COLLECTION: jobs_cohere_multilingual_v3_1024_demo_v1
+      AI_BEDROCK_REGION: ${AWS_REGION:?AWS_REGION is required}
+      AI_BEDROCK_MODEL: ${AI_BEDROCK_MODEL:?AI_BEDROCK_MODEL is required}
+    networks:
+      - private
+    mem_limit: 1536m
+    cpus: 0.75
+    pids_limit: 256
+    logging: *default-logging
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import ssl, urllib.request;
+          urllib.request.urlopen('https://127.0.0.1:8000/health',
+          context=ssl._create_unverified_context(), timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  valkey:
+    image: valkey/valkey:8.0.2-alpine
+    restart: unless-stopped
+    init: true
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      - valkey-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - $${REDIS_PASSWORD}
+    volumes:
+      - valkey-data:/data
+    networks:
+      - private
+    mem_limit: 512m
+    cpus: 0.35
+    pids_limit: 128
+    logging: *default-logging
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          valkey-cli -a "$${REDIS_PASSWORD}" ping | grep -q PONG
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+networks:
+  private:
+    name: talentpulse-demo-private
+    driver: bridge
+
+secrets:
+  ai-ca-cert:
+    file: ${TALENTPULSE_RUNTIME_DIR:-/run/talentpulse}/ai-ca.crt
+  ai-tls-cert:
+    file: ${TALENTPULSE_RUNTIME_DIR:-/run/talentpulse}/ai-tls.crt
+  ai-tls-key:
+    file: ${TALENTPULSE_RUNTIME_DIR:-/run/talentpulse}/ai-tls.key
+
+volumes:
+  valkey-data:
+    name: talentpulse-demo-valkey

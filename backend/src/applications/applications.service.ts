@@ -7,8 +7,9 @@ import {
   OnModuleInit,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Application, ApplicationStatus } from './entities/application.entity';
@@ -18,6 +19,7 @@ import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application.dto';
 import { UsersService } from 'src/users/users.service';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
+import { CVParseStatus } from 'src/usercvs/cv-parse-status';
 import { Role } from 'src/decorator/customize';
 import aqp from 'api-query-params';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -25,14 +27,19 @@ import {
   NotificationTargetType,
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
-import { AIMatchingService } from 'src/ai-matching/ai-matching.service';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
+import {
+  consentIdempotencyKey,
+  getJobSourceVersion,
+} from 'src/ai-matching/cv-processing.processor';
 import { JobsService } from 'src/jobs/jobs.service';
 import {
   ICandidateMatchResult,
   IAIRankingResponse,
 } from 'src/ai-matching/dto/ai-match-result.dto';
 import { CreateNotificationDto } from 'src/notifications/dto/create-notification.dto';
+import { ApplicationAiConsentEvent } from './entities/application-ai-consent-event.entity';
+import { getApplicationAiRankingConsentPolicy } from './application-ai-consent.policy';
 
 @Injectable()
 export class ApplicationsService implements OnModuleInit {
@@ -45,11 +52,15 @@ export class ApplicationsService implements OnModuleInit {
     @InjectRepository(CVMatchResult)
     private readonly cvMatchResultRepo: Repository<CVMatchResult>,
 
+    @InjectRepository(ApplicationAiConsentEvent)
+    private readonly applicationConsentEventRepo: Repository<ApplicationAiConsentEvent>,
+    private readonly dataSource: DataSource,
+
     private readonly usersService: UsersService,
     private readonly userCVsService: UserCVsService,
     private readonly notificationsService: NotificationsService,
-    private readonly aiMatchingService: AIMatchingService,
     private readonly cvProcessingService: CVProcessingService,
+    private readonly configService: ConfigService,
     @Inject(forwardRef(() => JobsService))
     private readonly jobsService: JobsService,
 
@@ -69,7 +80,8 @@ export class ApplicationsService implements OnModuleInit {
 
   // User applies for a job with selected CV
   async create(createApplicationDto: CreateApplicationDto, user: IUser) {
-    const { cvId, jobId, companyId, coverLetter } = createApplicationDto;
+    const { cvId, jobId, companyId, coverLetter, aiRankingConsent } =
+      createApplicationDto;
 
     const cv = await this.userCVsService.findOne(cvId, user);
     if (!cv) {
@@ -104,54 +116,71 @@ export class ApplicationsService implements OnModuleInit {
       },
     });
 
-    const savedApplication = await this.applicationRepo.save(application);
+    if (aiRankingConsent === true) {
+      const policy = getApplicationAiRankingConsentPolicy(this.configService);
+      application.aiRankingConsentGranted = true;
+      application.aiRankingConsentVersion = policy.consentVersion;
+      application.aiRankingConsentPolicyHash = policy.policyHash;
+      application.aiRankingConsentAt = new Date();
+    }
 
-    // Queue CV processing for AI matching (async)
-    try {
-      const jobSkills = Array.isArray(job.skills)
-        ? job.skills.map((s: any) => (typeof s === 'string' ? s : s.name))
-        : [];
+    const savedApplication = await this.dataSource.transaction(
+      async (manager) => {
+        const applicationRepo = manager.getRepository(Application);
+        const consentEventRepo = manager.getRepository(
+          ApplicationAiConsentEvent,
+        );
+        const saved = await applicationRepo.save(application);
+        if (aiRankingConsent === true) {
+          const policy = getApplicationAiRankingConsentPolicy(
+            this.configService,
+          );
+          await consentEventRepo.save(
+            consentEventRepo.create({
+              applicationId: saved._id,
+              userId: user._id,
+              granted: true,
+              consentVersion: policy.consentVersion,
+              policyHash: policy.policyHash,
+              source: 'application',
+            }),
+          );
+        }
+        return saved;
+      },
+    );
 
-      let cvText = '';
-      const cvDoc = cv as any;
-
-      if (cvDoc.parsedText) {
-        cvText = cvDoc.parsedText;
-      } else if (cvDoc.onlineCvId) {
-        const parts = [
-          cvDoc.skills?.length ? `Skills: ${cvDoc.skills.join(', ')}` : '',
-          cvDoc.education?.length
-            ? `Education: ${cvDoc.education.join('. ')}`
-            : '',
-          cvDoc.experience?.length
-            ? `Experience: ${cvDoc.experience.join('. ')}`
-            : '',
-          cvDoc.certificates?.length
-            ? `Certificates: ${cvDoc.certificates.join(', ')}`
-            : '',
-          cvDoc.description || '',
-        ];
-        cvText = parts.filter(Boolean).join('\n');
-      }
-
-      if (cvText && cvText.length > 10) {
+    // Queue only opaque IDs and version/hash consent fences. The worker reloads
+    // all CV, application and job content from canonical PostgreSQL records.
+    if (
+      aiRankingConsent === true &&
+      cv.parseStatus === CVParseStatus.READY &&
+      Boolean(cv.contentHash)
+    ) {
+      try {
+        const policy = getApplicationAiRankingConsentPolicy(this.configService);
         await this.cvProcessingService.queueCVProcessing({
           cvId: cv._id.toString(),
           userId: user._id,
           applicationId: savedApplication._id.toString(),
-          cvUrl: cv.url,
-          cvText,
-          job: {
-            _id: job._id.toString(),
-            name: job.name,
-            description: job.description,
-            skills: jobSkills,
-            level: job.level,
-          },
+          cvContentVersion: cv.contentVersion,
+          contentHash: cv.contentHash || '',
+          jobId: job._id.toString(),
+          jobSourceVersion: getJobSourceVersion(job),
+          aiRankingConsentGranted: true,
+          aiRankingConsentVersion: policy.consentVersion,
+          aiRankingConsentPolicyHash: policy.policyHash,
+          consentIdempotencyKey: consentIdempotencyKey(
+            savedApplication._id.toString(),
+            cv.contentVersion,
+            getJobSourceVersion(job),
+          ),
         });
+      } catch (error) {
+        this.logger.warn(
+          `Failed to queue CV processing for application ${savedApplication._id}`,
+        );
       }
-    } catch (error) {
-      console.error('Failed to queue CV processing:', error);
     }
 
     const applicationInDb = await this.applicationRepo.findOne({
@@ -315,7 +344,9 @@ export class ApplicationsService implements OnModuleInit {
         };
       }
       if (job.company?._id?.toString() !== userInfo.company._id.toString()) {
-        throw new BadRequestException('Bạn không có quyền xem ứng viên của công việc này');
+        throw new BadRequestException(
+          'Bạn không có quyền xem ứng viên của công việc này',
+        );
       }
     }
 
@@ -586,9 +617,7 @@ export class ApplicationsService implements OnModuleInit {
         notiObj.title = 'Thông báo kết quả ứng tuyển';
         notiObj.content = `Nhà tuyển dụng từ công ty ${
           application.company?.name || ''
-        } đã gửi thông báo kết quả cho vị trí ${
-          application.job?.name || ''
-        }.`;
+        } đã gửi thông báo kết quả cho vị trí ${application.job?.name || ''}.`;
         await this.notificationsService.create(notiObj);
         break;
     }
@@ -606,7 +635,9 @@ export class ApplicationsService implements OnModuleInit {
         let candidateName = application.user?.name;
 
         if (!candidateEmail) {
-          const userEntity = await this.usersService.findOne(application.userId);
+          const userEntity = await this.usersService.findOne(
+            application.userId,
+          );
           candidateEmail = userEntity?.email;
           candidateName = userEntity?.name;
         }
@@ -719,7 +750,9 @@ export class ApplicationsService implements OnModuleInit {
         !userInfo.company._id ||
         job.company?._id?.toString() !== userInfo.company._id.toString()
       ) {
-        throw new BadRequestException('Bạn không có quyền truy cập dữ liệu của công việc này');
+        throw new BadRequestException(
+          'Bạn không có quyền truy cập dữ liệu của công việc này',
+        );
       }
     }
 
@@ -759,7 +792,7 @@ export class ApplicationsService implements OnModuleInit {
           candidateAvatar: userInfo?.avatar,
           cvId: cvInfo?._id || '',
           cvTitle: cvInfo?.title || 'CV',
-          cvUrl: result.cvUrl || cvInfo?.url || '',
+          cvUrl: cvInfo?.url || '',
           matchScore: result.matchScore,
           matchedSkills: result.matchedSkills || [],
           missingSkills: result.missingSkills || [],
@@ -811,7 +844,9 @@ export class ApplicationsService implements OnModuleInit {
         !userInfo.company._id ||
         job.company?._id?.toString() !== userInfo.company._id.toString()
       ) {
-        throw new BadRequestException('Bạn không có quyền tìm kiếm ứng viên của công việc này');
+        throw new BadRequestException(
+          'Bạn không có quyền tìm kiếm ứng viên của công việc này',
+        );
       }
     }
 
@@ -847,11 +882,22 @@ export class ApplicationsService implements OnModuleInit {
       .leftJoinAndSelect('app.user', 'user')
       .where('app.jobId = :jobId', { jobId })
       .andWhere('app.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('(cv.isSearchable IS NULL OR cv.isSearchable = :isSearchable)', { isSearchable: true })
-      .andWhere('(user.allowRecruiterSearch IS NULL OR user.allowRecruiterSearch = :allowSearch)', { allowSearch: true })
-      .andWhere('(user.isJobSeeking IS NULL OR user.isJobSeeking = :isJobSeeking)', { isJobSeeking: true })
+      .andWhere(
+        '(cv.isSearchable IS NULL OR cv.isSearchable = :isSearchable)',
+        { isSearchable: true },
+      )
+      .andWhere(
+        '(user.allowRecruiterSearch IS NULL OR user.allowRecruiterSearch = :allowSearch)',
+        { allowSearch: true },
+      )
+      .andWhere(
+        '(user.isJobSeeking IS NULL OR user.isJobSeeking = :isJobSeeking)',
+        { isJobSeeking: true },
+      )
       .andWhere('user.isDeleted = :userNotDeleted', { userNotDeleted: false })
-      .andWhere('(cv.isDeleted IS NULL OR cv.isDeleted = :cvNotDeleted)', { cvNotDeleted: false });
+      .andWhere('(cv.isDeleted IS NULL OR cv.isDeleted = :cvNotDeleted)', {
+        cvNotDeleted: false,
+      });
 
     // Build conditions for matching in PostgreSQL
     if (skillKeywords.length > 0) {

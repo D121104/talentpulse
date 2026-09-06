@@ -187,9 +187,50 @@ export class UserCVsService {
         policyHash,
       ))
     ) {
-      throw new BadRequestException(AI_CV_CONSENT_ERROR_MESSAGES.INVALID_CONSENT);
+      throw new BadRequestException(
+        AI_CV_CONSENT_ERROR_MESSAGES.INVALID_CONSENT,
+      );
     }
 
+    return {
+      cvId: cv._id,
+      contentHash: cv.contentHash,
+      title: cv.title || null,
+      target: null,
+      skills: [...(cv.skills || [])],
+      education: [...(cv.education || [])],
+      experience: [...(cv.experience || [])],
+      certificates: [...(cv.certificates || [])],
+      sanitizedText: (cv.parsedText || '').slice(0, 12000),
+    };
+  }
+
+  /**
+   * Candidate-assistant snapshot boundary. Ownership and parsing readiness are
+   * checked here; the caller is responsible for the separate assistant consent.
+   */
+  async createCandidateAssistantSnapshot(
+    userId: string,
+    cvId: string,
+  ): Promise<CandidateCvSnapshot> {
+    if (!isUUID(userId) || !isUUID(cvId)) {
+      throw new BadRequestException('Invalid user or CV id');
+    }
+    const cv = await this.userCVRepo.findOne({
+      where: { _id: cvId, userId, isDeleted: false, deletedAt: IsNull() },
+    });
+    if (!cv) {
+      throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
+    }
+    if (
+      cv.parseStatus !== CVParseStatus.READY ||
+      typeof cv.contentHash !== 'string' ||
+      !cv.contentHash.trim() ||
+      typeof cv.parsedText !== 'string' ||
+      !cv.parsedText.trim()
+    ) {
+      throw new ConflictException('CV chưa sẵn sàng để xử lý AI');
+    }
     return {
       cvId: cv._id,
       contentHash: cv.contentHash,
@@ -240,7 +281,9 @@ export class UserCVsService {
     }
     const nextUrl = updateUserCVDto.url?.trim();
     const sourceChanged =
-      nextUrl !== undefined && nextUrl !== cv.url && !updateUserCVDto.onlineCvId;
+      nextUrl !== undefined &&
+      nextUrl !== cv.url &&
+      !updateUserCVDto.onlineCvId;
     const updatePayload: Partial<UserCV> = {
       title: updateUserCVDto.title,
       description: updateUserCVDto.description,
@@ -294,7 +337,8 @@ export class UserCVsService {
   // Toggle allow recruiter to search this CV
   async toggleSearchable(id: string, user: IUser, isSearchable?: boolean) {
     const cv = await this.findOne(id, user);
-    const newSearchable = isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
+    const newSearchable =
+      isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
 
     await this.userCVRepo.update(id, {
       isSearchable: newSearchable,
