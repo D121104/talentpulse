@@ -74,8 +74,8 @@ flowchart TB
 
     subgraph AI ["AI & NLP Processing"]
         FastAPI["🐍 FastAPI AI service\n(CV parsing, matching, RAG)"]
-        Cohere["Cohere embeddings\n(demo provider target)"]
-        Nova["Bedrock Nova Lite\n(demo generation target)"]
+        Cohere["Cohere embeddings\n(configured demo provider)"]
+        Nova["Bedrock Nova Lite\n(configured demo provider)"]
         Local["Deterministic / in-memory\n(local and test providers)"]
     end
 
@@ -92,7 +92,6 @@ flowchart TB
     Nest --> PG
     Nest --> Redis
     Nest --> Cloudinary
-    Nest --> Qdrant
     Nest --> FastAPI
     FastAPI --> Qdrant
     FastAPI --> Cohere
@@ -113,7 +112,7 @@ flowchart TB
 | **Cơ sở dữ liệu** | PostgreSQL 16 + PostGIS; PostgreSQL là nguồn dữ liệu canonical |
 | **Caching & Queue** | Redis-compatible Valkey/Redis, Bull |
 | **Tìm kiếm & Vector** | Qdrant Cloud là derived vector index; structured business data vẫn ở PostgreSQL |
-| **AI & Xử lý ngôn ngữ** | FastAPI, Cohere embeddings (demo target), Bedrock Nova Lite (demo target), deterministic local providers, PDF/DOCX parsers |
+| **AI & Xử lý ngôn ngữ** | FastAPI, Cohere `cohere.embed-multilingual-v3` (1024 dimensions), Bedrock `amazon.nova-lite-v1:0`, deterministic local/test providers, PDF/DOCX parsers |
 | **Thanh toán** | Cổng thanh toán trực tuyến PayOS |
 | **Giám sát (Observability)** | Prometheus, Grafana, Loki, Promtail |
 | **Triển khai & Hạ tầng** | CloudFront, private S3 SPA, private EC2/Nginx, Docker Compose, RDS PostgreSQL, Cloudinary |
@@ -128,14 +127,37 @@ Nginx trên private EC2. Nginx chuyển tiếp tới NestJS, Bull/Valkey và Fas
 NestJS sở hữu authorization, PostgreSQL/RDS, Cloudinary và các workflow nghiệp vụ.
 
 Frontend production gọi API cùng origin qua `/api/v1`; Socket.IO dùng cùng origin.
-Qdrant Cloud chỉ giữ derived job vectors. Cohere embeddings và Bedrock Nova Lite là
-provider mục tiêu của demo; local/development/test vẫn dùng deterministic embedding,
-in-memory retrieval và deterministic generation. Provider injection, indexing
-bootstrap và runtime rollout phải được hoàn tất và smoke-test trước khi coi các
-provider cloud là live.
+Qdrant Cloud chỉ giữ derived job vectors. Cohere embeddings và Bedrock Nova Lite đã
+được cấu hình cho demo; local/development/test vẫn dùng deterministic embedding,
+in-memory retrieval và deterministic generation. AWS admission và one-shot provider
+smoke tests vẫn cần được hoàn tất trước khi release được chấp nhận.
 
-Elasticsearch còn xuất hiện trong cấu hình Compose local cũ, nhưng không phải nguồn
-dữ liệu canonical hoặc đường tìm kiếm/vector đang hoạt động.
+### Current implementation contract
+
+- **NestJS** owns business APIs, authorization, PostgreSQL/RDS canonical persistence,
+  job lifecycle, transactional outbox, and job-indexing orchestration. It owns the
+  canonical job data and calls FastAPI for AI indexing operations.
+- **FastAPI** owns CV parsing, deterministic CV-job matching, RAG, embeddings, and
+  provider-specific indexing adapters. **Qdrant Cloud** is a derived vector index,
+  not the business source of truth.
+- The demo topology is **CloudFront + private S3 SPA** at the edge, forwarding API
+  traffic to **private EC2/Nginx**, where NestJS, FastAPI, and Valkey run. Canonical
+  data is in **RDS PostgreSQL** and derived vectors are in **Qdrant Cloud**.
+- FastAPI health endpoints are `/health`, `/health/live`, and `/health/ready`.
+  NestJS health endpoints are `/api/v1/health` and `/api/v1/health/ready`.
+  Nginx exposes `/origin-health`.
+- AI scopes are `cv:parse`, `cv:match`, `rag:retrieve`, `rag:generate`, and
+  `jobs:index`; the indexing scope is configured with `AI_JOB_INDEX_SCOPE`.
+  Indexing routes are `POST /internal/v1/index/jobs/upsert` and
+  `POST /internal/v1/index/jobs/delete`.
+- Demo vector settings are collection
+  `jobs_cohere_multilingual_v3_1024_demo_v1`, alias `jobs_current_demo`, and
+  version `demo-v1`. Cohere uses `cohere.embed-multilingual-v3` with 1024
+  dimensions; generation uses Bedrock `amazon.nova-lite-v1:0`. The approved IAM
+  Bedrock ARN must correspond to the runtime model/profile, rather than a wildcard.
+- Matching reports semantic 50%, skills 35%, and experience/level 15%.
+  Location and work-mode compatibility are reported separately and are not part of
+  the numeric score.
 
 ---
 
@@ -149,7 +171,7 @@ dữ liệu canonical hoặc đường tìm kiếm/vector đang hoạt động.
 ---
 
 ### 2. Khởi chạy Hạ tầng dịch vụ (Infrastructure)
-Khởi động cụm dịch vụ cơ sở dữ liệu, caching, search và monitoring bằng Docker Compose:
+Khởi động các dependency local và monitoring được khai báo trong Docker Compose:
 
 ```bash
 # Di chuyển vào thư mục cấu hình môi trường
@@ -162,7 +184,6 @@ docker-compose up -d
 Các dịch vụ sẽ chạy tại:
 - **PostgreSQL**: `localhost:5432`
 - **Redis**: `localhost:6379` (cache và Bull queue)
-- **Elasticsearch**: `localhost:9200` (legacy local container, không dùng cho canonical/vector search)
 - **Grafana Dashboard**: `localhost:3001` (admin/admin)
 - **Prometheus**: `localhost:9090`
 

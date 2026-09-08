@@ -4,8 +4,8 @@ import {
   CVProcessingProcessor,
   CVProcessingJobData,
   consentIdempotencyKey,
-  getJobSourceVersion,
 } from './cv-processing.processor';
+import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { CVProcessingStatus } from './entities/cv-match-result.entity';
 
 describe('CVProcessingProcessor', () => {
@@ -16,6 +16,26 @@ describe('CVProcessingProcessor', () => {
     user: '00000000-0000-4000-8000-000000000004',
     job: '00000000-0000-4000-8000-000000000005',
   };
+  const company = {
+    _id: '00000000-0000-4000-8000-000000000006',
+    name: 'Acme',
+    isActive: true,
+    isDeleted: false,
+    deletedAt: null,
+    updatedAt: new Date('2026-01-01T00:00:00Z'),
+  } as any;
+  const job = {
+    _id: ids.job,
+    name: 'Backend Engineer',
+    description: 'Canonical job description',
+    skills: ['TypeScript', 'NestJS'],
+    level: 'senior',
+    company: { _id: company._id, name: company.name },
+    isDeleted: false,
+    deletedAt: null,
+    updatedAt: new Date('2026-01-01T00:00:00Z'),
+  } as any;
+  const jobSourceVersion = getJobSourceVersion(job, company);
   const data: CVProcessingJobData = {
     cvMatchResultId: ids.result,
     cvId: ids.cv,
@@ -24,30 +44,14 @@ describe('CVProcessingProcessor', () => {
     jobId: ids.job,
     cvContentVersion: 'cv-v1',
     contentHash: 'a'.repeat(64),
-    jobSourceVersion: getJobSourceVersion({
-      _id: ids.job,
-      name: 'Backend Engineer',
-      description: 'Canonical job description',
-      skills: ['TypeScript', 'NestJS'],
-      level: 'senior',
-      isDeleted: false,
-      deletedAt: null,
-    }),
+    jobSourceVersion,
     aiRankingConsentGranted: true,
     aiRankingConsentVersion: 'application-ai-ranking-v1',
     aiRankingConsentPolicyHash: 'b'.repeat(64),
     consentIdempotencyKey: consentIdempotencyKey(
       ids.application,
       'cv-v1',
-      getJobSourceVersion({
-        _id: ids.job,
-        name: 'Backend Engineer',
-        description: 'Canonical job description',
-        skills: ['TypeScript', 'NestJS'],
-        level: 'senior',
-        isDeleted: false,
-        deletedAt: null,
-      }),
+      jobSourceVersion,
     ),
   };
 
@@ -58,6 +62,7 @@ describe('CVProcessingProcessor', () => {
     };
     const cvRepo = { findOne: jest.fn() };
     const jobRepo = { findOne: jest.fn() };
+    const companyRepo = { findOne: jest.fn() };
     const applicationRepo = { findOne: jest.fn() };
     const aiServiceClient = { matchCv: jest.fn() };
     const processor = new CVProcessingProcessor(
@@ -65,6 +70,7 @@ describe('CVProcessingProcessor', () => {
       resultRepo as any,
       cvRepo as any,
       jobRepo as any,
+      companyRepo as any,
       applicationRepo as any,
     );
     return {
@@ -72,6 +78,7 @@ describe('CVProcessingProcessor', () => {
       resultRepo,
       cvRepo,
       jobRepo,
+      companyRepo,
       applicationRepo,
       aiServiceClient,
     };
@@ -115,15 +122,8 @@ describe('CVProcessingProcessor', () => {
         aiRankingConsentPolicyHash: data.aiRankingConsentPolicyHash,
         aiRankingConsentAt: new Date(),
       },
-      job: {
-        _id: ids.job,
-        name: 'Backend Engineer',
-        description: 'Canonical job description',
-        skills: ['TypeScript', 'NestJS'],
-        level: 'senior',
-        isDeleted: false,
-        deletedAt: null,
-      },
+      job: { ...job },
+      company: { ...company },
     };
   }
 
@@ -133,6 +133,7 @@ describe('CVProcessingProcessor', () => {
     setupResult.resultRepo.findOne.mockResolvedValue(records.result);
     setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
     setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.companyRepo.findOne.mockResolvedValue(records.company);
     setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
     setupResult.aiServiceClient.matchCv.mockResolvedValue({
       overall_score: 0.8,
@@ -183,7 +184,10 @@ describe('CVProcessingProcessor', () => {
       maxYearsExperience: 8,
       workMode: 'hybrid',
     });
-    const structuredJobSourceVersion = getJobSourceVersion(records.job);
+    const structuredJobSourceVersion = getJobSourceVersion(
+      records.job,
+      records.company,
+    );
     records.result.jobSourceVersion = structuredJobSourceVersion;
     const structuredData = {
       ...data,
@@ -197,6 +201,7 @@ describe('CVProcessingProcessor', () => {
     setupResult.resultRepo.findOne.mockResolvedValue(records.result);
     setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
     setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.companyRepo.findOne.mockResolvedValue(records.company);
     setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
     setupResult.aiServiceClient.matchCv.mockResolvedValue({
       overall_score: 0.8,
@@ -246,6 +251,7 @@ describe('CVProcessingProcessor', () => {
     setupResult.resultRepo.findOne.mockResolvedValue(records.result);
     setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
     setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.companyRepo.findOne.mockResolvedValue(records.company);
     setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
     setupResult.aiServiceClient.matchCv.mockResolvedValue({
       overall_score: 0.8,
@@ -308,7 +314,10 @@ describe('CVProcessingProcessor', () => {
     [
       'stale job version',
       'jobRepo',
-      { ...canonicalRecords().job, description: 'changed' },
+      {
+        ...canonicalRecords().job,
+        updatedAt: new Date('2026-01-02T00:00:00Z'),
+      },
     ],
   ])('skips %s before calling AI', async (_name, record, value) => {
     const setupResult = setup();
@@ -316,6 +325,7 @@ describe('CVProcessingProcessor', () => {
     setupResult.resultRepo.findOne.mockResolvedValue(records.result);
     setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
     setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.companyRepo.findOne.mockResolvedValue(records.company);
     setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
     if (record === 'applicationRepo')
       setupResult.applicationRepo.findOne.mockResolvedValue(value);
@@ -333,12 +343,81 @@ describe('CVProcessingProcessor', () => {
     expect(setupResult.aiServiceClient.matchCv).not.toHaveBeenCalled();
   });
 
+  it('fences a company change discovered after the AI call', async () => {
+    const setupResult = setup();
+    const records = canonicalRecords();
+    const changedCompany = {
+      ...records.company,
+      updatedAt: new Date('2026-01-02T00:00:00Z'),
+    };
+    setupResult.resultRepo.findOne.mockResolvedValue(records.result);
+    setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
+    setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.companyRepo.findOne
+      .mockResolvedValueOnce(records.company)
+      .mockResolvedValueOnce(changedCompany);
+    setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
+    setupResult.aiServiceClient.matchCv.mockResolvedValue({
+      overall_score: 0.8,
+      matched_skills: [],
+      missing_required_skills: [],
+      strengths: [],
+      gaps: [],
+      explanation: 'matched',
+      components: {},
+      scoring_version: 'v1',
+      semantic_component_version: 'v1',
+      degraded: false,
+    });
+
+    await expect(
+      setupResult.processor.handleProcessCV({ data } as any),
+    ).resolves.toEqual({ success: false, stale: true });
+    expect(setupResult.resultRepo.update).toHaveBeenCalledTimes(1);
+    expect(setupResult.aiServiceClient.matchCv).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips before AI when the canonical company is missing', async () => {
+    const setupResult = setup();
+    const records = canonicalRecords();
+    setupResult.resultRepo.findOne.mockResolvedValue(records.result);
+    setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
+    setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.companyRepo.findOne.mockResolvedValue(null);
+    setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
+
+    await expect(
+      setupResult.processor.handleProcessCV({ data } as any),
+    ).resolves.toEqual({ success: false, stale: true });
+    expect(setupResult.aiServiceClient.matchCv).not.toHaveBeenCalled();
+  });
+
+  it('skips reprocessing when the canonical company is missing', async () => {
+    const setupResult = setup();
+    const records = canonicalRecords();
+    setupResult.resultRepo.findOne.mockResolvedValue({
+      _id: ids.result,
+      job: records.job,
+      cv: records.cv,
+      application: records.application,
+    });
+    setupResult.companyRepo.findOne.mockResolvedValue(null);
+
+    await expect(
+      setupResult.processor.handleReprocessCV({
+        data: { cvMatchResultId: ids.result },
+      } as any),
+    ).resolves.toEqual({ success: false, stale: true });
+    expect(setupResult.aiServiceClient.matchCv).not.toHaveBeenCalled();
+  });
+
   it('skips a revoked or policy-mismatched application consent', async () => {
     const setupResult = setup();
     const records = canonicalRecords();
     setupResult.resultRepo.findOne.mockResolvedValue(records.result);
     setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
     setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.companyRepo.findOne.mockResolvedValue(records.company);
     setupResult.applicationRepo.findOne.mockResolvedValue({
       ...records.application,
       aiRankingConsentGranted: false,

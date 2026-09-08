@@ -1,5 +1,4 @@
 import { Process, Processor } from '@nestjs/bull';
-import { createHash } from 'crypto';
 import { Logger } from '@nestjs/common';
 import { Job as BullJob } from 'bull';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,12 +16,12 @@ import {
 import { UserCV } from 'src/usercvs/entities/usercv.entity';
 import { CVParseStatus } from 'src/usercvs/cv-parse-status';
 import { Job as RecruitmentJob } from 'src/jobs/entities/job.entity';
+import { Company } from 'src/companies/entities/company.entity';
 import {
   Application,
   ApplicationStatus,
 } from 'src/applications/entities/application.entity';
-import { normalizeJobText } from 'src/job-indexing/job-indexing.normalization';
-import { Job as RecruitmentJobEntity } from 'src/jobs/entities/job.entity';
+import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 
 /**
  * Queue data is deliberately an opaque capability: workers use these IDs and
@@ -85,114 +84,21 @@ export function isCurrentMatchJob(
 ): boolean {
   return Boolean(
     !result.isDeleted &&
-      result.cvId === data.cvId &&
-      result.jobId === data.jobId &&
-      cv._id === data.cvId &&
-      cv.userId === data.userId &&
-      job._id === data.jobId &&
-      !job.isDeleted &&
-      !job.deletedAt &&
-      result.contentHash === data.contentHash &&
-      result.jobSourceVersion === data.jobSourceVersion &&
-      !cv.isDeleted &&
-      !cv.deletedAt &&
-      cv.contentVersion === data.cvContentVersion &&
-      cv.contentHash === data.contentHash &&
-      currentJobSourceVersion === data.jobSourceVersion,
+    result.cvId === data.cvId &&
+    result.jobId === data.jobId &&
+    cv._id === data.cvId &&
+    cv.userId === data.userId &&
+    job._id === data.jobId &&
+    !job.isDeleted &&
+    !job.deletedAt &&
+    result.contentHash === data.contentHash &&
+    result.jobSourceVersion === data.jobSourceVersion &&
+    !cv.isDeleted &&
+    !cv.deletedAt &&
+    cv.contentVersion === data.cvContentVersion &&
+    cv.contentHash === data.contentHash &&
+    currentJobSourceVersion === data.jobSourceVersion,
   );
-}
-
-function stableSourceValue(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(stableSourceValue);
-  if (value && typeof value === 'object') {
-    return Object.keys(value as Record<string, unknown>)
-      .sort()
-      .reduce<Record<string, unknown>>((output, key) => {
-        output[key] = stableSourceValue(
-          (value as Record<string, unknown>)[key],
-        );
-        return output;
-      }, {});
-  }
-  return value ?? null;
-}
-
-export function getJobSourceVersion(
-  job:
-    | RecruitmentJobEntity
-    | {
-        name: string;
-        description?: string | null;
-        skills?: unknown;
-        level?: string | null;
-        location?: string | null;
-        _id?: string;
-        company?: unknown;
-        salary?: number | null;
-        startDate?: Date | string | null;
-        endDate?: Date | string | null;
-        isActive?: boolean;
-        isDeleted?: boolean;
-        quantity?: number | null;
-        isHot?: boolean;
-        boostedAt?: Date | string | null;
-        isFeatured?: boolean;
-        isUrgent?: boolean;
-        createdAt?: Date | string | null;
-        updatedAt?: Date | string | null;
-        deletedAt?: Date | string | null;
-        [key: string]: unknown;
-      },
-): string {
-  // This is a version fingerprint, not business data sent to the AI service.
-  // Keep the complete canonical job/source context here so an old match cannot
-  // survive a change to a field used by matching or job eligibility.
-  const source = {
-    job: {
-      _id: job._id ?? null,
-      name: normalizeJobText(job.name),
-      description: normalizeJobText(job.description),
-      skills: skills(job.skills).map(normalizeJobText).sort(),
-      level: job.level == null ? null : normalizeJobText(job.level),
-      location: job.location == null ? null : normalizeJobText(job.location),
-      salary: job.salary ?? null,
-      startDate: job.startDate ?? null,
-      endDate: job.endDate ?? null,
-      isActive: job.isActive ?? null,
-      isDeleted: job.isDeleted ?? null,
-      quantity: job.quantity ?? null,
-      isHot: job.isHot ?? null,
-      boostedAt: job.boostedAt ?? null,
-      isFeatured: job.isFeatured ?? null,
-      isUrgent: job.isUrgent ?? null,
-      createdAt: job.createdAt ?? null,
-      updatedAt: job.updatedAt ?? null,
-      deletedAt: job.deletedAt ?? null,
-      createdBy: (job as Record<string, unknown>).createdBy ?? null,
-      updatedBy: (job as Record<string, unknown>).updatedBy ?? null,
-      deletedBy: (job as Record<string, unknown>).deletedBy ?? null,
-      // These fields are not currently declared on Job, but including them
-      // makes the fence safe if a canonical schema supplies them dynamically.
-      preferredSkills: (job as Record<string, unknown>).preferredSkills ?? null,
-      minYearsExperience:
-        (job as Record<string, unknown>).minYearsExperience ?? null,
-      maxYearsExperience:
-        (job as Record<string, unknown>).maxYearsExperience ?? null,
-      workMode:
-        (job as Record<string, unknown>).workMode ??
-        (job as Record<string, unknown>).work_mode ??
-        null,
-      employmentType:
-        (job as Record<string, unknown>).employmentType ??
-        (job as Record<string, unknown>).employment_type ??
-        null,
-    },
-    company: job.company ?? null,
-  };
-  return createHash('sha256')
-    .update(JSON.stringify(stableSourceValue(source)), 'utf8')
-    .digest('hex');
 }
 
 function asLevel(value: string | null | undefined): AiExperienceLevel | null {
@@ -209,8 +115,8 @@ function skills(value: unknown): string[] {
           typeof item === 'string'
             ? item
             : item && typeof item === 'object' && 'name' in item
-            ? String(item.name)
-            : '',
+              ? String(item.name)
+              : '',
         )
         .filter(Boolean)
     : [];
@@ -234,6 +140,8 @@ export class CVProcessingProcessor {
     @InjectRepository(UserCV) private readonly userCvRepo: Repository<UserCV>,
     @InjectRepository(RecruitmentJob)
     private readonly jobRepo: Repository<RecruitmentJob>,
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
     @InjectRepository(Application)
     private readonly applicationRepo: Repository<Application>,
   ) {}
@@ -245,7 +153,13 @@ export class CVProcessingProcessor {
       this.jobRepo.findOne({ where: { _id: data.jobId } }),
       this.applicationRepo.findOne({ where: { _id: data.applicationId } }),
     ]);
-    return { result, cv, recruitmentJob, application };
+    const company = recruitmentJob?.company?._id
+      ? await this.companyRepo.findOne({
+          where: { _id: recruitmentJob.company._id },
+          withDeleted: true,
+        })
+      : null;
+    return { result, cv, recruitmentJob, application, company };
   }
 
   private isEligible(
@@ -254,38 +168,40 @@ export class CVProcessingProcessor {
     cv: UserCV,
     recruitmentJob: RecruitmentJob,
     application: Application,
+    company: Company,
   ): boolean {
     return Boolean(
       application._id === data.applicationId &&
-        !application.isDeleted &&
-        !application.deletedAt &&
-        RANKABLE_APPLICATION_STATUSES.has(application.status) &&
-        application.cvId === data.cvId &&
-        application.jobId === data.jobId &&
-        application.userId === data.userId &&
-        cv.userId === data.userId &&
-        result.applicationId === data.applicationId &&
-        result.userId === data.userId &&
-        application.aiRankingConsentGranted === true &&
-        application.aiRankingConsentVersion === data.aiRankingConsentVersion &&
-        application.aiRankingConsentPolicyHash ===
-          data.aiRankingConsentPolicyHash &&
-        application.aiRankingConsentAt != null &&
-        data.aiRankingConsentGranted === true &&
-        data.consentIdempotencyKey ===
-          consentIdempotencyKey(
-            data.applicationId,
-            data.cvContentVersion,
-            data.jobSourceVersion,
-          ) &&
-        cv.parseStatus === CVParseStatus.READY &&
-        isCurrentMatchJob(
-          result,
-          cv,
-          recruitmentJob,
-          data,
-          getJobSourceVersion(recruitmentJob),
-        ),
+      !application.isDeleted &&
+      !application.deletedAt &&
+      RANKABLE_APPLICATION_STATUSES.has(application.status) &&
+      application.cvId === data.cvId &&
+      application.jobId === data.jobId &&
+      application.userId === data.userId &&
+      cv.userId === data.userId &&
+      result.applicationId === data.applicationId &&
+      result.userId === data.userId &&
+      application.aiRankingConsentGranted === true &&
+      application.aiRankingConsentVersion === data.aiRankingConsentVersion &&
+      application.aiRankingConsentPolicyHash ===
+        data.aiRankingConsentPolicyHash &&
+      application.aiRankingConsentAt != null &&
+      data.aiRankingConsentGranted === true &&
+      data.consentIdempotencyKey ===
+        consentIdempotencyKey(
+          data.applicationId,
+          data.cvContentVersion,
+          data.jobSourceVersion,
+        ) &&
+      cv.parseStatus === CVParseStatus.READY &&
+      company?._id === recruitmentJob.company?._id &&
+      isCurrentMatchJob(
+        result,
+        cv,
+        recruitmentJob,
+        data,
+        getJobSourceVersion(recruitmentJob, company),
+      ),
     );
   }
 
@@ -309,8 +225,8 @@ export class CVProcessingProcessor {
       const values = Array.isArray(value)
         ? value
         : value == null
-        ? []
-        : [value];
+          ? []
+          : [value];
       return values.filter((item): item is AiWorkMode =>
         ['onsite', 'hybrid', 'remote'].includes(String(item)),
       );
@@ -345,14 +261,14 @@ export class CVProcessingProcessor {
           typeof job.minYearsExperience === 'number'
             ? job.minYearsExperience
             : typeof job.min_years_experience === 'number'
-            ? job.min_years_experience
-            : null,
+              ? job.min_years_experience
+              : null,
         max_years_experience:
           typeof job.maxYearsExperience === 'number'
             ? job.maxYearsExperience
             : typeof job.max_years_experience === 'number'
-            ? job.max_years_experience
-            : null,
+              ? job.max_years_experience
+              : null,
         level: asLevel(recruitmentJob.level),
         location: canonicalLocation(recruitmentJob.location),
         work_modes: canonicalWorkModes(
@@ -401,13 +317,14 @@ export class CVProcessingProcessor {
     const data = job.data;
     this.logger.log(`Processing CV match: ${data.cvMatchResultId}`);
     const canonical = await this.loadCanonical(data);
-    const { result, cv, recruitmentJob, application } = canonical;
+    const { result, cv, recruitmentJob, application, company } = canonical;
     if (
       !result ||
       !cv ||
       !recruitmentJob ||
       !application ||
-      !this.isEligible(data, result, cv, recruitmentJob, application)
+      !company ||
+      !this.isEligible(data, result, cv, recruitmentJob, application, company)
     ) {
       this.logger.warn(
         `Skipping stale or ineligible CV match: ${data.cvMatchResultId}`,
@@ -443,12 +360,14 @@ export class CVProcessingProcessor {
         !latest.cv ||
         !latest.recruitmentJob ||
         !latest.application ||
+        !latest.company ||
         !this.isEligible(
           data,
           latest.result,
           latest.cv,
           latest.recruitmentJob,
           latest.application,
+          latest.company,
         )
       ) {
         this.logger.warn(
@@ -494,12 +413,14 @@ export class CVProcessingProcessor {
         current.cv &&
         current.recruitmentJob &&
         current.application &&
+        current.company &&
         this.isEligible(
           data,
           current.result,
           current.cv,
           current.recruitmentJob,
           current.application,
+          current.company,
         )
       ) {
         await this.cvMatchResultRepo.update(
@@ -533,6 +454,14 @@ export class CVProcessingProcessor {
     )
       return { success: false, stale: true };
     const recruitmentJob = result.job;
+    const company = recruitmentJob.company?._id
+      ? await this.companyRepo.findOne({
+          where: { _id: recruitmentJob.company._id },
+          withDeleted: true,
+        })
+      : null;
+    if (!company) return { success: false, stale: true };
+    const jobSourceVersion = getJobSourceVersion(recruitmentJob, company);
     const data: CVProcessingJobData = {
       cvMatchResultId: result._id,
       cvId: result.cv._id,
@@ -541,7 +470,7 @@ export class CVProcessingProcessor {
       cvContentVersion: result.cv.contentVersion,
       contentHash: result.cv.contentHash,
       jobId: recruitmentJob._id,
-      jobSourceVersion: getJobSourceVersion(recruitmentJob),
+      jobSourceVersion,
       aiRankingConsentGranted: true,
       aiRankingConsentVersion: result.application.aiRankingConsentVersion || '',
       aiRankingConsentPolicyHash:
@@ -549,7 +478,7 @@ export class CVProcessingProcessor {
       consentIdempotencyKey: consentIdempotencyKey(
         result.application._id,
         result.cv.contentVersion,
-        getJobSourceVersion(recruitmentJob),
+        jobSourceVersion,
       ),
     };
     await this.cvMatchResultRepo.update(result._id, {

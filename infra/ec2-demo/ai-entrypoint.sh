@@ -197,7 +197,7 @@ AI_SERVICE_JWT_ALGORITHM=RS256
 AI_SERVICE_JWT_TTL_SECONDS=60
 AI_SERVICE_TIMEOUT_MS=10000
 NODE_EXTRA_CA_CERTS=/run/secrets/ai-ca-cert
-DB_SSL_CA_FILE=/run/secrets/db-ca.pem
+DB_SSL_CA_FILE=/run/secrets/db-ca
 EOF
 write_env_value "$backend_env" DB_HOST "$backend_json" DB_HOST
 write_env_value "$backend_env" DB_USERNAME "$backend_json" DB_USERNAME
@@ -218,6 +218,7 @@ AI_CV_MATCH_SCOPE=cv:match
 AI_RAG_RETRIEVE_SCOPE=rag:retrieve
 AI_RAG_GENERATE_SCOPE=rag:generate
 AI_JOB_INDEX_SCOPE=jobs:index
+AI_JWT_SUBJECT=talentpulse-backend
 AI_EMBEDDING_PROVIDER=cohere
 AI_VECTOR_STORE_PROVIDER=qdrant
 AI_GENERATION_PROVIDER=bedrock
@@ -301,7 +302,7 @@ wait_health() {
     sleep 2
   done
   curl --fail --silent --show-error --max-time 5 http://127.0.0.1/origin-health >/dev/null
-  printf 'readiness=passed ai=/health backend=/api/health nginx=/origin-health\n'
+  printf 'readiness=passed ai=/health/ready backend=/api/v1/health/ready nginx=/origin-health\n'
 }
 
 rollback() {

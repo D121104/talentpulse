@@ -14,6 +14,7 @@ import { MailModule } from 'src/mail/mail.module';
 import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 import { createNoopQueueProvider } from 'src/queues/queue-runtime';
 import { ApplicationAiConsentEvent } from './entities/application-ai-consent-event.entity';
+import { Company } from 'src/companies/entities/company.entity';
 
 const queueWorkersEnabled = areQueueWorkersEnabled();
 
@@ -23,6 +24,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
       Application,
       CVMatchResult,
       ApplicationAiConsentEvent,
+      Company,
     ]),
     ...(queueWorkersEnabled
       ? [BullModule.registerQueue({ name: 'mail-queue' })]

@@ -72,7 +72,7 @@ services:
       test:
         - CMD-SHELL
         - >-
-          node -e "fetch('http://127.0.0.1:8000/api/health')
+          node -e "fetch('http://127.0.0.1:8000/api/v1/health/ready')
           .then(r => process.exit(r.ok ? 0 : 1))
           .catch(() => process.exit(1))"
       interval: 30s
@@ -123,7 +123,7 @@ services:
         - CMD-SHELL
         - >-
           python -c "import ssl, urllib.request;
-          urllib.request.urlopen('https://127.0.0.1:8000/health',
+          urllib.request.urlopen('https://127.0.0.1:8000/health/ready',
           context=ssl._create_unverified_context(), timeout=3)"
       interval: 30s
       timeout: 5s

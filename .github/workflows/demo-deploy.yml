@@ -100,13 +100,58 @@ jobs:
           python -m pip install --disable-pip-version-check cfn-lint==1.42.0 yamllint==1.37.1
       - name: Validate deployment YAML and CloudFormation
         run: |
-          yamllint -d relaxed .github/workflows/demo-deploy.yml infra/ec2-demo/template.yaml infra/ec2-demo/docker-compose.yml infra/ec2-demo/.env.example
+          yamllint -d relaxed .github/workflows/demo-deploy.yml infra/ec2-demo/template.yaml infra/ec2-demo/docker-compose.yml
           cfn-lint infra/ec2-demo/template.yaml
           python - <<'PY'
           import yaml
           from pathlib import Path
+
           for name in [".github/workflows/demo-deploy.yml", "infra/ec2-demo/docker-compose.yml"]:
               yaml.safe_load(Path(name).read_text())
+          PY
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          env_path = Path("infra/ec2-demo/.env.example")
+          with env_path.open(encoding="utf-8", newline="") as handle:
+              dotenv = handle.read()
+
+          if "\r" in dotenv:
+              raise SystemExit(f"{env_path}: carriage returns are not allowed")
+
+          assignment = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)")
+          secret_name = re.compile(
+              r"(?i)(?:secret|password|passwd|token|private[_-]?key|"
+              r"access[_-]?key|api[_-]?key|credential)"
+          )
+          secret_value = re.compile(
+              r"(?i)(?:AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|"
+              r"-----BEGIN [^-\r\n]*PRIVATE KEY-----|"
+              r"-----END [^-\r\n]*PRIVATE KEY-----|"
+              r"(?:gh[pousr]|xox[baprs])-[A-Za-z0-9-]{20,}|"
+              r"sk-[A-Za-z0-9_-]{20,})"
+          )
+          placeholder = re.compile(
+              r"(?i)^(?:replace(?:-with)?-[A-Za-z0-9._-]+|"
+              r"placeholder|dummy|change[-_]?me|your[-_].+|"
+              r"example(?:\.invalid)?|<[^>]+>)$"
+          )
+          seen = set()
+          for line_number, line in enumerate(dotenv.split("\n"), 1):
+              if not line.strip() or line.lstrip().startswith("#"):
+                  continue
+              match = assignment.fullmatch(line)
+              if match is None:
+                  raise SystemExit(f"{env_path}:{line_number}: malformed dotenv assignment")
+              name, value = match.groups()
+              if name in seen:
+                  raise SystemExit(f"{env_path}:{line_number}: duplicate variable {name}")
+              seen.add(name)
+              if secret_value.search(value):
+                  raise SystemExit(f"{env_path}:{line_number}: secret-like literal value")
+              if secret_name.search(name) and value and not placeholder.fullmatch(value):
+                  raise SystemExit(f"{env_path}:{line_number}: literal secret-like value for {name}")
           PY
       - name: Validate deployment shell
         run: |
@@ -122,7 +167,7 @@ jobs:
           chmod 600 /tmp/talentpulse-compose-runtime/*
           sed 's#replace-with-deployment-region#ap-southeast-2#; s#replace-me#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#g; s#replace-with-cloudfront-domain#demo.example.invalid#g; s#replace-with-rds-endpoint#db.example.invalid#g; s#replace-with-qdrant-endpoint#qdrant.example.invalid#g' infra/ec2-demo/.env.example > /tmp/talentpulse-demo.env
           TALENTPULSE_RUNTIME_DIR=/tmp/talentpulse-compose-runtime docker compose --env-file /tmp/talentpulse-demo.env -f infra/ec2-demo/docker-compose.yml config >/tmp/talentpulse-compose.config
-          ! grep -E 'replace-with-runtime-secret|PRIVATE KEY|password|JWT_SECRET' /tmp/talentpulse-compose.config
+          ! grep -E 'replace-with-runtime-secret|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|aws_secret_access_key\s*[:=]' /tmp/talentpulse-compose.config
           ! python - <<'PY'
           from pathlib import Path
           import re

@@ -13,6 +13,7 @@ import { DataSource, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Application, ApplicationStatus } from './entities/application.entity';
+import { Company } from 'src/companies/entities/company.entity';
 import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
 import { IUser } from 'src/users/users.interface';
 import { CreateApplicationDto } from './dto/create-application.dto';
@@ -28,10 +29,8 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
-import {
-  consentIdempotencyKey,
-  getJobSourceVersion,
-} from 'src/ai-matching/cv-processing.processor';
+import { consentIdempotencyKey } from 'src/ai-matching/cv-processing.processor';
+import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { JobsService } from 'src/jobs/jobs.service';
 import {
   ICandidateMatchResult,
@@ -51,6 +50,9 @@ export class ApplicationsService implements OnModuleInit {
 
     @InjectRepository(CVMatchResult)
     private readonly cvMatchResultRepo: Repository<CVMatchResult>,
+
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
 
     @InjectRepository(ApplicationAiConsentEvent)
     private readonly applicationConsentEventRepo: Repository<ApplicationAiConsentEvent>,
@@ -158,24 +160,39 @@ export class ApplicationsService implements OnModuleInit {
       Boolean(cv.contentHash)
     ) {
       try {
-        const policy = getApplicationAiRankingConsentPolicy(this.configService);
-        await this.cvProcessingService.queueCVProcessing({
-          cvId: cv._id.toString(),
-          userId: user._id,
-          applicationId: savedApplication._id.toString(),
-          cvContentVersion: cv.contentVersion,
-          contentHash: cv.contentHash || '',
-          jobId: job._id.toString(),
-          jobSourceVersion: getJobSourceVersion(job),
-          aiRankingConsentGranted: true,
-          aiRankingConsentVersion: policy.consentVersion,
-          aiRankingConsentPolicyHash: policy.policyHash,
-          consentIdempotencyKey: consentIdempotencyKey(
-            savedApplication._id.toString(),
-            cv.contentVersion,
-            getJobSourceVersion(job),
-          ),
-        });
+        const company = job.company?._id
+          ? await this.companyRepo.findOne({
+              where: { _id: job.company._id },
+              withDeleted: true,
+            })
+          : null;
+        if (!company) {
+          this.logger.warn(
+            `Skipping CV processing queue for application ${savedApplication._id}: canonical company not found`,
+          );
+        } else {
+          const policy = getApplicationAiRankingConsentPolicy(
+            this.configService,
+          );
+          const jobSourceVersion = getJobSourceVersion(job, company);
+          await this.cvProcessingService.queueCVProcessing({
+            cvId: cv._id.toString(),
+            userId: user._id,
+            applicationId: savedApplication._id.toString(),
+            cvContentVersion: cv.contentVersion,
+            contentHash: cv.contentHash || '',
+            jobId: job._id.toString(),
+            jobSourceVersion,
+            aiRankingConsentGranted: true,
+            aiRankingConsentVersion: policy.consentVersion,
+            aiRankingConsentPolicyHash: policy.policyHash,
+            consentIdempotencyKey: consentIdempotencyKey(
+              savedApplication._id.toString(),
+              cv.contentVersion,
+              jobSourceVersion,
+            ),
+          });
+        }
       } catch (error) {
         this.logger.warn(
           `Failed to queue CV processing for application ${savedApplication._id}`,
@@ -805,9 +822,8 @@ export class ApplicationsService implements OnModuleInit {
       },
     );
 
-    const processingStatus = await this.cvProcessingService.getProcessingStatus(
-      jobId,
-    );
+    const processingStatus =
+      await this.cvProcessingService.getProcessingStatus(jobId);
 
     return {
       jobId,

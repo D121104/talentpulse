@@ -104,7 +104,8 @@ export class CandidateAssistantIntegrity20260908100000
           ADD CONSTRAINT "FK_ai_chat_quota_ledger_message"
           FOREIGN KEY ("messageId")
           REFERENCES "ai_chat_messages" ("_id")
-          ON DELETE SET NULL
+          -- Committed quota rows require this message reference to remain non-null.
+              ON DELETE RESTRICT
           NOT VALID;
         END IF;
         IF NOT EXISTS (
@@ -327,6 +328,8 @@ export class CandidateAssistantIntegrity20260908100000
     await queryRunner.query(
       `ALTER TABLE "ai_chat_messages" DROP CONSTRAINT IF EXISTS "FK_ai_chat_messages_parent_same_session"`,
     );
-    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_ai_chat_messages_session_id"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "UQ_ai_chat_messages_session_id"`,
+    );
   }
 }
