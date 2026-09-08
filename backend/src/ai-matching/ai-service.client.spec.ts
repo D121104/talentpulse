@@ -71,15 +71,20 @@ const matchResponse = {
   scoring_version: 'v1',
   semantic_component_version: 'v1',
 };
-const scopeFromRequest = (requestConfig: {
+const claimsFromRequest = (requestConfig: {
   headers?: Record<string, string>;
 }) => {
   const token = requestConfig.headers?.Authorization?.replace('Bearer ', '');
   if (!token) throw new Error('Missing service token');
   const payload = token.split('.')[1];
-  return JSON.parse(Buffer.from(payload, 'base64url').toString())
-    .scope as string;
+  return JSON.parse(Buffer.from(payload, 'base64url').toString()) as {
+    scope: string;
+    sub: string;
+  };
 };
+const scopeFromRequest = (requestConfig: {
+  headers?: Record<string, string>;
+}) => claimsFromRequest(requestConfig).scope;
 
 describe('AiServiceClient', () => {
   beforeEach(() => request.mockReset());
@@ -110,6 +115,32 @@ describe('AiServiceClient', () => {
 
     await expect(client.checkReadiness(60000)).resolves.toBe(false);
     expect(request.mock.calls[0][0].timeout).toBe(1000);
+  });
+
+  it('emits the exact default service subject', async () => {
+    const client = new AiServiceClient(config(auth));
+    request.mockResolvedValue({ status: 200, data: parseResponse });
+
+    await client.parseCv(parseRequest);
+
+    expect(claimsFromRequest(request.mock.calls[0][0])).toMatchObject({
+      sub: 'talentpulse-backend',
+      scope: 'cv:parse',
+    });
+  });
+
+  it('emits a configured service subject unchanged with the endpoint scope', async () => {
+    const client = new AiServiceClient(
+      config({ ...auth, AI_SERVICE_JWT_SUBJECT: 'configured-ai-client' }),
+    );
+    request.mockResolvedValue({ status: 200, data: parseResponse });
+
+    await client.parseCv(parseRequest);
+
+    expect(claimsFromRequest(request.mock.calls[0][0])).toMatchObject({
+      sub: 'configured-ai-client',
+      scope: 'cv:parse',
+    });
   });
 
   it('uses endpoint-specific default scopes and does not reuse tokens across scopes', async () => {

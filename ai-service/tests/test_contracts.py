@@ -79,6 +79,84 @@ def test_internal_endpoint_requires_bearer_token_when_enabled(
     assert response.json()["detail"]["code"] == "missing_bearer_token"
 
 
+@pytest.mark.parametrize(
+    ("subject", "scope", "status_code", "error_code"),
+    [
+        ("untrusted-service", "cv:match", 401, "invalid_bearer_token"),
+        (None, "cv:match", 401, "invalid_bearer_token"),
+        ("talentpulse-backend", "cv:parse", 403, "insufficient_scope"),
+        ("talentpulse-backend", None, 403, "insufficient_scope"),
+    ],
+)
+def test_non_local_cv_auth_requires_exact_subject_and_endpoint_scope(
+    client, non_local_auth, valid_match_payload, subject, scope, status_code, error_code
+) -> None:
+    _, token = non_local_auth
+    response = client.post(
+        "/internal/v1/cv/match",
+        json=valid_match_payload,
+        headers={"Authorization": f"Bearer {token(subject=subject, scope=scope)}"},
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == error_code
+
+
+def test_non_local_cv_auth_accepts_valid_claims(
+    client, non_local_auth, valid_match_payload
+) -> None:
+    _, token = non_local_auth
+    response = client.post(
+        "/internal/v1/cv/match",
+        json=valid_match_payload,
+        headers={"Authorization": f"Bearer {token(scope='cv:match')}"},
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("subject", "scope", "status_code", "error_code"),
+    [
+        ("untrusted-service", "rag:retrieve", 401, "invalid_bearer_token"),
+        (None, "rag:retrieve", 401, "invalid_bearer_token"),
+        ("talentpulse-backend", "rag:generate", 403, "insufficient_scope"),
+        ("talentpulse-backend", None, 403, "insufficient_scope"),
+    ],
+)
+def test_non_local_rag_auth_requires_exact_subject_and_endpoint_scope(
+    client,
+    non_local_auth,
+    valid_rag_retrieve_payload,
+    subject,
+    scope,
+    status_code,
+    error_code,
+) -> None:
+    _, token = non_local_auth
+    response = client.post(
+        "/internal/v1/rag/retrieve",
+        json=valid_rag_retrieve_payload,
+        headers={"Authorization": f"Bearer {token(subject=subject, scope=scope)}"},
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == error_code
+
+
+def test_non_local_rag_auth_accepts_valid_claims(
+    client, non_local_auth, valid_rag_retrieve_payload
+) -> None:
+    _, token = non_local_auth
+    response = client.post(
+        "/internal/v1/rag/retrieve",
+        json=valid_rag_retrieve_payload,
+        headers={"Authorization": f"Bearer {token(scope='rag:retrieve')}"},
+    )
+
+    assert response.status_code == 200
+
+
 def test_auth_disabled_fails_closed_outside_local_environments(settings) -> None:
     from app.main import create_app
 

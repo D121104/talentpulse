@@ -11,6 +11,49 @@ describe('validateEnvironment', () => {
     });
   });
 
+  it('defaults the AI service subject and preserves a configured subject', () => {
+    expect(validateEnvironment({}).AI_SERVICE_JWT_SUBJECT).toBe(
+      'talentpulse-backend',
+    );
+    expect(
+      validateEnvironment({
+        NODE_ENV: 'demo',
+        JWT_SECRET: 'access-secret',
+        JWT_REFRESH_SECRET: 'refresh-secret',
+        DB_SSL_CA_FILE: '/run/secrets/db-ca',
+        AI_SERVICE_JWT_SUBJECT: 'configured-ai-client',
+      }).AI_SERVICE_JWT_SUBJECT,
+    ).toBe('configured-ai-client');
+  });
+
+  it('requires a nonblank bounded subject when AI service auth is configured', () => {
+    const base = {
+      NODE_ENV: 'demo',
+      JWT_SECRET: 'access-secret',
+      JWT_REFRESH_SECRET: 'refresh-secret',
+      DB_SSL_CA_FILE: '/run/secrets/db-ca',
+      AI_SERVICE_URL: 'https://ai.internal',
+      AI_SERVICE_ISSUER: 'backend',
+      AI_SERVICE_AUDIENCE: 'ai',
+      AI_SERVICE_JWT_ALGORITHM: 'RS256',
+      AI_SERVICE_JWT_TTL_SECONDS: '60',
+      AI_SERVICE_JWT_PRIVATE_KEY: 'private-key',
+    };
+
+    expect(validateEnvironment(base).AI_SERVICE_JWT_SUBJECT).toBe(
+      'talentpulse-backend',
+    );
+    expect(() =>
+      validateEnvironment({ ...base, AI_SERVICE_JWT_SUBJECT: '   ' }),
+    ).toThrow('AI_SERVICE_JWT_SUBJECT');
+    expect(() =>
+      validateEnvironment({
+        ...base,
+        AI_SERVICE_JWT_SUBJECT: 'a'.repeat(129),
+      }),
+    ).toThrow('AI_SERVICE_JWT_SUBJECT');
+  });
+
   it('defaults and validates the dedicated job indexing scope', () => {
     expect(validateEnvironment({}).AI_JOB_INDEX_SCOPE).toBe('jobs:index');
     expect(

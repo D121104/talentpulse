@@ -228,6 +228,70 @@ def test_jobs_index_scope_allows_valid_token_and_rejects_wrong_scope() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("subject", "scope", "status_code", "error_code"),
+    [
+        ("untrusted-service", "jobs:index", 401, "invalid_bearer_token"),
+        (None, "jobs:index", 401, "invalid_bearer_token"),
+        ("talentpulse-backend", "jobs:read", 403, "insufficient_scope"),
+        ("talentpulse-backend", None, 403, "insufficient_scope"),
+    ],
+)
+def test_non_local_job_indexing_auth_requires_exact_subject_and_scope(
+    non_local_auth, subject, scope, status_code, error_code
+) -> None:
+    settings, token = non_local_auth
+    settings.embedding_provider = "cohere"
+    settings.vector_store_provider = "qdrant"
+    settings.generation_provider = "bedrock"
+    application = create_app(
+        settings,
+        embedding_provider=FakeEmbedding(),
+        vector_retriever=FakeVector(),
+        generation_provider=FakeGeneration(),
+    )
+    application.dependency_overrides[get_settings] = lambda: settings
+
+    try:
+        with TestClient(application) as client:
+            response = client.post(
+                "/internal/v1/index/jobs/upsert",
+                json=make_upsert().model_dump(mode="json"),
+                headers={"Authorization": f"Bearer {token(subject=subject, scope=scope)}"},
+            )
+    finally:
+        application.dependency_overrides.clear()
+
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == error_code
+
+
+def test_non_local_job_indexing_auth_accepts_valid_claims(non_local_auth) -> None:
+    settings, token = non_local_auth
+    settings.embedding_provider = "cohere"
+    settings.vector_store_provider = "qdrant"
+    settings.generation_provider = "bedrock"
+    application = create_app(
+        settings,
+        embedding_provider=FakeEmbedding(),
+        vector_retriever=FakeVector(),
+        generation_provider=FakeGeneration(),
+    )
+    application.dependency_overrides[get_settings] = lambda: settings
+
+    try:
+        with TestClient(application) as client:
+            response = client.post(
+                "/internal/v1/index/jobs/upsert",
+                json=make_upsert().model_dump(mode="json"),
+                headers={"Authorization": f"Bearer {token(scope='jobs:index')}"},
+            )
+    finally:
+        application.dependency_overrides.clear()
+
+    assert response.status_code == 200
+
+
 def test_job_representation_matches_backend_snapshot_contract_byte_for_byte() -> None:
     job = make_job().model_copy(
         update={

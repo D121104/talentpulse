@@ -4,6 +4,7 @@ export interface ServiceJwtConfig {
   algorithm: 'RS256' | 'ES256';
   ttlSeconds: number;
   keyId?: string;
+  subject: string;
 }
 
 function parseBoolean(
@@ -105,6 +106,21 @@ export function validateEnvironment(
   const hasServiceAuthConfig = serviceAuthKeys.some(
     (key) => config[key] != null,
   );
+  const configuredServiceSubject = String(
+    config.AI_SERVICE_JWT_SUBJECT ?? 'talentpulse-backend',
+  );
+  const serviceSubject = configuredServiceSubject.trim();
+  if (
+    (hasServiceAuthConfig ||
+      ['local', 'development', 'test'].includes(nodeEnv)) &&
+    (!serviceSubject ||
+      serviceSubject.length > 128 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(serviceSubject))
+  ) {
+    throw new Error(
+      'AI_SERVICE_JWT_SUBJECT must be a non-empty bounded service subject',
+    );
+  }
 
   if (hasServiceAuthConfig) {
     const serviceUrl = String(config.AI_SERVICE_URL ?? '').trim();
@@ -164,6 +180,7 @@ export function validateEnvironment(
     REDIS_ENABLED: String(redisEnabled),
     RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
     AI_CV_CONSENT_VERSION: consentVersion,
+    AI_SERVICE_JWT_SUBJECT: serviceSubject,
     AI_SERVICE_TIMEOUT_MS: timeoutMs,
     AI_JOB_INDEX_SCOPE: jobIndexScope,
     ...(consentPolicyHash
