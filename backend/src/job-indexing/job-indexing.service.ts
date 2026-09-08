@@ -274,7 +274,10 @@ function deterministicJobIndexOperationId(
 }
 
 function deterministicJobIndexIdempotencyKey(outbox: JobIndexOutbox): string {
-  return `job-index:${outbox.eventType}:${outbox.aggregateId}:${outbox.sourceVersion}:${JOB_INDEX_VERSION}`;
+  const versionFingerprint = createHash('sha256')
+    .update(`${outbox.sourceVersion}:${JOB_INDEX_VERSION}`)
+    .digest('hex');
+  return `job-index:${outbox.eventType}:${outbox.aggregateId}:${versionFingerprint}`;
 }
 
 function deterministicUuid(value: string): string {
