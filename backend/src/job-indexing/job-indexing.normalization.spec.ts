@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { Company } from 'src/companies/entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
 import {
@@ -5,6 +7,7 @@ import {
   buildCanonicalProjection,
   buildJobRepresentationFromSnapshot,
   computeJobContentHash,
+  computeJobContentHashFromSnapshot,
   deterministicJobPointId,
 } from './job-indexing.normalization';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
@@ -81,5 +84,46 @@ describe('job indexing normalization', () => {
     expect(id).toBe(deterministicJobPointId('job-1'));
     expect(id).toMatch(/^[0-9a-f-]{36}$/);
     expect(JOB_INDEX_VERSION).toBe('demo-v1');
+  });
+});
+
+type NormalizationFixture = {
+  fixture_version: string;
+  normalization_version: string;
+  cases: Array<{
+    id: string;
+    snapshot: import('./job-indexing.types').CanonicalJobSnapshot;
+    expected: { document: string; content_hash: string };
+  }>;
+};
+
+function loadNormalizationFixture(): NormalizationFixture {
+  return JSON.parse(
+    readFileSync(
+      resolve(
+        __dirname,
+        '../../../contracts/job-indexing-normalization-v1.json',
+      ),
+      'utf8',
+    ),
+  ) as NormalizationFixture;
+}
+
+describe('job indexing normalization golden fixture', () => {
+  it('matches the checked-in document and SHA-256 values', () => {
+    const fixture = loadNormalizationFixture();
+
+    expect(fixture.fixture_version).toBe('job-indexing-normalization-v1');
+    expect(fixture.normalization_version).toBe('job-normalization-v1');
+    expect(fixture.cases).toHaveLength(2);
+
+    for (const testCase of fixture.cases) {
+      expect(buildJobRepresentationFromSnapshot(testCase.snapshot)).toBe(
+        testCase.expected.document,
+      );
+      expect(computeJobContentHashFromSnapshot(testCase.snapshot)).toBe(
+        testCase.expected.content_hash,
+      );
+    }
   });
 });

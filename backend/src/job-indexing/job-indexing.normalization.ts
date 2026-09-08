@@ -96,10 +96,28 @@ export function buildJobRepresentation(job: Job, company: Company): string {
   );
 }
 
-export function computeJobContentHash(job: Job, company: Company): string {
+export function computeJobContentHashFromSnapshot(
+  snapshot: Pick<
+    import('./job-indexing.types').CanonicalJobSnapshot,
+    | 'title'
+    | 'description'
+    | 'skills'
+    | 'company_name'
+    | 'location'
+    | 'level'
+    | 'work_mode'
+    | 'employment_type'
+  >,
+): string {
   return createHash('sha256')
-    .update(buildJobRepresentation(job, company), 'utf8')
+    .update(buildJobRepresentationFromSnapshot(snapshot), 'utf8')
     .digest('hex');
+}
+
+export function computeJobContentHash(job: Job, company: Company): string {
+  return computeJobContentHashFromSnapshot(
+    buildCanonicalJobSnapshot(job, company),
+  );
 }
 
 export function getJobSourceVersion(job: Job, company: Company): string {
