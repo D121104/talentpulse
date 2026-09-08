@@ -1,12 +1,16 @@
-import { apiRequest, ApiError } from './api';
-import type { UserCV, OnlineCV } from './cvTypes';
+import { apiRequest, ApiError } from "./api";
+import type { UserCV, OnlineCV } from "./cvTypes";
 
-export type AssistantMode = 'JOB_SEARCH' | 'CV_ANALYSIS' | 'CV_JOB_COMPARISON' | 'ADVICE';
-export type AssistantState = 'READY' | 'DEGRADED' | 'NO_EVIDENCE';
+export type AssistantMode =
+  | "JOB_SEARCH"
+  | "CV_ANALYSIS"
+  | "CV_JOB_COMPARISON"
+  | "ADVICE";
+export type AssistantState = "READY" | "DEGRADED" | "NO_EVIDENCE";
 
 export interface AssistantFilterInput {
   location?: string;
-  workMode?: 'onsite' | 'hybrid' | 'remote';
+  workMode?: "onsite" | "hybrid" | "remote";
   employmentType?: string;
   experienceLevel?: string;
   minSalary?: number;
@@ -16,7 +20,7 @@ export interface AssistantFilterInput {
 
 export interface AssistantCitation {
   sourceId: string;
-  sourceType: 'JOB' | 'CV' | 'APPLICATION';
+  sourceType: "JOB" | "CV" | "APPLICATION";
   label?: string;
 }
 
@@ -28,8 +32,8 @@ export interface AssistantBlock {
 
 export interface AssistantMessage {
   _id: string;
-  role: 'USER' | 'ASSISTANT';
-  status: 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  role: "USER" | "ASSISTANT";
+  status: "PROCESSING" | "COMPLETED" | "FAILED";
   content: string | null;
   clientMessageId: string | null;
   blocks: AssistantBlock[] | null;
@@ -54,7 +58,7 @@ export interface AssistantSessionResponse {
 export interface AssistantCvOption {
   id: string;
   title: string;
-  source: 'online' | 'uploaded';
+  source: "online" | "uploaded";
 }
 
 export interface AssistantConsentPolicy {
@@ -66,9 +70,17 @@ export interface AssistantConsent {
   _id: string;
   consentVersion: string;
   policyHash: string;
-  status: 'GRANTED' | 'REVOKED';
+  status: "GRANTED" | "REVOKED";
   grantedAt?: string | null;
   revokedAt?: string | null;
+}
+
+export interface AssistantQuota {
+  usedToday: number;
+  limit: number | null;
+  remaining: number | null;
+  isUnlimited: boolean;
+  timezone: string;
 }
 
 export interface AssistantConsentMutation extends AssistantConsentPolicy {
@@ -78,8 +90,8 @@ export interface AssistantConsentMutation extends AssistantConsentPolicy {
 
 export const assistantApi = {
   createSession: (mode: AssistantMode, accessToken: string) =>
-    apiRequest<AssistantSession>('/ai/candidate-assistant/sessions', {
-      method: 'POST',
+    apiRequest<AssistantSession>("/ai/candidate-assistant/sessions", {
+      method: "POST",
       body: { mode },
       accessToken,
     }),
@@ -93,33 +105,62 @@ export const assistantApi = {
       cvId?: string;
       filters?: AssistantFilterInput;
     },
-    accessToken: string,
+    accessToken: string
   ) =>
-    apiRequest<AssistantSessionResponse>(`/ai/candidate-assistant/sessions/${encodeURIComponent(sessionId)}/messages`, {
-      method: 'POST',
-      body: input,
+    apiRequest<AssistantSessionResponse>(
+      `/ai/candidate-assistant/sessions/${encodeURIComponent(
+        sessionId
+      )}/messages`,
+      {
+        method: "POST",
+        body: input,
+        accessToken,
+      }
+    ),
+
+  quota: (accessToken: string) =>
+    apiRequest<AssistantQuota>("/ai/candidate-assistant/quota", {
       accessToken,
     }),
 
   listCvOptions: async (accessToken: string): Promise<AssistantCvOption[]> => {
     const [online, uploaded] = await Promise.all([
-      apiRequest<OnlineCV[]>('/online-cvs', { accessToken }),
-      apiRequest<UserCV[]>('/user-cvs', { accessToken }),
+      apiRequest<OnlineCV[]>("/online-cvs", { accessToken }),
+      apiRequest<UserCV[]>("/user-cvs", { accessToken }),
     ]);
     return [
-      ...online.map((cv) => ({ id: cv._id, title: cv.title || cv.fullName || 'Online CV', source: 'online' as const })),
-      ...uploaded.map((cv) => ({ id: cv._id, title: cv.title || 'Uploaded CV', source: 'uploaded' as const })),
+      ...online.map((cv) => ({
+        id: cv._id,
+        title: cv.title || cv.fullName || "Online CV",
+        source: "online" as const,
+      })),
+      ...uploaded.map((cv) => ({
+        id: cv._id,
+        title: cv.title || "Uploaded CV",
+        source: "uploaded" as const,
+      })),
     ];
   },
 
   currentConsent: (accessToken: string) =>
-    apiRequest<AssistantConsent | null>('/ai/candidate-assistant/consent/current', { accessToken }),
+    apiRequest<AssistantConsent | null>(
+      "/ai/candidate-assistant/consent/current",
+      { accessToken }
+    ),
 
   grantConsent: (input: AssistantConsentMutation, accessToken: string) =>
-    apiRequest<AssistantConsent>('/ai/candidate-assistant/consent/grant', { method: 'POST', body: input, accessToken }),
+    apiRequest<AssistantConsent>("/ai/candidate-assistant/consent/grant", {
+      method: "POST",
+      body: input,
+      accessToken,
+    }),
 
   revokeConsent: (input: AssistantConsentMutation, accessToken: string) =>
-    apiRequest<AssistantConsent>('/ai/candidate-assistant/consent/revoke', { method: 'POST', body: input, accessToken }),
+    apiRequest<AssistantConsent>("/ai/candidate-assistant/consent/revoke", {
+      method: "POST",
+      body: input,
+      accessToken,
+    }),
 };
 
 export function isAssistantUnavailable(error: unknown): boolean {

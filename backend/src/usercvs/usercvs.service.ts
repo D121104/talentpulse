@@ -42,13 +42,12 @@ export class UserCVsService {
     private readonly aiCvConsentsService: AiCvConsentsService,
   ) {}
 
-  private getUploadedFileType(url: string): 'pdf' | 'doc' | 'docx' {
+  private getUploadedFileType(url: string): 'pdf' | 'docx' {
     const cleanUrl = url.toLowerCase().split('?')[0].split('#')[0];
     if (cleanUrl.endsWith('.pdf')) return 'pdf';
-    if (cleanUrl.endsWith('.doc')) return 'doc';
     if (cleanUrl.endsWith('.docx')) return 'docx';
     throw new BadRequestException(
-      'Chỉ chấp nhận file PDF, DOC hoặc DOCX. Vui lòng tải lên đúng định dạng.',
+      'Chỉ chấp nhận file PDF hoặc DOCX. Vui lòng tải lên đúng định dạng.',
     );
   }
 

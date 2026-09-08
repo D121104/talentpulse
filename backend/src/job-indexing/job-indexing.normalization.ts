@@ -1,55 +1,105 @@
 import { createHash } from 'crypto';
+import { decodeHTML } from 'entities';
 import { Job } from 'src/jobs/entities/job.entity';
 import { Company } from 'src/companies/entities/company.entity';
 import { isCanonicalActiveJob } from 'src/active-jobs/active-job-query.service';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
 import { CanonicalJobProjection } from './job-indexing.types';
 
-function normalize(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFKC')
+function decodeHtmlEntities(value: string): string {
+  return decodeHTML(value);
+}
+
+export function normalizeJobText(value: unknown): string {
+  // Keep this order identical to FastAPI normalize_job_text(): decode entities,
+  // remove bounded tags, then collapse whitespace.
+  const decoded = decodeHtmlEntities(String(value ?? ''));
+  return decoded
+    .replace(/<[^>]{0,256}>/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+    .trim();
 }
 
 function normalizeSkills(value: unknown): string[] {
   return Array.isArray(value)
     ? value
-        .map((item) => normalize(item))
+        .map((item) => normalizeJobText(item))
         .filter(Boolean)
         .sort()
     : [];
 }
 
-export function buildJobRepresentation(job: Job, company: Company): string {
-  const representation = {
-    title: normalize(job.name),
-    description: normalize(job.description),
+export function buildCanonicalJobSnapshot(
+  job: Job,
+  company: Company,
+): import('./job-indexing.types').CanonicalJobSnapshot {
+  return {
+    job_id: job._id,
+    title: normalizeJobText(job.name),
+    description: normalizeJobText(job.description),
     skills: normalizeSkills(job.skills),
-    level: normalize(job.level),
-    location: normalize(job.location),
-    company: normalize(company.name),
-    companyDescription: normalize(company.description),
-    companyAddress: normalize(company.address),
+    company_id: company._id,
+    company_name: normalizeJobText(company.name),
+    location: job.location ? normalizeJobText(job.location) : null,
+    level: job.level ? normalizeJobText(job.level) : null,
+    work_mode: null,
+    employment_type: null,
+    salary: job.salary ?? null,
+    salary_currency: null,
+    start_date: job.startDate?.toISOString() ?? null,
+    end_date: job.endDate?.toISOString() ?? null,
+    is_active: Boolean(job.isActive),
+    is_deleted: Boolean(job.isDeleted),
+    company_is_active: Boolean(company.isActive),
+    company_is_deleted: Boolean(company.isDeleted),
   };
-  return [
-    representation.title,
-    representation.description,
-    representation.skills.join(', '),
-    representation.level,
-    representation.location,
-    representation.company,
-    representation.companyDescription,
-    representation.companyAddress,
-  ]
-    .filter(Boolean)
+}
+
+export function buildJobRepresentationFromSnapshot(
+  snapshot: Pick<
+    import('./job-indexing.types').CanonicalJobSnapshot,
+    | 'title'
+    | 'description'
+    | 'skills'
+    | 'company_name'
+    | 'location'
+    | 'level'
+    | 'work_mode'
+    | 'employment_type'
+  >,
+): string {
+  const parts = [
+    ['title', snapshot.title],
+    ['description', snapshot.description],
+    [
+      'skills',
+      snapshot.skills
+        .map((skill) => normalizeJobText(skill))
+        .sort()
+        .join(', '),
+    ],
+    ['company', snapshot.company_name],
+    ['location', snapshot.location ?? ''],
+    ['level', snapshot.level ?? ''],
+    ['work_mode', snapshot.work_mode ?? ''],
+    ['employment_type', snapshot.employment_type ?? ''],
+  ];
+  return parts
+    .filter(([, value]) => Boolean(value))
+    .map(([key, value]) => `${key}: ${normalizeJobText(value)}`)
     .join('\n');
 }
 
+export function buildJobRepresentation(job: Job, company: Company): string {
+  return buildJobRepresentationFromSnapshot(
+    buildCanonicalJobSnapshot(job, company),
+  );
+}
+
 export function computeJobContentHash(job: Job, company: Company): string {
-  const representation = buildJobRepresentation(job, company);
-  return createHash('sha256').update(representation, 'utf8').digest('hex');
+  return createHash('sha256')
+    .update(buildJobRepresentation(job, company), 'utf8')
+    .digest('hex');
 }
 
 export function getJobSourceVersion(job: Job, company: Company): string {

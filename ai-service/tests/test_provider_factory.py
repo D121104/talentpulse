@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-from uuid import uuid4
 
 import pytest
-
 from app.core.config import Settings
 from app.infrastructure.provider_factory import create_provider_bundle
 from app.infrastructure.rag_providers import (
@@ -22,11 +20,24 @@ class FakeBedrock:
 
     def invoke_model(self, **kwargs: object) -> object:
         self.embedding_calls.append(kwargs)
-        return {"body": FakeBody(json.dumps({"embeddings": [[0.1, 0.2]]}))}
+        return {"body": FakeBody(json.dumps({"embeddings": [[0.1] * 1024]}))}
 
     def converse(self, **kwargs: object) -> object:
         self.converse_calls.append(kwargs)
-        return {"output": {"message": {"content": [{"text": '{"answer_blocks": [], "claims": [], "citation_keys": [], "referenced_job_ids": []}'}]}}}
+        return {
+            "output": {
+                "message": {
+                    "content": [
+                        {
+                            "text": (
+                                '{"answer_blocks": [], "claims": [], "citation_keys": [], '
+                                '"referenced_job_ids": []}'
+                            )
+                        }
+                    ]
+                }
+            }
+        }
 
 
 class FakeBody:
@@ -38,8 +49,11 @@ class FakeBody:
 
 
 class FakeQdrant:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
     def query_points(self, **kwargs: object) -> object:
-        del kwargs
+        self.calls.append(kwargs)
         return {"points": []}
 
 
@@ -76,7 +90,7 @@ def test_production_factory_builds_explicit_real_provider_adapters() -> None:
     assert bundle.retriever.collection_alias == "jobs_current_demo"
     assert bundle.retriever.index_version == "demo-v1"
 
-    assert bundle.embedding.embed_query("hello") == [0.1, 0.2]
+    assert bundle.embedding.embed_query("hello") == [0.1] * 1024
     assert bedrock.embedding_calls[0]["modelId"] == "cohere.embed-multilingual-v3"
     assert bundle.generation.generate("bounded prompt") == {
         "answer_blocks": [],
@@ -85,6 +99,28 @@ def test_production_factory_builds_explicit_real_provider_adapters() -> None:
         "referenced_job_ids": [],
     }
     assert bedrock.converse_calls[0]["modelId"] == "amazon.nova-lite-v1:0"
+
+    bundle.retriever.search([0.1] * 1024, {"must": []}, 4)
+    assert qdrant.calls[0]["collection_name"] == "jobs_current_demo"
+    assert qdrant.calls[0]["limit"] == 4
+
+
+def test_factory_builds_clients_without_calling_paid_operations() -> None:
+    bedrock = FakeBedrock()
+    qdrant = FakeQdrant()
+
+    create_provider_bundle(production_settings(), bedrock_client=bedrock, qdrant_client=qdrant)
+
+    assert bedrock.embedding_calls == []
+    assert bedrock.converse_calls == []
+
+
+def test_factory_rejects_missing_qdrant_endpoint_before_client_construction() -> None:
+    settings = production_settings()
+    settings.qdrant_url = None
+
+    with pytest.raises(RuntimeError, match="Qdrant URL"):
+        create_provider_bundle(settings)
 
 
 def test_production_factory_rejects_incomplete_cloud_configuration() -> None:
@@ -105,3 +141,40 @@ def test_bedrock_embedding_adapter_sanitizes_provider_failures() -> None:
         CohereEmbeddingAdapter(Broken(), "cohere.embed-multilingual-v3", dimensions=2).embed_query(
             "text"
         )
+
+
+def test_bedrock_generation_adapter_sanitizes_provider_failures() -> None:
+    class Broken:
+        def converse(self, **kwargs: object) -> object:
+            del kwargs
+            raise RuntimeError("private provider payload")
+
+    with pytest.raises(ProviderFailure, match="generation provider failed"):
+        BedrockNovaGenerationAdapter(Broken(), "amazon.nova-lite-v1:0").generate("text")
+
+
+def test_bedrock_generation_adapter_returns_structured_json() -> None:
+    class Client:
+        def converse(self, **kwargs: object) -> object:
+            assert kwargs["modelId"] == "amazon.nova-lite-v1:0"
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": (
+                                    '{"answer_blocks": [], "claims": [], "citation_keys": [], '
+                                    '"referenced_job_ids": []}'
+                                )
+                            }
+                        ]
+                    }
+                }
+            }
+
+    assert BedrockNovaGenerationAdapter(Client(), "amazon.nova-lite-v1:0").generate("text") == {
+        "answer_blocks": [],
+        "claims": [],
+        "citation_keys": [],
+        "referenced_job_ids": [],
+    }

@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { UserCVsService } from './usercvs.service';
 import { CVParseStatus } from './cv-parse-status';
 import { getActiveAiCvConsentPolicy } from '../ai-consents/ai-cv-consent.policy';
@@ -52,7 +56,10 @@ describe('UserCVsService.createAiSnapshot', () => {
   });
 
   it('denies a snapshot unless parsing is READY and contentHash is present', async () => {
-    const { service } = setup({ ...readyCv, parseStatus: CVParseStatus.PENDING });
+    const { service } = setup({
+      ...readyCv,
+      parseStatus: CVParseStatus.PENDING,
+    });
 
     await expect(
       service.createAiSnapshot(userId, cvId, ...consentArgs),
@@ -72,7 +79,10 @@ describe('UserCVsService.createAiSnapshot', () => {
   });
 
   it('denies a READY CV when its content hash is empty', async () => {
-    const { service, consentService } = setup({ ...readyCv, contentHash: '   ' });
+    const { service, consentService } = setup({
+      ...readyCv,
+      contentHash: '   ',
+    });
 
     await expect(
       service.createAiSnapshot(userId, cvId, ...consentArgs),
@@ -140,7 +150,14 @@ describe('UserCVsService.update uploaded source', () => {
     }
   });
 
-  function setup(updatedCv = { ...originalCv, url: 'https://cdn.example.test/new.docx', contentVersion: 'new-version', fileType: 'docx' }) {
+  function setup(
+    updatedCv = {
+      ...originalCv,
+      url: 'https://cdn.example.test/new.docx',
+      contentVersion: 'new-version',
+      fileType: 'docx',
+    },
+  ) {
     process.env.REDIS_ENABLED = 'true';
     process.env.RUN_BACKGROUND_JOBS = 'true';
     const cvRepo = {
@@ -157,7 +174,6 @@ describe('UserCVsService.update uploaded source', () => {
 
   it.each([
     ['pdf', 'https://cdn.example.test/new.pdf'],
-    ['doc', 'https://cdn.example.test/new.doc'],
     ['docx', 'https://cdn.example.test/new.docx'],
   ])('accepts a %s source update', async (fileType, url) => {
     const updatedCv = {
@@ -193,8 +209,12 @@ describe('UserCVsService.update uploaded source', () => {
     const { service, cvRepo, cvParseQueue } = setup();
 
     await expect(
-      service.update(originalCv._id, { url: 'https://cdn.example.test/new.txt' } as any, user),
-    ).rejects.toThrow('PDF, DOC hoặc DOCX');
+      service.update(
+        originalCv._id,
+        { url: 'https://cdn.example.test/new.txt' } as any,
+        user,
+      ),
+    ).rejects.toThrow('PDF hoặc DOCX');
     expect(cvRepo.update).not.toHaveBeenCalled();
     expect(cvParseQueue.add).not.toHaveBeenCalled();
   });
@@ -202,17 +222,13 @@ describe('UserCVsService.update uploaded source', () => {
   it('enqueues the rotated version and expected URL without changing searchable state', async () => {
     const updatedCv = {
       ...originalCv,
-      url: 'https://cdn.example.test/new.doc',
-      fileType: 'doc',
+      url: 'https://cdn.example.test/new.docx',
+      fileType: 'docx',
       contentVersion: 'rotated-version',
     };
     const { service, cvParseQueue } = setup(updatedCv);
 
-    await service.update(
-      originalCv._id,
-      { url: updatedCv.url } as any,
-      user,
-    );
+    await service.update(originalCv._id, { url: updatedCv.url } as any, user);
 
     expect(cvParseQueue.add).toHaveBeenCalledWith(
       'parse-cv',
@@ -224,7 +240,9 @@ describe('UserCVsService.update uploaded source', () => {
       }),
       expect.any(Object),
     );
-    expect(cvParseQueue.add.mock.calls[0][1]).not.toHaveProperty('isSearchable');
+    expect(cvParseQueue.add.mock.calls[0][1]).not.toHaveProperty(
+      'isSearchable',
+    );
   });
 
   it('does not reset or enqueue an online CV update', async () => {
@@ -233,7 +251,10 @@ describe('UserCVsService.update uploaded source', () => {
 
     await service.update(
       originalCv._id,
-      { onlineCvId: 'online-cv-1', url: 'https://cdn.example.test/online' } as any,
+      {
+        onlineCvId: 'online-cv-1',
+        url: 'https://cdn.example.test/online',
+      } as any,
       user,
     );
 

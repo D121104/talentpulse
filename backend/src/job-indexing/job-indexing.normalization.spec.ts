@@ -1,11 +1,14 @@
 import { Company } from 'src/companies/entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
 import {
+  buildCanonicalJobSnapshot,
   buildCanonicalProjection,
+  buildJobRepresentationFromSnapshot,
   computeJobContentHash,
   deterministicJobPointId,
 } from './job-indexing.normalization';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
+import { createHash } from 'crypto';
 
 function fixture() {
   const company = Object.assign(new Company(), {
@@ -47,6 +50,24 @@ describe('job indexing normalization', () => {
     expect(projection.active).toBe(true);
     expect(projection.contentHash).toBe(computeJobContentHash(job, company));
     expect(projection.contentHash).toHaveLength(64);
+  });
+
+  it('matches the FastAPI job document/hash contract for the canonical snapshot', () => {
+    const { job, company } = fixture();
+    const snapshot = buildCanonicalJobSnapshot(job, company);
+    const document = buildJobRepresentationFromSnapshot(snapshot);
+    const expectedDocument = [
+      'title: Backend Engineer',
+      'description: Build APIs',
+      'skills: PostgreSQL, TypeScript',
+      'company: Acme',
+      'location: Hanoi',
+      'level: senior',
+    ].join('\n');
+    expect(document).toBe(expectedDocument);
+    expect(computeJobContentHash(job, company)).toBe(
+      createHash('sha256').update(expectedDocument, 'utf8').digest('hex'),
+    );
   });
 
   it('excludes inactive jobs from the canonical projection', () => {

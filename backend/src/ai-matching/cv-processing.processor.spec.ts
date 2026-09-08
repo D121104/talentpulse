@@ -3,6 +3,8 @@ import { CVParseStatus } from 'src/usercvs/cv-parse-status';
 import {
   CVProcessingProcessor,
   CVProcessingJobData,
+  consentIdempotencyKey,
+  getJobSourceVersion,
 } from './cv-processing.processor';
 import { CVProcessingStatus } from './entities/cv-match-result.entity';
 
@@ -22,11 +24,31 @@ describe('CVProcessingProcessor', () => {
     jobId: ids.job,
     cvContentVersion: 'cv-v1',
     contentHash: 'a'.repeat(64),
-    jobSourceVersion: '3eee103e',
+    jobSourceVersion: getJobSourceVersion({
+      _id: ids.job,
+      name: 'Backend Engineer',
+      description: 'Canonical job description',
+      skills: ['TypeScript', 'NestJS'],
+      level: 'senior',
+      isDeleted: false,
+      deletedAt: null,
+    }),
     aiRankingConsentGranted: true,
     aiRankingConsentVersion: 'application-ai-ranking-v1',
     aiRankingConsentPolicyHash: 'b'.repeat(64),
-    consentIdempotencyKey: `${ids.application}:cv-v1:3eee103e`,
+    consentIdempotencyKey: consentIdempotencyKey(
+      ids.application,
+      'cv-v1',
+      getJobSourceVersion({
+        _id: ids.job,
+        name: 'Backend Engineer',
+        description: 'Canonical job description',
+        skills: ['TypeScript', 'NestJS'],
+        level: 'senior',
+        isDeleted: false,
+        deletedAt: null,
+      }),
+    ),
   };
 
   function setup() {
@@ -144,6 +166,122 @@ describe('CVProcessingProcessor', () => {
     const aiRequest = setupResult.aiServiceClient.matchCv.mock.calls[0][0];
     expect(aiRequest.candidate).not.toHaveProperty('parsedText');
     expect(aiRequest.job).not.toHaveProperty('description');
+  });
+
+  it('passes explicit structured CV and job fields without deriving protected traits', async () => {
+    const setupResult = setup();
+    const records = canonicalRecords();
+    Object.assign(records.cv, {
+      yearsExperience: 6,
+      level: 'senior',
+      location: 'Hanoi',
+      workModes: ['hybrid'],
+    });
+    Object.assign(records.job, {
+      preferredSkills: ['Docker'],
+      minYearsExperience: 3,
+      maxYearsExperience: 8,
+      workMode: 'hybrid',
+    });
+    const structuredJobSourceVersion = getJobSourceVersion(records.job);
+    records.result.jobSourceVersion = structuredJobSourceVersion;
+    const structuredData = {
+      ...data,
+      jobSourceVersion: structuredJobSourceVersion,
+      consentIdempotencyKey: consentIdempotencyKey(
+        ids.application,
+        data.cvContentVersion,
+        structuredJobSourceVersion,
+      ),
+    };
+    setupResult.resultRepo.findOne.mockResolvedValue(records.result);
+    setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
+    setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
+    setupResult.aiServiceClient.matchCv.mockResolvedValue({
+      overall_score: 0.8,
+      matched_skills: ['TypeScript'],
+      missing_required_skills: ['NestJS'],
+      strengths: [],
+      gaps: [],
+      explanation: 'matched',
+      components: {
+        location: { score: 1, weight: 0, available: true, evidence: [] },
+        work_mode: { score: 1, weight: 0, available: true, evidence: [] },
+      },
+      scoring_version: 'v1',
+      semantic_component_version: 'v1',
+      degraded: false,
+    });
+
+    await setupResult.processor.handleProcessCV({
+      data: structuredData,
+    } as any);
+
+    expect(setupResult.aiServiceClient.matchCv).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidate: {
+          skills: ['TypeScript'],
+          years_experience: 6,
+          level: 'senior',
+          location: 'Hanoi',
+          work_modes: ['hybrid'],
+        },
+        job: {
+          required_skills: ['TypeScript', 'NestJS'],
+          preferred_skills: ['Docker'],
+          min_years_experience: 3,
+          max_years_experience: 8,
+          level: 'senior',
+          location: null,
+          work_modes: ['hybrid'],
+        },
+      }),
+    );
+  });
+
+  it('persists location and work-mode compatibility components', async () => {
+    const setupResult = setup();
+    const records = canonicalRecords();
+    setupResult.resultRepo.findOne.mockResolvedValue(records.result);
+    setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
+    setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+    setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
+    setupResult.aiServiceClient.matchCv.mockResolvedValue({
+      overall_score: 0.8,
+      matched_skills: ['TypeScript'],
+      missing_required_skills: [],
+      strengths: [],
+      gaps: [],
+      explanation: 'matched',
+      components: {
+        location: {
+          score: 1,
+          weight: 0,
+          available: true,
+          evidence: ['location match=true'],
+        },
+        work_mode: {
+          score: 0,
+          weight: 0,
+          available: true,
+          evidence: ['work mode overlap=false'],
+        },
+      },
+      scoring_version: 'v1',
+      semantic_component_version: 'v1',
+      degraded: false,
+    });
+
+    await setupResult.processor.handleProcessCV({ data } as any);
+
+    const persisted = setupResult.resultRepo.update.mock.calls.at(-1)[1];
+    expect(persisted.compatibility).toEqual(
+      expect.objectContaining({
+        location: expect.objectContaining({ available: true, score: 1 }),
+        workMode: expect.objectContaining({ available: true, score: 0 }),
+      }),
+    );
   });
 
   it.each([

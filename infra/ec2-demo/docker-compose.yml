@@ -12,8 +12,7 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    networks:
-      - private
+    networks: [private]
     mem_limit: 128m
     cpus: 0.25
     pids_limit: 64
@@ -30,53 +29,41 @@ services:
       start_period: 10s
 
   backend:
-    image: ${BACKEND_IMAGE:-talentpulse-backend:local}
-    build:
-      context: ../../backend
-      dockerfile: Dockerfile.demo
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
     restart: unless-stopped
     init: true
+    entrypoint: ["/usr/local/bin/talentpulse-env-loader"]
+    command: ["node", "dist/main.js"]
+    secrets:
+      - backend-env
+      - db-ca
+      - ai-ca-cert
     environment:
-      NODE_ENV: staging
+      NODE_ENV: demo
       PORT: "8000"
-      DB_HOST: ${DB_HOST:?DB_HOST is required}
-      DB_PORT: ${DB_PORT:-5432}
-      DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required}
-      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
-      DB_DATABASE: ${DB_DATABASE:-talentpulse_demo}
+      DB_PORT: "5432"
+      DB_DATABASE: talentpulse_demo
       DB_SYNCHRONIZE: "false"
       REDIS_ENABLED: "true"
-      REDIS_TLS: ${REDIS_TLS:-false}
+      REDIS_TLS: "false"
       REDIS_HOST: valkey
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       RUN_BACKGROUND_JOBS: "true"
       RUN_INDEXING_WORKER: "true"
       AI_INDEX_ENVIRONMENT: demo
       AI_INDEX_OUTBOX_ENVIRONMENT: demo
-      # The current backend validator requires HTTPS whenever the AI service is configured.
       AI_SERVICE_URL: https://ai-service:8000
-      AI_SERVICE_ISSUER: ${AI_SERVICE_ISSUER:?AI_SERVICE_ISSUER is required}
-      AI_SERVICE_AUDIENCE: ${AI_SERVICE_AUDIENCE:?AI_SERVICE_AUDIENCE is required}
-      AI_SERVICE_JWT_ALGORITHM: ${AI_SERVICE_JWT_ALGORITHM:-RS256}
-      AI_SERVICE_JWT_TTL_SECONDS: ${AI_SERVICE_JWT_TTL_SECONDS:-60}
-      AI_SERVICE_JWT_PRIVATE_KEY: ${AI_SERVICE_JWT_PRIVATE_KEY:?AI_SERVICE_JWT_PRIVATE_KEY is required}
-      AI_SERVICE_TIMEOUT_MS: ${AI_SERVICE_TIMEOUT_MS:-10000}
+      AI_SERVICE_JWT_ALGORITHM: RS256
+      AI_SERVICE_JWT_TTL_SECONDS: "60"
+      AI_SERVICE_TIMEOUT_MS: "10000"
+      DB_SSL_CA_FILE: /run/secrets/db-ca
       NODE_EXTRA_CA_CERTS: /run/secrets/ai-ca-cert
-      URL_FRONTEND: ${URL_FRONTEND:?URL_FRONTEND is required}
-      COOKIE_SECURE: "true"
-      COOKIE_SAME_SITE: lax
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
-    secrets:
-      - ai-ca-cert
     depends_on:
       valkey:
         condition: service_healthy
       ai-service:
         condition: service_healthy
-    networks:
-      - private
+    networks: [private]
     mem_limit: 2304m
     cpus: 1.25
     pids_limit: 512
@@ -94,10 +81,10 @@ services:
       start_period: 45s
 
   ai-service:
-    image: ${AI_SERVICE_IMAGE:-talentpulse-ai-service:local}
-    build:
-      context: ../../ai-service
-      dockerfile: Dockerfile.demo
+    image: ${AI_SERVICE_IMAGE:?AI_SERVICE_IMAGE is required}
+    restart: unless-stopped
+    init: true
+    entrypoint: ["/usr/local/bin/talentpulse-env-loader"]
     command:
       - uvicorn
       - app.main:app
@@ -109,33 +96,24 @@ services:
       - /run/secrets/ai-tls-key
       - --ssl-certfile
       - /run/secrets/ai-tls-cert
-    restart: unless-stopped
-    init: true
     secrets:
+      - ai-env
       - ai-tls-key
       - ai-tls-cert
     environment:
-      # Current FastAPI create_app requires injected production adapters for
-      # Cohere/Qdrant/Bedrock. These explicit local-safe values prevent a false
-      # healthy container until that adapter factory is wired.
-      AI_ENVIRONMENT: development
+      AI_ENVIRONMENT: demo
       AI_AUTH_REQUIRED: "true"
-      AI_JWT_PUBLIC_KEY: ${AI_JWT_PUBLIC_KEY:?AI_JWT_PUBLIC_KEY is required}
-      AI_JWT_ALGORITHMS: '["RS256"]'
-      AI_JWT_ISSUER: ${AI_SERVICE_ISSUER:?AI_SERVICE_ISSUER is required}
-      AI_JWT_AUDIENCE: ${AI_SERVICE_AUDIENCE:?AI_SERVICE_AUDIENCE is required}
-      AI_REQUIRED_SCOPE: ai:cv
-      AI_EMBEDDING_PROVIDER: deterministic
-      AI_VECTOR_STORE_PROVIDER: memory
-      AI_GENERATION_PROVIDER: deterministic
-      AI_COHERE_MODEL: embed-multilingual-v3.0
+      AI_EMBEDDING_PROVIDER: cohere
+      AI_VECTOR_STORE_PROVIDER: qdrant
+      AI_GENERATION_PROVIDER: bedrock
+      AI_COHERE_MODEL: cohere.embed-multilingual-v3
       AI_COHERE_DIMENSIONS: "1024"
-      AI_QDRANT_URL: ${AI_QDRANT_URL:?AI_QDRANT_URL is required}
       AI_QDRANT_COLLECTION: jobs_cohere_multilingual_v3_1024_demo_v1
+      AI_QDRANT_ALIAS: jobs_current_demo
+      AI_QDRANT_INDEX_VERSION: demo-v1
+      AI_BEDROCK_MODEL: amazon.nova-lite-v1:0
       AI_BEDROCK_REGION: ${AWS_REGION:?AWS_REGION is required}
-      AI_BEDROCK_MODEL: ${AI_BEDROCK_MODEL:?AI_BEDROCK_MODEL is required}
-    networks:
-      - private
+    networks: [private]
     mem_limit: 1536m
     cpus: 0.75
     pids_limit: 256
@@ -149,25 +127,20 @@ services:
           context=ssl._create_unverified_context(), timeout=3)"
       interval: 30s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 30s
 
   valkey:
     image: valkey/valkey:8.0.2-alpine
     restart: unless-stopped
     init: true
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-    command:
-      - valkey-server
-      - --appendonly
-      - "yes"
-      - --requirepass
-      - $${REDIS_PASSWORD}
+    command: ["valkey-server", "/run/secrets/valkey-config"]
+    secrets:
+      - valkey-config
+      - valkey-password
     volumes:
       - valkey-data:/data
-    networks:
-      - private
+    networks: [private]
     mem_limit: 512m
     cpus: 0.35
     pids_limit: 128
@@ -176,7 +149,8 @@ services:
       test:
         - CMD-SHELL
         - >-
-          valkey-cli -a "$${REDIS_PASSWORD}" ping | grep -q PONG
+          VALKEYCLI_AUTH="$$(cat /run/secrets/valkey-password)"
+          valkey-cli --no-auth-warning ping | grep -q PONG
       interval: 10s
       timeout: 5s
       retries: 10
@@ -188,12 +162,22 @@ networks:
     driver: bridge
 
 secrets:
+  backend-env:
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/backend.env
+  ai-env:
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/ai.env
+  db-ca:
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/db-ca.pem
   ai-ca-cert:
-    file: ${TALENTPULSE_RUNTIME_DIR:-/run/talentpulse}/ai-ca.crt
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/ai-ca.crt
   ai-tls-cert:
-    file: ${TALENTPULSE_RUNTIME_DIR:-/run/talentpulse}/ai-tls.crt
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/ai-tls.crt
   ai-tls-key:
-    file: ${TALENTPULSE_RUNTIME_DIR:-/run/talentpulse}/ai-tls.key
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/ai-tls.key
+  valkey-config:
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/valkey.conf
+  valkey-password:
+    file: ${TALENTPULSE_RUNTIME_DIR:?TALENTPULSE_RUNTIME_DIR is required}/valkey-password
 
 volumes:
   valkey-data:

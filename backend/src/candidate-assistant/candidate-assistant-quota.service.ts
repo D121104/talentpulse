@@ -70,6 +70,24 @@ export class CandidateAssistantQuotaService {
     });
   }
 
+  async getQuota(userId: string, now = new Date()) {
+    const quotaDate = this.getUtcPlusSevenDate(now);
+    const limit = await this.getDailyLimit(userId, now);
+    const usedToday = await this.ledgerRepo.count({
+      where: [
+        { userId, quotaDate, status: AiQuotaReservationStatus.RESERVED },
+        { userId, quotaDate, status: AiQuotaReservationStatus.COMMITTED },
+      ],
+    });
+    return {
+      usedToday,
+      limit,
+      remaining: limit === null ? null : Math.max(0, limit - usedToday),
+      isUnlimited: limit === null,
+      timezone: 'Asia/Ho_Chi_Minh (UTC+7)',
+    };
+  }
+
   async commit(
     reservation: AiQuotaReservation,
     messageId: string,

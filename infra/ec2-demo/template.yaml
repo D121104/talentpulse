@@ -18,10 +18,6 @@ Parameters:
   PrivateSubnetId:
     Type: AWS::EC2::Subnet::Id
     Description: Existing private subnet for the EC2 origin.
-  VpcCidr:
-    Type: String
-    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
-    Description: VPC CIDR used only for the temporary VPC-origin bootstrap rule.
   RdsSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Existing RDS security group to which demo ingress is added.
@@ -70,15 +66,11 @@ Parameters:
     Description: Existing Secrets Manager ARN for Valkey runtime values.
   BedrockModelArn:
     Type: String
-    Default: '*'
-    Description: Approved Bedrock model ARN or a scoped model ARN.
+    AllowedPattern: '^arn:[^:]+:bedrock:[a-z0-9-]+:([0-9]{12})?:(foundation-model|inference-profile)/[^*]+$'
+    Description: Required approved Bedrock model ARN; wildcard resources are refused.
   CloudFrontVpcOriginSecurityGroupId:
-    Type: String
-    Default: ''
-    Description: >-
-      AWS-managed CloudFront-VPCOrigins-Service-SG ID after VPC Origin
-      creation. Empty uses VpcCidr temporarily; replace it and update the
-      stack before production-like traffic is enabled.
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Required AWS-managed CloudFront VPC Origin security group ID when ingress is enabled.
   CloudFrontCachePolicyId:
     Type: String
     Default: 658327ea-f89d-4fab-a63d-7e88639e58f6
@@ -90,11 +82,18 @@ Parameters:
     Type: String
     Description: ARN of the pre-created GitHub Actions OIDC provider; account-specific and intentionally not hardcoded.
 
+Rules:
+  IngressRequiresCloudFrontSecurityGroup:
+    Assertions:
+      - Assert: !Or
+          - !Equals [ !Ref DeployIngress, 'false' ]
+          - !Not [ !Equals [ !Ref CloudFrontVpcOriginSecurityGroupId, '' ] ]
+        AssertDescription: DeployIngress=true requires the managed CloudFront VPC Origin security group.
+
 Conditions:
   IsIngressEnabled: !Equals [ !Ref DeployIngress, 'true' ]
   HasFrontendBucketName: !Not [ !Equals [ !Ref FrontendBucketName, '' ] ]
   HasBundleBucketName: !Not [ !Equals [ !Ref BundleBucketName, '' ] ]
-  HasCloudFrontOriginSecurityGroup: !Not [ !Equals [ !Ref CloudFrontVpcOriginSecurityGroupId, '' ] ]
 
 Resources:
   BackendRepository:
@@ -205,6 +204,7 @@ Resources:
             Condition:
               StringEquals:
                 AWS:SourceAccount: !Ref AWS::AccountId
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DemoDistribution}'
           - Sid: DenyInsecureTransport
             Effect: Deny
             Principal: '*'
@@ -240,9 +240,8 @@ Resources:
       IpProtocol: tcp
       FromPort: 80
       ToPort: 80
-      CidrIp: !If [ HasCloudFrontOriginSecurityGroup, !Ref AWS::NoValue, !Ref VpcCidr ]
-      SourceSecurityGroupId: !If [ HasCloudFrontOriginSecurityGroup, !Ref CloudFrontVpcOriginSecurityGroupId, !Ref AWS::NoValue ]
-      Description: CloudFront VPC Origin only; replace temporary VPC CIDR with the AWS-managed SG.
+      SourceSecurityGroupId: !Ref CloudFrontVpcOriginSecurityGroupId
+      Description: CloudFront VPC Origin managed security group only.
 
   RdsIngressFromDemo:
     Type: AWS::EC2::SecurityGroupIngress
@@ -359,38 +358,91 @@ Resources:
         - Key: Environment
           Value: demo
       UserData:
-        Fn::Base64: |
-          #!/bin/bash
-          set -euo pipefail
-          mkdir -p /opt/talentpulse/{releases,current,bin}
-          chmod 0750 /opt/talentpulse
-          dnf install -y docker awscli-2 amazon-cloudwatch-agent curl unzip
-          systemctl enable --now docker
-          mkdir -p /usr/local/lib/docker/cli-plugins
-          curl --fail --silent --show-error --location \
-            https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-x86_64 \
-            --output /usr/local/lib/docker/cli-plugins/docker-compose
-          chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
-          systemctl enable --now amazon-ssm-agent || true
-          # Safe bootstrap placeholder: no secret values, tokens, or runtime env are embedded here.
-          # The deployment workflow uploads a checksum-pinned bundle and SSM renders secrets
-          # into root-owned /run/talentpulse before starting Compose.
-          touch /opt/talentpulse/BOOTSTRAP_READY
-          cat >/etc/systemd/system/talentpulse-demo.service <<'UNIT'
-          [Unit]
-          Description=TalentPulse demo runtime placeholder
-          After=network-online.target docker.service
-          Wants=network-online.target
-          Requires=docker.service
-          [Service]
-          Type=oneshot
-          RemainAfterExit=yes
-          ExecStart=/usr/bin/true
-          [Install]
-          WantedBy=multi-user.target
-          UNIT
-          systemctl daemon-reload
-          systemctl enable talentpulse-demo.service
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            mkdir -p /opt/talentpulse/{releases,bin} /etc/talentpulse /run/talentpulse
+            chmod 0750 /opt/talentpulse /opt/talentpulse/releases /opt/talentpulse/bin /etc/talentpulse
+            dnf install -y docker awscli-2 amazon-cloudwatch-agent curl unzip jq
+            systemctl enable --now docker
+            mkdir -p /usr/local/lib/docker/cli-plugins
+            curl --fail --silent --show-error --location \
+              https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-x86_64 \
+              --output /usr/local/lib/docker/cli-plugins/docker-compose
+            chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
+            systemctl enable --now amazon-ssm-agent || true
+            metadata_token="$(curl --fail --silent --show-error -X PUT \
+              -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
+              http://169.254.169.254/latest/api/token)"
+            instance_id="$(curl --fail --silent --show-error \
+              -H "X-aws-ec2-metadata-token: $metadata_token" \
+              http://169.254.169.254/latest/meta-data/instance-id)"
+            cat >/etc/talentpulse/demo-runtime.conf <<CONF
+            EXPECTED_ACCOUNT='${AWS::AccountId}'
+            EXPECTED_REGION='${AWS::Region}'
+            EXPECTED_INSTANCE_ID='$instance_id'
+            EXPECTED_INSTANCE_NAME='${AWS::StackName}-runtime'
+            BACKEND_REPOSITORY_URI='${BackendRepository.RepositoryUri}'
+            AI_REPOSITORY_URI='${AiRepository.RepositoryUri}'
+            DEPLOYMENT_BUNDLE_BUCKET='${DeploymentBundleBucket}'
+            BACKEND_SECRET_ARN='${BackendSecretArn}'
+            AI_SECRET_ARN='${AiSecretArn}'
+            VALKEY_SECRET_ARN='${ValkeySecretArn}'
+            CONF
+            chown root:root /etc/talentpulse/demo-runtime.conf
+            chmod 0600 /etc/talentpulse/demo-runtime.conf
+            cat >/opt/talentpulse/bin/deploy-demo <<'BOOTSTRAP'
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            umask 077
+            [[ "$(id -u)" == 0 ]] || { printf 'demo bootstrap requires root\n' >&2; exit 1; }
+            [[ "$#" -ge 4 ]] || { printf 'demo bootstrap arguments are incomplete\n' >&2; exit 1; }
+            bundle="$2"
+            commit="$4"
+            [[ "$commit" =~ ^[0-9a-fA-F]{40}$ ]] || { printf 'invalid commit\n' >&2; exit 1; }
+            [[ "$bundle" == "s3://${DeploymentBundleBucket}/bundles/$commit" ]] || { printf 'invalid bundle\n' >&2; exit 1; }
+            tmp="$(mktemp -d /opt/talentpulse/.bootstrap.XXXXXX)"
+            trap 'rm -rf "$tmp"' EXIT
+            for object in docker-compose.yml nginx/default.conf ai-entrypoint.sh .env.example SHA256SUMS; do
+              aws --no-cli-pager s3 cp "$bundle/$object" "$tmp/$object" --only-show-errors >/dev/null
+            done
+            (cd "$tmp" && sha256sum -c SHA256SUMS >/dev/null)
+            install -o root -g root -m 0750 "$tmp/ai-entrypoint.sh" /opt/talentpulse/bin/deploy-demo.real
+            exec /opt/talentpulse/bin/deploy-demo.real "$@"
+            BOOTSTRAP
+            chmod 0750 /opt/talentpulse/bin/deploy-demo
+            cat >/opt/talentpulse/bin/deploy-demo-resume <<'RESUME'
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            umask 077
+            info=/opt/talentpulse/current/release.info
+            [[ -r "$info" ]] || exit 0
+            # release.info is generated by the verified deploy helper and contains
+            # only non-secret release identifiers/digests.
+            # shellcheck disable=SC1091
+            source "$info"
+            exec /opt/talentpulse/bin/deploy-demo --resume \
+              --bundle "$bundle" --commit "$commit" \
+              --backend-image "$backend_image" --ai-image "$ai_image" \
+              --migration-mode skip
+            RESUME
+            chmod 0750 /opt/talentpulse/bin/deploy-demo-resume
+            cat >/etc/systemd/system/talentpulse-demo.service <<'UNIT'
+            [Unit]
+            Description=TalentPulse demo runtime
+            After=network-online.target docker.service
+            Wants=network-online.target
+            Requires=docker.service
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/opt/talentpulse/bin/deploy-demo-resume
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+            systemctl daemon-reload
+            systemctl enable talentpulse-demo.service
 
   DemoVpcOrigin:
     Type: AWS::CloudFront::VpcOrigin
@@ -517,6 +569,8 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
                 token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:demo'
+                token.actions.githubusercontent.com:ref: refs/heads/develop
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub '${GitHubRepository}/.github/workflows/demo-deploy.yml@refs/heads/develop'
       Policies:
         - PolicyName: DemoDeploymentOnly
           PolicyDocument:
@@ -539,35 +593,82 @@ Resources:
                 Effect: Allow
                 Action: ecr:GetAuthorizationToken
                 Resource: '*'
-              - Sid: SyncFrontendAndBundle
+              - Sid: ListDemoArtifactPrefixes
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - !GetAtt FrontendBucket.Arn
+                  - !GetAtt DeploymentBundleBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - '*'
+                      - bundles/*
+              - Sid: WriteFrontendArtifacts
                 Effect: Allow
                 Action:
                   - s3:AbortMultipartUpload
                   - s3:DeleteObject
-                  - s3:ListBucket
                   - s3:PutObject
                   - s3:PutObjectTagging
-                Resource:
-                  - !GetAtt FrontendBucket.Arn
-                  - !Sub '${FrontendBucket.Arn}/*'
-                  - !GetAtt DeploymentBundleBucket.Arn
-                  - !Sub '${DeploymentBundleBucket.Arn}/*'
-              - Sid: InspectAndRollDemo
+                Resource: !Sub '${FrontendBucket.Arn}/*'
+              - Sid: WriteDeploymentBundles
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                Resource: !Sub '${DeploymentBundleBucket.Arn}/bundles/*'
+              - Sid: InspectDemoStack
                 Effect: Allow
                 Action:
                   - cloudformation:DescribeStacks
                   - cloudformation:DescribeStackEvents
-                  - cloudfront:CreateInvalidation
-                  - cloudfront:GetDistribution
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+              - Sid: UpdateDemoStack
+                Effect: Allow
+                Action: cloudformation:UpdateStack
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+              - Sid: InspectDemoInstance
+                Effect: Allow
+                Action:
                   - ec2:DescribeInstances
                   - ssm:DescribeInstanceInformation
-                  - ssm:SendCommand
-                  - ssm:GetCommandInvocation
                 Resource: '*'
+              # GetCommandInvocation does not support an instance/document
+              # resource ARN; AWS requires Resource '*' for this read action.
+              - Sid: ReadDemoCommandInvocation
+                Effect: Allow
+                Action: ssm:GetCommandInvocation
+                Resource: '*'
+              - Sid: SendCommandToDemoInstance
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${DemoInstance}'
               - Sid: PassOnlyDemoInstanceRole
                 Effect: Allow
                 Action: iam:PassRole
                 Resource: !GetAtt DemoInstanceRole.Arn
+
+  GitHubCloudFrontIngressPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: IsIngressEnabled
+    Properties:
+      ManagedPolicyName: !Sub '${AWS::StackName}-github-cloudfront-ingress'
+      Roles:
+        - !Ref GitHubOidcDeployRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: InvalidateDemoDistribution
+            Effect: Allow
+            Action:
+              - cloudfront:CreateInvalidation
+              - cloudfront:GetDistribution
+            Resource: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DemoDistribution}'
 
 Outputs:
   DemoInstanceId:

@@ -18,6 +18,17 @@ RUN uv sync --locked --no-dev \
 
 COPY app ./app
 RUN chown -R app:app /app
+
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'test -r /run/secrets/ai-env || { echo \"runtime secret file is missing\" >&2; exit 1; }' \
+    'set -a' \
+    '. /run/secrets/ai-env' \
+    'set +a' \
+    'exec "$@"' > /usr/local/bin/talentpulse-env-loader \
+    && chmod 0555 /usr/local/bin/talentpulse-env-loader
+
 USER app
 
 EXPOSE 8000

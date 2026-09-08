@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   HttpException,
@@ -87,6 +88,11 @@ export class CandidateAssistantService {
       }),
     );
   }
+  async getQuota(user: IUser) {
+    this.assertActor(user);
+    return this.quotaService.getQuota(user._id);
+  }
+
   async listSessions(user: IUser) {
     this.assertActor(user);
     return this.sessionRepo.find({
@@ -138,25 +144,42 @@ export class CandidateAssistantService {
     const existing = await this.messageRepo.findOne({
       where: { sessionId: id, clientMessageId: dto.clientMessageId },
     });
-    if (existing) return this.idempotentResult(existing);
+    let failedAssistant: AiChatMessage | null = null;
+    if (existing) {
+      failedAssistant = await this.messageRepo.findOne({
+        where: {
+          sessionId: id,
+          parentMessageId: existing._id,
+          role: AiChatMessageRole.ASSISTANT,
+        },
+      });
+      if (
+        !failedAssistant ||
+        failedAssistant.status !== AiChatMessageStatus.FAILED
+      )
+        return this.idempotentResult(existing);
+    }
     const reservation = await this.quotaService.reserve(
       user._id,
       `${session._id}:${dto.clientMessageId}`,
     );
+    if (existing && reservation.reused) return this.idempotentResult(existing);
     let userMessage: AiChatMessage;
     try {
-      userMessage = await this.messageRepo.save(
-        this.messageRepo.create({
-          sessionId: id,
-          role: AiChatMessageRole.USER,
-          status: AiChatMessageStatus.COMPLETED,
-          content: dto.content.trim(),
-          clientMessageId: dto.clientMessageId,
-          blocks: null,
-          citations: null,
-          filterState: this.boundFilters(dto.filters),
-        }),
-      );
+      userMessage =
+        existing ||
+        (await this.messageRepo.save(
+          this.messageRepo.create({
+            sessionId: id,
+            role: AiChatMessageRole.USER,
+            status: AiChatMessageStatus.COMPLETED,
+            content: dto.content.trim(),
+            clientMessageId: dto.clientMessageId,
+            blocks: null,
+            citations: null,
+            filterState: this.boundFilters(dto.filters),
+          }),
+        ));
     } catch (error) {
       if (!reservation.reused)
         await this.quotaService.release(reservation, 'IDEMPOTENCY_RACE');
@@ -168,6 +191,31 @@ export class CandidateAssistantService {
     }
     try {
       const jobs = await this.loadJobs(dto.jobIds);
+      if (
+        session.mode === AiChatSessionMode.CV_JOB_COMPARISON &&
+        jobs.length !== 1
+      )
+        throw new BadRequestException(
+          'CV_JOB_COMPARISON requires exactly one active job',
+        );
+      if (
+        (session.mode === AiChatSessionMode.CV_ANALYSIS ||
+          session.mode === AiChatSessionMode.CV_JOB_COMPARISON) &&
+        !dto.cvId
+      )
+        throw new BadRequestException(
+          'A CV is required for this assistant mode',
+        );
+      if (
+        ![
+          AiChatSessionMode.CV_ANALYSIS,
+          AiChatSessionMode.CV_JOB_COMPARISON,
+        ].includes(session.mode) &&
+        dto.cvId
+      )
+        throw new BadRequestException(
+          'A CV is not allowed for this assistant mode',
+        );
       const cv = dto.cvId
         ? await this.userCVsService.createCandidateAssistantSnapshot(
             user._id,
@@ -204,17 +252,26 @@ export class CandidateAssistantService {
         }),
       );
       const assistant = await this.messageRepo.save(
-        this.messageRepo.create({
-          sessionId: id,
-          parentMessageId: userMessage._id,
-          role: AiChatMessageRole.ASSISTANT,
-          status: AiChatMessageStatus.COMPLETED,
-          content: this.assistantText(response),
-          clientMessageId: null,
-          blocks: response.blocks,
-          citations: response.citations,
-          filterState: response.filterState || null,
-        }),
+        failedAssistant
+          ? Object.assign(failedAssistant, {
+              status: AiChatMessageStatus.COMPLETED,
+              content: this.assistantText(response),
+              blocks: response.blocks,
+              citations: response.citations,
+              filterState: response.filterState || null,
+              errorCode: null,
+            })
+          : this.messageRepo.create({
+              sessionId: id,
+              parentMessageId: userMessage._id,
+              role: AiChatMessageRole.ASSISTANT,
+              status: AiChatMessageStatus.COMPLETED,
+              content: this.assistantText(response),
+              clientMessageId: null,
+              blocks: response.blocks,
+              citations: response.citations,
+              filterState: response.filterState || null,
+            }),
       );
       await this.quotaService.commit(reservation, assistant._id);
       session.updatedAt = new Date();
@@ -226,18 +283,27 @@ export class CandidateAssistantService {
         error instanceof Error ? error.name.slice(0, 64) : 'AI_REQUEST_FAILED',
       );
       await this.messageRepo.save(
-        this.messageRepo.create({
-          sessionId: id,
-          parentMessageId: userMessage._id,
-          role: AiChatMessageRole.ASSISTANT,
-          status: AiChatMessageStatus.FAILED,
-          content: null,
-          clientMessageId: null,
-          blocks: null,
-          citations: null,
-          filterState: null,
-          errorCode: 'AI_PROVIDER_ERROR',
-        }),
+        failedAssistant
+          ? Object.assign(failedAssistant, {
+              status: AiChatMessageStatus.FAILED,
+              content: null,
+              blocks: null,
+              citations: null,
+              filterState: null,
+              errorCode: 'AI_PROVIDER_ERROR',
+            })
+          : this.messageRepo.create({
+              sessionId: id,
+              parentMessageId: userMessage._id,
+              role: AiChatMessageRole.ASSISTANT,
+              status: AiChatMessageStatus.FAILED,
+              content: null,
+              clientMessageId: null,
+              blocks: null,
+              citations: null,
+              filterState: null,
+              errorCode: 'AI_PROVIDER_ERROR',
+            }),
       );
       if (error instanceof HttpException) throw error;
       throw mapCandidateAssistantProviderError(error);
@@ -266,17 +332,32 @@ export class CandidateAssistantService {
   }
   private boundFilters(filters?: Record<string, unknown>) {
     if (!filters) return {};
+    const aliases: Record<string, string> = {
+      workMode: 'work_mode',
+      employmentType: 'employment_type',
+      experienceLevel: 'experience_level',
+      minSalary: 'salary_min',
+      maxSalary: 'salary_max',
+    };
     return Object.fromEntries(
       Object.entries(filters)
         .slice(0, MAX_FILTER_KEYS)
         .filter(
           ([key, value]) =>
             key.length <= 80 &&
-            ['string', 'number', 'boolean'].includes(typeof value),
+            (['string', 'number', 'boolean'].includes(typeof value) ||
+              (key === 'skills' && Array.isArray(value))),
         )
         .map(([key, value]) => [
-          key,
-          typeof value === 'string' ? value.slice(0, 500) : value,
+          aliases[key] || key,
+          Array.isArray(value)
+            ? value
+                .filter((item): item is string => typeof item === 'string')
+                .slice(0, 30)
+                .map((item) => item.slice(0, 500))
+            : typeof value === 'string'
+            ? value.slice(0, 500)
+            : value,
         ]),
     );
   }

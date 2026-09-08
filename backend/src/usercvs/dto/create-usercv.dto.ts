@@ -27,7 +27,7 @@ export class CreateUserCVDto {
   onlineCvId?: string; // Reference to online CV if created via online builder
 
   @IsOptional()
-  @IsEnum(['pdf', 'doc', 'docx', 'online'])
+  @IsEnum(['pdf', 'docx', 'online'])
   fileType?: string;
 
   @IsOptional()

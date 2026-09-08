@@ -8,6 +8,27 @@ export type JobIndexOutboxStatus =
   | 'COMPLETED'
   | 'FAILED';
 
+export interface CanonicalJobSnapshot {
+  job_id: string;
+  title: string;
+  description: string;
+  skills: string[];
+  company_id: string;
+  company_name: string;
+  location: string | null;
+  level: string | null;
+  work_mode: string | null;
+  employment_type: string | null;
+  salary: number | null;
+  salary_currency: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  is_active: boolean;
+  is_deleted: boolean;
+  company_is_active: boolean;
+  company_is_deleted: boolean;
+}
+
 export interface CanonicalJobProjection {
   job: Job;
   company: Company;

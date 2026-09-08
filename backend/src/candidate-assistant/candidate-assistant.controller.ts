@@ -27,6 +27,9 @@ import {
 @Roles(Role.USER, Role.ADMIN)
 export class CandidateAssistantController {
   constructor(private readonly service: CandidateAssistantService) {}
+  @Get('quota') quota(@User() user: IUser) {
+    return this.service.getQuota(user);
+  }
   @Post('sessions') create(
     @Body() dto: CreateAiChatSessionDto,
     @User() user: IUser,

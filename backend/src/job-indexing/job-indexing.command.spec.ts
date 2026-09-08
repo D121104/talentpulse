@@ -7,7 +7,6 @@ function service(jobRepo: any) {
     jobRepo,
     {} as any,
     {} as any,
-    {} as any,
   );
 }
 

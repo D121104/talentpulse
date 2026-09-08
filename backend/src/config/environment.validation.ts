@@ -38,6 +38,17 @@ export function validateEnvironment(
   const nodeEnv = String(config.NODE_ENV ?? 'development')
     .trim()
     .toLowerCase();
+
+  if (['staging', 'demo', 'production'].includes(nodeEnv)) {
+    for (const secretName of ['JWT_SECRET', 'JWT_REFRESH_SECRET']) {
+      if (!String(config[secretName] ?? '').trim()) {
+        throw new Error(
+          `${secretName} is required when NODE_ENV is staging, demo, or production`,
+        );
+      }
+    }
+  }
+
   const synchronize = parseBoolean(
     config.DB_SYNCHRONIZE,
     nodeEnv !== 'production',
@@ -122,6 +133,19 @@ export function validateEnvironment(
     }
   }
 
+  const jobIndexScope = String(
+    config.AI_JOB_INDEX_SCOPE ?? 'jobs:index',
+  ).trim();
+  if (
+    !jobIndexScope ||
+    jobIndexScope.length > 128 ||
+    /\s/.test(jobIndexScope)
+  ) {
+    throw new Error(
+      'AI_JOB_INDEX_SCOPE must be a non-empty scope without whitespace',
+    );
+  }
+
   const timeoutMs =
     config.AI_SERVICE_TIMEOUT_MS == null
       ? 10000
@@ -141,6 +165,7 @@ export function validateEnvironment(
     RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
     AI_CV_CONSENT_VERSION: consentVersion,
     AI_SERVICE_TIMEOUT_MS: timeoutMs,
+    AI_JOB_INDEX_SCOPE: jobIndexScope,
     ...(consentPolicyHash
       ? { AI_CV_CONSENT_POLICY_HASH: consentPolicyHash }
       : {}),

@@ -12,6 +12,7 @@ import {
   AiChatSessionMode,
 } from './candidate-assistant.types';
 import { CandidateAssistantProviderError } from './candidate-assistant.errors';
+import type { MatchResponse } from 'src/ai-matching/ai-service.client';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -206,7 +207,12 @@ export class CandidateAssistantAiServiceClient
         identity.request_id,
         identity.trace_id,
       );
+      const selectedJob =
+        request.mode === AiChatSessionMode.CV_JOB_COMPARISON
+          ? request.jobs[0]
+          : undefined;
       const contextJobs = [
+        ...(selectedJob ? [selectedJob] : []),
         ...retrieved.results
           .map((item) => request.jobs.find((job) => job.id === item.job_id))
           .filter((job): job is CandidateAssistantAiRequest['jobs'][number] =>
@@ -228,6 +234,17 @@ export class CandidateAssistantAiServiceClient
           score: item.score,
           citation_key: `job:${item.job_id}`,
         }));
+      if (
+        selectedJob &&
+        !retrievalEvidence.some((item) => item.job_id === selectedJob.id)
+      ) {
+        retrievalEvidence.push({
+          job_id: selectedJob.id,
+          rank: retrievalEvidence.length + 1,
+          score: 1,
+          citation_key: `job:${selectedJob.id}`,
+        });
+      }
       const requiresCv =
         request.mode === AiChatSessionMode.CV_ANALYSIS ||
         request.mode === AiChatSessionMode.CV_JOB_COMPARISON;
@@ -236,6 +253,21 @@ export class CandidateAssistantAiServiceClient
         (requiresCv && !request.consentVersion)
       ) {
         invalidResponse();
+      }
+      let matchingEvidence: Awaited<
+        ReturnType<AiServiceClient['matchCv']>
+      > | null = null;
+      if (selectedJob && request.cv) {
+        const comparison = await this.aiServiceClient.matchCv(
+          this.toMatchRequest(request.cv, selectedJob),
+        );
+        if (
+          !comparison ||
+          comparison.cv_id !== request.cv.cvId ||
+          comparison.job_id !== selectedJob.id
+        )
+          invalidResponse();
+        matchingEvidence = comparison;
       }
       const generated = await this.aiServiceClient.generateRag({
         identity,
@@ -273,11 +305,12 @@ export class CandidateAssistantAiServiceClient
           end_date: null,
         })),
         retrieval_evidence: retrievalEvidence,
+        matching_evidence: matchingEvidence,
         explicit_filters: explicitFilters,
         policy,
         consent_version: request.cv ? request.consentVersion : null,
       });
-      return this.toResponse(
+      const response = this.toResponse(
         generated,
         request,
         retrievalEvidence.map((item) => item.citation_key),
@@ -285,6 +318,13 @@ export class CandidateAssistantAiServiceClient
         identity,
         filterState,
       );
+      if (matchingEvidence) {
+        response.blocks = [
+          this.toDeterministicMatchBlock(matchingEvidence),
+          ...response.blocks.filter((block) => block.type !== 'MATCH_RESULT'),
+        ].slice(0, 20);
+      }
+      return response;
     } catch (error) {
       throw this.mapError(error);
     }
@@ -465,6 +505,45 @@ export class CandidateAssistantAiServiceClient
     return { blocks, citations, filterState: responseFilterState };
   }
 
+  private toDeterministicMatchBlock(
+    match: MatchResponse,
+  ): CandidateAssistantBlock {
+    const components = Object.fromEntries(
+      Object.entries(match.components)
+        .slice(0, 20)
+        .map(([name, component]) => [
+          name.slice(0, 80),
+          {
+            score: component.score,
+            weight: component.weight,
+            available: component.available,
+            evidence: component.evidence.slice(0, 20),
+          },
+        ]),
+    );
+    const scorePercent = Math.round(match.overall_score * 100);
+    return {
+      type: 'MATCH_RESULT',
+      text: `Deterministic CV-job match score: ${scorePercent}%. ${match.explanation.slice(
+        0,
+        1000,
+      )}`,
+      data: {
+        cv_id: match.cv_id,
+        job_id: match.job_id,
+        overall_score: match.overall_score,
+        components,
+        matched_skills: match.matched_skills.slice(0, 30),
+        missing_required_skills: match.missing_required_skills.slice(0, 30),
+        strengths: match.strengths.slice(0, 20),
+        gaps: match.gaps.slice(0, 20),
+        degraded: match.degraded,
+        scoring_version: match.scoring_version,
+        semantic_component_version: match.semantic_component_version,
+      },
+    };
+  }
+
   private toFilterState(filters: Record<string, unknown>): RecordValue {
     const value = {
       company: typeof filters.company === 'string' ? filters.company : null,
@@ -481,6 +560,50 @@ export class CandidateAssistantAiServiceClient
         : [],
     };
     return validateFilterState(value);
+  }
+
+  private toMatchRequest(
+    cv: NonNullable<CandidateAssistantAiRequest['cv']>,
+    job: CandidateAssistantAiRequest['jobs'][number],
+  ) {
+    return {
+      cv_id: cv.cvId,
+      job_id: job.id,
+      candidate: {
+        skills: cv.skills.slice(0, 200),
+        years_experience: null,
+        level: null,
+        location: null,
+        work_modes: [],
+      },
+      job: {
+        required_skills: job.skills.slice(0, 200),
+        preferred_skills: [],
+        min_years_experience: null,
+        max_years_experience: null,
+        level: this.matchLevel(job.level),
+        location: job.location,
+        work_modes: [],
+      },
+    };
+  }
+
+  private matchLevel(
+    value: string | null,
+  ): 'intern' | 'junior' | 'mid' | 'senior' | 'lead' | 'principal' | null {
+    if (!value) return null;
+    const normalized = value.trim().toLowerCase();
+    return ['intern', 'junior', 'mid', 'senior', 'lead', 'principal'].includes(
+      normalized,
+    )
+      ? (normalized as
+          | 'intern'
+          | 'junior'
+          | 'mid'
+          | 'senior'
+          | 'lead'
+          | 'principal')
+      : null;
   }
 
   private mapError(error: unknown): CandidateAssistantProviderError {

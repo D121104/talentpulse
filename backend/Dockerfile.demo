@@ -25,11 +25,22 @@ RUN apt-get update \
     && chown -R node:node /app
 
 WORKDIR /app
-USER node
 
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/package.json ./package.json
+
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'test -r /run/secrets/backend-env || { echo \"runtime secret file is missing\" >&2; exit 1; }' \
+    'set -a' \
+    '. /run/secrets/backend-env' \
+    'set +a' \
+    'exec "$@"' > /usr/local/bin/talentpulse-env-loader \
+    && chmod 0555 /usr/local/bin/talentpulse-env-loader
+
+USER node
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \

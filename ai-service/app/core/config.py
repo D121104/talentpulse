@@ -22,18 +22,25 @@ class Settings(BaseSettings):
     jwt_secret: str | None = None
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
+    # Non-local callers must use the configured backend service subject.
+    jwt_subject: str | None = None
     cv_parse_scope: Annotated[str, Field(min_length=1)] = "cv:parse"
     cv_match_scope: Annotated[str, Field(min_length=1)] = "cv:match"
     rag_retrieve_scope: Annotated[str, Field(min_length=1)] = "rag:retrieve"
     rag_generate_scope: Annotated[str, Field(min_length=1)] = "rag:generate"
+    job_index_scope: Annotated[str, Field(min_length=1)] = "jobs:index"
     # Provider selection is explicit. Deterministic providers are intended for local/test only.
     embedding_provider: Literal["deterministic", "cohere"] = "deterministic"
     vector_store_provider: Literal["memory", "qdrant"] = "memory"
     generation_provider: Literal["deterministic", "bedrock"] = "deterministic"
-    cohere_model: str = "embed-multilingual-v3.0"
+    # Bedrock identifies Cohere Embed Multilingual v3 as cohere.embed-multilingual-v3.
+    cohere_model: str = "cohere.embed-multilingual-v3"
     cohere_dimensions: int = Field(default=1024, ge=1, le=4096)
     qdrant_url: str | None = None
     qdrant_collection: str | None = None
+    qdrant_alias: str | None = None
+    qdrant_index_version: str | None = None
+    qdrant_api_key: str | None = None
     bedrock_region: str | None = None
     bedrock_model: str | None = None
 

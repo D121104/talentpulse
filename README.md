@@ -20,7 +20,8 @@
     <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
     <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL" />
     <img src="https://img.shields.io/badge/Tailwind_CSS_v4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS" />
-    <img src="https://img.shields.io/badge/Elasticsearch-005571?style=for-the-badge&logo=elasticsearch&logoColor=white" alt="Elasticsearch" />
+    <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
+    <img src="https://img.shields.io/badge/Qdrant-D62F2F?style=for-the-badge&logo=qdrant&logoColor=white" alt="Qdrant" />
     <img src="https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis" />
     <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
   </p>
@@ -53,21 +54,29 @@ flowchart TB
         Mobile["📱 Mobile App (React Native / Expo)"]
     end
 
-    subgraph Gateway ["API & Realtime"]
-        Nest["🚀 NestJS API Gateway & Services (Port 8000)"]
+    subgraph Edge ["Demo Edge"]
+        CF["☁️ CloudFront\n(single HTTPS domain)"]
+        S3[("🔒 Private S3\n(React/Vite SPA)")]
+    end
+
+    subgraph Gateway ["Private EC2 Runtime"]
+        Nginx["Nginx\n(VPC Origin)"]
+        Nest["🚀 NestJS API + Bull Worker"]
         WS["⚡ Socket.IO Realtime Gateway"]
     end
 
     subgraph Data ["Data & Storage Layer"]
-        PG[("🐘 PostgreSQL 16 + PostGIS\n(TypeORM)")]
-        Redis[("⚡ Redis 7\n(Cache & Session)")]
-        ES[("🔍 Elasticsearch 8\n(Full-text & Vector Search)")]
+        PG[("🐘 RDS PostgreSQL\n(Canonical data)")]
+        Redis[("⚡ Valkey / Redis\n(Cache & Bull queue)")]
+        Qdrant[("🔍 Qdrant Cloud\n(Derived vector index)")]
         Cloudinary["☁️ Cloudinary (CVs & Media)"]
     end
 
     subgraph AI ["AI & NLP Processing"]
-        Transformers["🧠 Xenova Transformers\n(Embeddings)"]
-        RAG["📚 RAG Engine\n(CV Analysis & Advisor)"]
+        FastAPI["🐍 FastAPI AI service\n(CV parsing, matching, RAG)"]
+        Cohere["Cohere embeddings\n(demo provider target)"]
+        Nova["Bedrock Nova Lite\n(demo generation target)"]
+        Local["Deterministic / in-memory\n(local and test providers)"]
     end
 
     subgraph Monitor ["Observability Stack"]
@@ -76,10 +85,21 @@ flowchart TB
         Loki["📋 Loki & Promtail"]
     end
 
-    Client --> Gateway
-    Gateway --> Data
-    Gateway --> AI
-    Gateway -.-> Monitor
+    Web --> CF
+    CF --> S3
+    CF --> Nginx
+    Nginx --> Nest
+    Nest --> PG
+    Nest --> Redis
+    Nest --> Cloudinary
+    Nest --> Qdrant
+    Nest --> FastAPI
+    FastAPI --> Qdrant
+    FastAPI --> Cohere
+    FastAPI --> Nova
+    FastAPI -. local/test .-> Local
+    Nest -.-> WS
+    Nest -.-> Monitor
 ```
 
 ---
@@ -89,14 +109,33 @@ flowchart TB
 | Tầng / Thành phần | Công nghệ & Thư viện chính |
 | :--- | :--- |
 | **Frontend Web** | React 19, TypeScript, Vite 6, Tailwind CSS v4, Framer Motion, Lucide React, i18next |
-| **Backend API** | NestJS, TypeORM, Passport JWT, Socket.IO, BullMQ, Class Validator |
-| **Cơ sở dữ liệu** | PostgreSQL 16 + PostGIS Extension |
-| **Caching & Queue** | Redis 7, Bull Queue |
-| **Tìm kiếm & Vector** | Elasticsearch 8 (Full-text Search & Vector Similarity) |
-| **AI & Xử lý ngôn ngữ** | `@xenova/transformers`, Cosine Similarity, PDF/DOCX Parsers (`pdf-parse`, `mammoth`) |
+| **Backend API** | NestJS, TypeORM, Passport JWT, Socket.IO, `@nestjs/bull` + Bull, Class Validator |
+| **Cơ sở dữ liệu** | PostgreSQL 16 + PostGIS; PostgreSQL là nguồn dữ liệu canonical |
+| **Caching & Queue** | Redis-compatible Valkey/Redis, Bull |
+| **Tìm kiếm & Vector** | Qdrant Cloud là derived vector index; structured business data vẫn ở PostgreSQL |
+| **AI & Xử lý ngôn ngữ** | FastAPI, Cohere embeddings (demo target), Bedrock Nova Lite (demo target), deterministic local providers, PDF/DOCX parsers |
 | **Thanh toán** | Cổng thanh toán trực tuyến PayOS |
 | **Giám sát (Observability)** | Prometheus, Grafana, Loki, Promtail |
-| **Triển khai & Hạ tầng** | Docker, Docker Compose, Multi-stage Builds |
+| **Triển khai & Hạ tầng** | CloudFront, private S3 SPA, private EC2/Nginx, Docker Compose, RDS PostgreSQL, Cloudinary |
+
+---
+
+### 🎯 Demo EC2 + CloudFront
+
+Topology demo dùng một CloudFront domain HTTPS: frontend production được phục vụ
+từ private S3, còn `/api/*` và `/socket.io/*` đi qua CloudFront VPC Origin tới
+Nginx trên private EC2. Nginx chuyển tiếp tới NestJS, Bull/Valkey và FastAPI;
+NestJS sở hữu authorization, PostgreSQL/RDS, Cloudinary và các workflow nghiệp vụ.
+
+Frontend production gọi API cùng origin qua `/api/v1`; Socket.IO dùng cùng origin.
+Qdrant Cloud chỉ giữ derived job vectors. Cohere embeddings và Bedrock Nova Lite là
+provider mục tiêu của demo; local/development/test vẫn dùng deterministic embedding,
+in-memory retrieval và deterministic generation. Provider injection, indexing
+bootstrap và runtime rollout phải được hoàn tất và smoke-test trước khi coi các
+provider cloud là live.
+
+Elasticsearch còn xuất hiện trong cấu hình Compose local cũ, nhưng không phải nguồn
+dữ liệu canonical hoặc đường tìm kiếm/vector đang hoạt động.
 
 ---
 
@@ -116,14 +155,14 @@ Khởi động cụm dịch vụ cơ sở dữ liệu, caching, search và monit
 # Di chuyển vào thư mục cấu hình môi trường
 cd backend/environment
 
-# Khởi chạy toàn bộ cụm container (PostgreSQL, Redis, Elasticsearch, Prometheus, Grafana, Loki)
+# Khởi chạy các dependency local và observability được khai báo trong Compose
 docker-compose up -d
 ```
 
 Các dịch vụ sẽ chạy tại:
 - **PostgreSQL**: `localhost:5432`
-- **Redis**: `localhost:6379`
-- **Elasticsearch**: `localhost:9200`
+- **Redis**: `localhost:6379` (cache và Bull queue)
+- **Elasticsearch**: `localhost:9200` (legacy local container, không dùng cho canonical/vector search)
 - **Grafana Dashboard**: `localhost:3001` (admin/admin)
 - **Prometheus**: `localhost:9090`
 

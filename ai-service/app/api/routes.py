@@ -1,8 +1,8 @@
 import base64
 import binascii
-from typing import Annotated
+from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.auth import require_scope
 from app.core.config import Settings, get_settings
@@ -39,14 +39,20 @@ def parse_cv(
     request: CVParseRequest, settings: Annotated[Settings, Depends(get_settings)]
 ) -> CVParseResponse:
     content = _decode_content(request.content_base64, settings)
-    text, digest = CVParser(settings).parse(content, request.media_type)
+    result = CVParser(settings).parse(content, request.media_type)
     return CVParseResponse(
         cv_id=request.cv_id,
         content_version=request.content_version,
         media_type=request.media_type,
-        content_sha256=digest,
-        extracted_text=text,
-        text_char_count=len(text),
+        content_sha256=result.content_sha256,
+        extracted_text=result.extracted_text,
+        text_char_count=len(result.extracted_text),
+        skills=result.skills,
+        education=result.education,
+        experience=result.experience,
+        certificates=result.certificates,
+        warnings=result.warnings,
+        parser_version=result.parser_version,
     )
 
 
@@ -55,5 +61,6 @@ def parse_cv(
     response_model=MatchResponse,
     dependencies=[Depends(require_scope("cv_match_scope"))],
 )
-def match_cv(request: MatchRequest) -> MatchResponse:
-    return MatchService().match(request)
+def match_cv(payload: MatchRequest, http_request: Request) -> MatchResponse:
+    service = cast(MatchService, http_request.app.state.matching_service)
+    return service.match(payload)

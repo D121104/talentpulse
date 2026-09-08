@@ -64,6 +64,12 @@ export class UserCV {
   @Column({ type: 'text', array: true, default: '{}' })
   certificates: string[];
 
+  @Column({ type: 'text', array: true, default: '{}' })
+  warnings: string[];
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  parserVersion: string;
+
   @Column({ default: false })
   isPrimary: boolean;
 

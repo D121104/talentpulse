@@ -1,6 +1,7 @@
 import {
   Entity,
   PrimaryGeneratedColumn,
+  Check,
   Column,
   CreateDateColumn,
   UpdateDateColumn,
@@ -22,6 +23,10 @@ export enum ApplicationStatus {
 }
 
 @Entity('applications')
+@Check(
+  'CHK_applications_ai_consent_snapshot',
+  '"aiRankingConsentGranted" IS DISTINCT FROM TRUE OR ("aiRankingConsentVersion" IS NOT NULL AND "aiRankingConsentPolicyHash" IS NOT NULL AND "aiRankingConsentAt" IS NOT NULL)',
+)
 export class Application {
   @PrimaryGeneratedColumn('uuid')
   _id: string;

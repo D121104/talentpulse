@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -9,12 +10,23 @@ import {
 import { AiQuotaReservationStatus } from '../candidate-assistant.types';
 
 @Entity('ai_chat_quota_ledger')
+@Check(
+  'CHK_ai_chat_quota_status',
+  '"status" IN (\'RESERVED\', \'COMMITTED\', \'RELEASED\')',
+)
+@Check(
+  'CHK_ai_chat_quota_reservation_state',
+  '("status" = \'RESERVED\' AND "finalizedAt" IS NULL AND "errorCode" IS NULL AND "messageId" IS NULL) OR ("status" = \'COMMITTED\' AND "finalizedAt" IS NOT NULL AND "errorCode" IS NULL AND "messageId" IS NOT NULL) OR ("status" = \'RELEASED\' AND "finalizedAt" IS NOT NULL AND "errorCode" IS NOT NULL AND "messageId" IS NULL)',
+)
 @Index(
   'UQ_ai_chat_quota_reservation',
   ['userId', 'quotaDate', 'reservationKey'],
   { unique: true },
 )
 @Index('IDX_ai_chat_quota_user_date_status', ['userId', 'quotaDate', 'status'])
+@Index('IDX_ai_chat_quota_message', ['messageId'], {
+  where: '"messageId" IS NOT NULL',
+})
 export class AiChatQuotaLedger {
   @PrimaryGeneratedColumn('uuid') _id: string;
   @Column({ type: 'uuid' }) userId: string;

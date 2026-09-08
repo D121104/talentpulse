@@ -119,6 +119,8 @@ class RetrievalService:
         self._vector_store = vector_store
 
     def retrieve(self, request: RagRetrieveRequest) -> RagRetrieveResponse:
+        if request.policy.data_scope != "PUBLIC_ACTIVE_JOBS":
+            raise ServiceError("invalid_policy", "Only public active jobs are supported.", 422)
         query_filter = translate_filters(request.filter_state, request.explicit_filters)
         try:
             vector = self._embedding.embed_query(request.normalized_user_message)

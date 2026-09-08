@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -7,6 +8,11 @@ import {
 } from 'typeorm';
 import { CandidateAssistantConsentStatus } from './ai-candidate-assistant-consent.entity';
 @Entity('ai_candidate_assistant_consent_events')
+@Check(
+  'CHK_ai_candidate_assistant_consent_events_type',
+  '"eventType" IN (\'GRANTED\', \'REVOKED\')',
+)
+@Index('IDX_ai_candidate_assistant_consent_events_consent', ['consentId'])
 @Index('IDX_ai_candidate_assistant_consent_events_user_occurred', [
   'userId',
   'occurredAt',

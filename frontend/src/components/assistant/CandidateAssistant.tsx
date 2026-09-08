@@ -28,6 +28,7 @@ interface ChatMessage {
   content: string;
   state?: "NO_EVIDENCE";
   citations?: AssistantMessage["citations"];
+  clientMessageId?: string;
 }
 
 const MAX_HISTORY = 12;
@@ -51,7 +52,8 @@ export default function CandidateAssistant() {
     location.pathname === "/dashboard" ||
     location.pathname.startsWith("/hr/") ||
     location.pathname.startsWith("/employer/");
-  const isCandidate = user?.role === "USER" || user?.role === "ADMIN";
+  const isAdmin = user?.role === "ADMIN";
+  const isCandidate = user?.role === "USER" || isAdmin;
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<AssistantMode>("JOB_SEARCH");
   const [session, setSession] = useState<AssistantSession | null>(null);
@@ -66,6 +68,9 @@ export default function CandidateAssistant() {
   const [selectedJobId, setSelectedJobId] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<AssistantFilterInput>({});
+  const [quota, setQuota] = useState<Awaited<
+    ReturnType<typeof assistantApi.quota>
+  > | null>(null);
   const visibleMessages = useMemo(
     () => messages.slice(-MAX_HISTORY),
     [messages],
@@ -86,22 +91,28 @@ export default function CandidateAssistant() {
     setSelectedJobId("");
     setShowFilters(false);
     setFilters({});
+    setQuota(null);
   }, [authIdentity]);
 
   useEffect(() => {
     if (!isOpen || !accessToken || !isCandidate) return;
     setError("");
     void Promise.all([
-      assistantApi.currentConsent(accessToken),
+      isAdmin ? Promise.resolve(null) : assistantApi.currentConsent(accessToken),
       assistantApi.listCvOptions(accessToken),
     ])
       .then(([consent, options]) => {
-        const granted = consent?.status === "GRANTED";
+        const granted = isAdmin || consent?.status === "GRANTED";
         setHasConsent(granted);
         setCvOptions(options);
-        if (granted && !session)
-          return assistantApi.createSession(mode, accessToken).then(setSession);
-        return undefined;
+        return assistantApi.quota(accessToken).then((currentQuota) => {
+          setQuota(currentQuota);
+          if (granted && !session)
+            return assistantApi
+              .createSession(mode, accessToken)
+              .then(setSession);
+          return undefined;
+        });
       })
       .catch((requestError: unknown) => {
         setHasConsent(false);
@@ -111,19 +122,29 @@ export default function CandidateAssistant() {
             : "Trợ lý AI chưa sẵn sàng ở môi trường này.",
         );
       });
-  }, [accessToken, isCandidate, isOpen, mode, session]);
+  }, [accessToken, isAdmin, isCandidate, isOpen, mode, session]);
 
   if (isHrOnlyRoute || !isCandidate) return null;
 
-  const sendMessage = async (content = message) => {
+  const sendMessage = async (
+    content = message,
+    retryClientMessageId?: string,
+  ) => {
     const text = content.trim();
-    if (!text || isLoading || !accessToken || !session || !hasConsent) return;
-    const clientMessageId = makeClientMessageId();
+    if (!text || isLoading || !accessToken || !session || (!isAdmin && !hasConsent)) return;
+    const clientMessageId = retryClientMessageId || makeClientMessageId();
     setMessages((current) =>
-      [
-        ...current,
-        { id: clientMessageId, role: "USER" as const, content: text },
-      ].slice(-MAX_HISTORY),
+      retryClientMessageId
+        ? current
+        : [
+            ...current,
+            {
+              id: clientMessageId,
+              role: "USER" as const,
+              content: text,
+              clientMessageId,
+            },
+          ].slice(-MAX_HISTORY),
     );
     setMessage("");
     setError("");
@@ -177,7 +198,8 @@ export default function CandidateAssistant() {
 
   const retry = () => {
     const last = visibleMessages[visibleMessages.length - 1];
-    if (last?.role === "USER") void sendMessage(last.content);
+    if (last?.role === "USER")
+      void sendMessage(last.content, last.clientMessageId || last.id);
   };
 
   return (
@@ -311,11 +333,17 @@ export default function CandidateAssistant() {
               </div>
             )}
             <p className="text-[11px] text-slate-500">
-              Quota: được máy chủ kiểm soát; endpoint quota riêng chưa có.
+              Hạn mức AI hôm nay:{" "}
+              {quota
+                ? quota.isUnlimited
+                  ? "không giới hạn"
+                  : `${quota.remaining ?? 0}/${quota.limit ?? 0} lượt còn lại`
+                : "đang tải…"}{" "}
+              (UTC+7).
             </p>
           </div>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50/70 p-3 dark:bg-slate-950/40">
-            {!hasConsent && (
+            {!isAdmin && !hasConsent && (
               <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50 p-4 text-xs text-amber-800">
                 Trợ lý cần consent của ứng viên. Hãy bật consent trong trang{" "}
                 <Link to="/my-cv" className="font-bold underline">
@@ -388,13 +416,13 @@ export default function CandidateAssistant() {
             <input
               value={message}
               onChange={(event) => setMessage(event.target.value)}
-              disabled={isLoading || !hasConsent || !session}
+              disabled={isLoading || (!isAdmin && !hasConsent) || !session}
               placeholder="Nhập câu hỏi…"
               className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-primary dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
             <button
               type="submit"
-              disabled={!message.trim() || isLoading || !hasConsent || !session}
+              disabled={!message.trim() || isLoading || (!isAdmin && !hasConsent) || !session}
               className="rounded-xl bg-primary px-3 text-white disabled:opacity-40"
               aria-label="Gửi tin nhắn"
             >

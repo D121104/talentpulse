@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -7,6 +8,14 @@ import {
 } from 'typeorm';
 
 @Entity('application_ai_consent_events')
+@Check(
+  'CHK_application_ai_consent_events_snapshot',
+  'NOT "granted" OR ("consentVersion" IS NOT NULL AND "policyHash" IS NOT NULL)',
+)
+@Index('IDX_application_ai_consent_events_application_user', [
+  'applicationId',
+  'userId',
+])
 @Index('IDX_application_ai_consent_events_application_occurred', [
   'applicationId',
   'occurredAt',

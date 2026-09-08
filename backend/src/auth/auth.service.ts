@@ -24,6 +24,7 @@ import {
 } from 'src/notifications/entities/notification.entity';
 import { RedisService } from 'src/redis/redis.service';
 import { MailService } from 'src/mail/mail.service';
+import { requiredSecret } from './required-secret';
 
 interface GoogleProfile {
   email: string;
@@ -83,9 +84,7 @@ export class AuthService {
   }
 
   private generateVerificationToken(user: User): string {
-    const secret =
-      this.configService.get<string>('JWT_ACCESS_TOKEN_SECRET') ||
-      'talentpulse_verification_secret_key';
+    const secret = requiredSecret(this.configService, 'JWT_SECRET');
     return this.jwtService.sign(
       {
         sub: user._id,
@@ -129,7 +128,8 @@ export class AuthService {
 
     return {
       user: this.serializeUser(savedUser),
-      message: 'Đăng ký thành công! Vui lòng kiểm tra email để xác thực tài khoản.',
+      message:
+        'Đăng ký thành công! Vui lòng kiểm tra email để xác thực tài khoản.',
     };
   }
 
@@ -138,9 +138,7 @@ export class AuthService {
       throw new BadRequestException('Mã xác thực không hợp lệ');
     }
 
-    const secret =
-      this.configService.get<string>('JWT_ACCESS_TOKEN_SECRET') ||
-      'talentpulse_verification_secret_key';
+    const secret = requiredSecret(this.configService, 'JWT_SECRET');
 
     let payload: any;
     try {
@@ -156,7 +154,8 @@ export class AuthService {
         userWithHex.verificationToken = null as any;
         const saved = await this.userRepo.save(userWithHex);
         return {
-          message: 'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
+          message:
+            'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
           user: this.serializeUser(saved),
         };
       }
@@ -165,8 +164,14 @@ export class AuthService {
       );
     }
 
-    if (payload.type !== 'account_verification' || !payload.sub || !payload.email) {
-      throw new BadRequestException('Mã xác thực không đúng định dạng bảo mật.');
+    if (
+      payload.type !== 'account_verification' ||
+      !payload.sub ||
+      !payload.email
+    ) {
+      throw new BadRequestException(
+        'Mã xác thực không đúng định dạng bảo mật.',
+      );
     }
 
     const user = await this.userRepo.findOne({
@@ -174,7 +179,9 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new BadRequestException('Không tìm thấy tài khoản người dùng tương ứng.');
+      throw new BadRequestException(
+        'Không tìm thấy tài khoản người dùng tương ứng.',
+      );
     }
 
     // IDEMPOTENCY: If user is already verified, return success safely (avoids duplicate call failures)
@@ -200,7 +207,8 @@ export class AuthService {
     const updatedUser = await this.userRepo.save(user);
 
     return {
-      message: 'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
+      message:
+        'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
       user: this.serializeUser(updatedUser),
     };
   }
@@ -209,17 +217,23 @@ export class AuthService {
     let user: User | null = null;
 
     if (userId) {
-      user = await this.userRepo.findOne({ where: { _id: userId, isDeleted: false } });
+      user = await this.userRepo.findOne({
+        where: { _id: userId, isDeleted: false },
+      });
     } else if (email) {
       user = await this.findUserByEmail(email);
     }
 
     if (!user) {
-      throw new BadRequestException('Không tìm thấy tài khoản người dùng với email này.');
+      throw new BadRequestException(
+        'Không tìm thấy tài khoản người dùng với email này.',
+      );
     }
 
     if (user.isVerified) {
-      throw new BadRequestException('Tài khoản này đã được xác thực thành công trước đó.');
+      throw new BadRequestException(
+        'Tài khoản này đã được xác thực thành công trước đó.',
+      );
     }
 
     const verificationToken = this.generateVerificationToken(user);
@@ -233,7 +247,8 @@ export class AuthService {
     );
 
     return {
-      message: 'Đã gửi lại email xác thực thành công. Vui lòng kiểm tra hòm thư của bạn.',
+      message:
+        'Đã gửi lại email xác thực thành công. Vui lòng kiểm tra hòm thư của bạn.',
     };
   }
 
@@ -331,7 +346,9 @@ export class AuthService {
     const userId = await this.redisService.getValue<string>(key);
 
     if (!userId) {
-      throw new BadRequestException('Mã đăng nhập Google đã hết hạn hoặc đã được sử dụng');
+      throw new BadRequestException(
+        'Mã đăng nhập Google đã hết hạn hoặc đã được sử dụng',
+      );
     }
 
     await this.redisService.deleteValue(key);
@@ -358,7 +375,7 @@ export class AuthService {
   async generateNewToken(refreshToken: string, response: Response) {
     try {
       const payload = await this.jwtService.verifyAsync(refreshToken, {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        secret: requiredSecret(this.configService, 'JWT_REFRESH_SECRET'),
       });
       const user = await this.userRepo.findOne({
         where: { _id: payload._id, refreshToken },
@@ -370,7 +387,10 @@ export class AuthService {
 
       return this.createSession(user, response);
     } catch (error) {
-      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof ForbiddenException
+      ) {
         throw error;
       }
       throw new UnauthorizedException('Refresh token không hợp lệ');
@@ -388,16 +408,20 @@ export class AuthService {
 
     const payload = this.createTokenPayload(user);
     const refreshToken = this.jwtService.sign(payload, {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      secret: requiredSecret(this.configService, 'JWT_REFRESH_SECRET'),
       expiresIn: this.getRefreshTokenExpirationSeconds(),
     });
     const accessToken = this.jwtService.sign(payload, {
-      secret: this.configService.get<string>('JWT_SECRET'),
+      secret: requiredSecret(this.configService, 'JWT_SECRET'),
       expiresIn: this.getAccessTokenExpirationSeconds(),
     });
 
     await this.usersService.updateUserToken(refreshToken, user._id);
-    response.cookie('refresh_token', refreshToken, this.getRefreshCookieOptions());
+    response.cookie(
+      'refresh_token',
+      refreshToken,
+      this.getRefreshCookieOptions(),
+    );
 
     return {
       accessToken,
@@ -447,7 +471,9 @@ export class AuthService {
   }
 
   private async findUserByEmail(email: string) {
-    return this.userRepo.findOne({ where: { email: this.normalizeEmail(email) } });
+    return this.userRepo.findOne({
+      where: { email: this.normalizeEmail(email) },
+    });
   }
 
   private normalizeEmail(email: string) {
@@ -485,7 +511,8 @@ export class AuthService {
     return {
       httpOnly: true,
       secure,
-      sameSite: sameSite === 'none' ? 'none' : sameSite === 'strict' ? 'strict' : 'lax',
+      sameSite:
+        sameSite === 'none' ? 'none' : sameSite === 'strict' ? 'strict' : 'lax',
       maxAge: ms(
         this.configService.get<string>('JWT_REFRESH_EXPIRES_IN', '7d'),
       ),

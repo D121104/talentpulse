@@ -17,13 +17,16 @@ from app.domain.rag import (
     ServicePolicy,
     StructuredFilterState,
 )
+from app.infrastructure.provider_factory import ProviderBundle
 from app.infrastructure.rag_providers import (
     CohereEmbeddingAdapter,
     DeterministicEmbeddingProvider,
     InMemoryVectorRetriever,
     ProviderFailure,
+    QdrantVectorRetriever,
 )
 from app.main import create_app
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 
@@ -60,6 +63,7 @@ def generate_request(
     jobs: list[dict[str, object]] | None = None,
     cv: AuthorizedCvSnapshot | None = None,
     consent_version: str | None = None,
+    matching_evidence: dict[str, object] | None = None,
 ) -> RagGenerateRequest:
     return RagGenerateRequest(
         identity=identity(),
@@ -71,6 +75,7 @@ def generate_request(
         authorized_cv_snapshot=cv,
         canonical_active_job_context=[CanonicalJobContext(**job) for job in (jobs or [])],
         retrieval_evidence=evidence or [],
+        matching_evidence=matching_evidence,
         explicit_filters=ExplicitFilters(),
         policy=ServicePolicy(data_scope="PUBLIC_ACTIVE_JOBS", max_candidates=20),
         consent_version=consent_version,
@@ -85,6 +90,107 @@ def job(job_id: UUID | None = None) -> dict[str, object]:
         "location": "Remote",
         "skills": ["Python", "SQL"],
     }
+
+
+def test_normalized_user_message_is_bounded_for_provider_requests() -> None:
+    with pytest.raises(ValidationError):
+        retrieve_request(message="x" * 2_001)
+
+    request = retrieve_request(message="x" * 2_000)
+    assert len(request.normalized_user_message) == 2_000
+
+
+def test_public_active_jobs_policy_rejects_other_scopes_at_schema_boundary() -> None:
+    with pytest.raises(ValidationError):
+        RagRetrieveRequest.model_validate(
+            {
+                **retrieve_request().model_dump(),
+                "policy": {"data_scope": "PRIVATE_JOBS", "max_candidates": 20},
+            }
+        )
+
+
+def test_public_active_jobs_policy_is_enforced_by_application() -> None:
+    request = retrieve_request()
+    request.policy = request.policy.model_copy(update={"data_scope": "PUBLIC_ACTIVE_JOBS"})
+    result = RetrievalService(DeterministicEmbeddingProvider(), InMemoryVectorRetriever()).retrieve(
+        request
+    )
+    assert result.applied_filters["lifecycle"] == "active_non_deleted"
+
+
+def test_health_endpoints_keep_compatibility_and_are_local_only() -> None:
+    settings = Settings(auth_required=False)
+    application = create_app(
+        settings,
+        embedding_provider=DeterministicEmbeddingProvider(settings.cohere_dimensions),
+        vector_retriever=InMemoryVectorRetriever(dimensions=settings.cohere_dimensions),
+    )
+    with TestClient(application) as client:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/health").json() == {"status": "ok"}
+        assert client.get("/health/ready").json() == {"status": "ok"}
+
+
+def test_readiness_failure_is_sanitized_and_returns_503() -> None:
+    settings = Settings(auth_required=False)
+    application = create_app(
+        settings,
+        embedding_provider=DeterministicEmbeddingProvider(settings.cohere_dimensions),
+        vector_retriever=InMemoryVectorRetriever(dimensions=settings.cohere_dimensions),
+    )
+    application.state.vector_provider = object()
+
+    with TestClient(application) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "code": "not_ready",
+        "message": "Service is not ready.",
+    }
+
+
+def test_non_local_readiness_checks_configuration_without_provider_calls() -> None:
+    settings = Settings(
+        environment="demo",
+        auth_required=True,
+        jwt_algorithms=("RS256",),
+        jwt_public_key="configured-public-key",
+        jwt_issuer="https://issuer.example",
+        jwt_audience="talentpulse-ai",
+        jwt_subject="talentpulse-backend",
+        embedding_provider="cohere",
+        vector_store_provider="qdrant",
+        generation_provider="bedrock",
+        qdrant_url="https://qdrant.example",
+        qdrant_collection="jobs_v1",
+        qdrant_alias="jobs_current",
+        qdrant_index_version="demo-v1",
+        bedrock_region="ap-southeast-2",
+        bedrock_model="amazon.nova-lite-v1:0",
+    )
+    embedding = CohereEmbeddingAdapter(object(), settings.cohere_model, settings.cohere_dimensions)
+    vector = QdrantVectorRetriever(
+        object(),
+        settings.qdrant_collection,
+        collection_alias=settings.qdrant_alias,
+        index_version=settings.qdrant_index_version,
+        dimensions=settings.cohere_dimensions,
+    )
+    application = create_app(
+        settings,
+        embedding_provider=embedding,
+        vector_retriever=vector,
+        generation_provider=NullProvider(),
+    )
+
+    with TestClient(application) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 def test_filter_translation_always_applies_lifecycle_and_structured_filters() -> None:
@@ -172,10 +278,40 @@ def test_production_startup_requires_explicit_real_provider_adapters() -> None:
         embedding_provider="cohere",
         vector_store_provider="qdrant",
         generation_provider="bedrock",
+        jwt_public_key="-----BEGIN PUBLIC KEY-----\nlocal-test-key\n-----END PUBLIC KEY-----",
+        jwt_issuer="https://issuer.example",
+        jwt_audience="talentpulse-ai",
+        jwt_subject="talentpulse-backend",
     )
 
     with pytest.raises(RuntimeError, match="Cohere embedding"):
         create_app(settings)
+
+
+def test_production_startup_uses_factory_cloud_adapters_without_fall_through(monkeypatch) -> None:
+    settings = Settings(
+        environment="production",
+        embedding_provider="cohere",
+        vector_store_provider="qdrant",
+        generation_provider="bedrock",
+        jwt_public_key="-----BEGIN PUBLIC KEY-----\nlocal-test-key\n-----END PUBLIC KEY-----",
+        jwt_issuer="https://issuer.example",
+        jwt_audience="talentpulse-ai",
+        jwt_subject="talentpulse-backend",
+    )
+    embedding = DeterministicEmbeddingProvider()
+    retriever = InMemoryVectorRetriever()
+    generation = NullProvider()
+    bundle = ProviderBundle(embedding=embedding, retriever=retriever, generation=generation)
+    monkeypatch.setattr("app.main.create_provider_bundle", lambda settings: bundle)
+
+    application = create_app(settings)
+
+    retrieval_service = application.state.retrieval_service
+    generation_service = application.state.generation_service
+    assert retrieval_service._embedding is embedding
+    assert retrieval_service._vector_store is retriever
+    assert generation_service._provider is generation
 
 
 def test_production_startup_accepts_injected_provider_boundaries() -> None:
@@ -184,6 +320,10 @@ def test_production_startup_accepts_injected_provider_boundaries() -> None:
         embedding_provider="cohere",
         vector_store_provider="qdrant",
         generation_provider="bedrock",
+        jwt_public_key="-----BEGIN PUBLIC KEY-----\nlocal-test-key\n-----END PUBLIC KEY-----",
+        jwt_issuer="https://issuer.example",
+        jwt_audience="talentpulse-ai",
+        jwt_subject="talentpulse-backend",
     )
     application = create_app(
         settings,
@@ -283,6 +423,63 @@ def test_generation_accepts_only_retrieval_citations() -> None:
     assert response.answer_status == "COMPLETE"
     assert response.citation_keys == ["job-1"]
     assert response.referenced_job_ids == [job_data["job_id"]]
+
+
+def test_comparison_uses_authoritative_deterministic_match_evidence() -> None:
+    job_data = job()
+    evidence = {
+        "cv_id": uuid4(),
+        "job_id": job_data["job_id"],
+        "overall_score": 0.72,
+        "components": {
+            "semantic": {
+                "score": 0.8,
+                "weight": 0.5,
+                "available": True,
+                "evidence": ["embedding"],
+            }
+        },
+        "matched_skills": ["Python"],
+        "missing_required_skills": ["SQL"],
+        "strengths": ["Relevant skill"],
+        "gaps": ["SQL is missing"],
+        "explanation": "Deterministic comparison result.",
+        "degraded": False,
+        "scoring_version": "cv-job-match-v2",
+        "semantic_component_version": "configured-v1",
+    }
+    cv_id = evidence["cv_id"]
+    assert isinstance(cv_id, UUID)
+    cv = AuthorizedCvSnapshot(
+        cv_id=cv_id,
+        content_hash="a" * 64,
+        skills=["Python"],
+        sanitized_text="bounded CV",
+        consent_version="v1",
+    )
+    request = generate_request(
+        "CV_JOB_COMPARISON",
+        evidence=[
+            {
+                "job_id": job_data["job_id"],
+                "rank": 1,
+                "score": 1.0,
+                "citation_key": "job-1",
+            }
+        ],
+        jobs=[job_data],
+        cv=cv,
+        consent_version="v1",
+        matching_evidence=evidence,
+    )
+    prompt = render_generation_prompt(request)
+    assert '"matching_evidence"' in prompt
+    assert "0.72" in prompt
+    response = GenerationService(NullProvider()).generate(request)
+
+    assert response.answer_status == "DEGRADED"
+    assert "0.72" in response.answer_blocks[0].text
+    assert response.claims[0].value["overall_score"] == 0.72
 
 
 def test_generation_no_evidence_is_explicit_for_job_search() -> None:

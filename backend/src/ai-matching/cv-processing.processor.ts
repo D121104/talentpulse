@@ -1,8 +1,9 @@
 import { Process, Processor } from '@nestjs/bull';
+import { createHash } from 'crypto';
 import { Logger } from '@nestjs/common';
 import { Job as BullJob } from 'bull';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   AiServiceClient,
   AiServiceError,
@@ -20,6 +21,8 @@ import {
   Application,
   ApplicationStatus,
 } from 'src/applications/entities/application.entity';
+import { normalizeJobText } from 'src/job-indexing/job-indexing.normalization';
+import { Job as RecruitmentJobEntity } from 'src/jobs/entities/job.entity';
 
 /**
  * Queue data is deliberately an opaque capability: workers use these IDs and
@@ -99,25 +102,97 @@ export function isCurrentMatchJob(
   );
 }
 
-export function getJobSourceVersion(job: {
-  name: string;
-  description?: string | null;
-  skills?: unknown;
-  level?: string | null;
-  location?: string | null;
-  _id?: string;
-}): string {
+function stableSourceValue(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(stableSourceValue);
+  if (value && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((output, key) => {
+        output[key] = stableSourceValue(
+          (value as Record<string, unknown>)[key],
+        );
+        return output;
+      }, {});
+  }
+  return value ?? null;
+}
+
+export function getJobSourceVersion(
+  job:
+    | RecruitmentJobEntity
+    | {
+        name: string;
+        description?: string | null;
+        skills?: unknown;
+        level?: string | null;
+        location?: string | null;
+        _id?: string;
+        company?: unknown;
+        salary?: number | null;
+        startDate?: Date | string | null;
+        endDate?: Date | string | null;
+        isActive?: boolean;
+        isDeleted?: boolean;
+        quantity?: number | null;
+        isHot?: boolean;
+        boostedAt?: Date | string | null;
+        isFeatured?: boolean;
+        isUrgent?: boolean;
+        createdAt?: Date | string | null;
+        updatedAt?: Date | string | null;
+        deletedAt?: Date | string | null;
+        [key: string]: unknown;
+      },
+): string {
   // This is a version fingerprint, not business data sent to the AI service.
-  const value = JSON.stringify({
-    name: job.name,
-    description: job.description || '',
-    skills: job.skills || [],
-    level: job.level || '',
-  });
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1)
-    hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
-  return (hash >>> 0).toString(16).padStart(8, '0');
+  // Keep the complete canonical job/source context here so an old match cannot
+  // survive a change to a field used by matching or job eligibility.
+  const source = {
+    job: {
+      _id: job._id ?? null,
+      name: normalizeJobText(job.name),
+      description: normalizeJobText(job.description),
+      skills: skills(job.skills).map(normalizeJobText).sort(),
+      level: job.level == null ? null : normalizeJobText(job.level),
+      location: job.location == null ? null : normalizeJobText(job.location),
+      salary: job.salary ?? null,
+      startDate: job.startDate ?? null,
+      endDate: job.endDate ?? null,
+      isActive: job.isActive ?? null,
+      isDeleted: job.isDeleted ?? null,
+      quantity: job.quantity ?? null,
+      isHot: job.isHot ?? null,
+      boostedAt: job.boostedAt ?? null,
+      isFeatured: job.isFeatured ?? null,
+      isUrgent: job.isUrgent ?? null,
+      createdAt: job.createdAt ?? null,
+      updatedAt: job.updatedAt ?? null,
+      deletedAt: job.deletedAt ?? null,
+      createdBy: (job as Record<string, unknown>).createdBy ?? null,
+      updatedBy: (job as Record<string, unknown>).updatedBy ?? null,
+      deletedBy: (job as Record<string, unknown>).deletedBy ?? null,
+      // These fields are not currently declared on Job, but including them
+      // makes the fence safe if a canonical schema supplies them dynamically.
+      preferredSkills: (job as Record<string, unknown>).preferredSkills ?? null,
+      minYearsExperience:
+        (job as Record<string, unknown>).minYearsExperience ?? null,
+      maxYearsExperience:
+        (job as Record<string, unknown>).maxYearsExperience ?? null,
+      workMode:
+        (job as Record<string, unknown>).workMode ??
+        (job as Record<string, unknown>).work_mode ??
+        null,
+      employmentType:
+        (job as Record<string, unknown>).employmentType ??
+        (job as Record<string, unknown>).employment_type ??
+        null,
+    },
+    company: job.company ?? null,
+  };
+  return createHash('sha256')
+    .update(JSON.stringify(stableSourceValue(source)), 'utf8')
+    .digest('hex');
 }
 
 function asLevel(value: string | null | undefined): AiExperienceLevel | null {
@@ -215,27 +290,110 @@ export class CVProcessingProcessor {
   }
 
   private aiRequest(cv: UserCV, recruitmentJob: RecruitmentJob) {
+    const candidate = cv as UserCV & Record<string, unknown>;
+    const job = recruitmentJob as RecruitmentJob & Record<string, unknown>;
+    const canonicalNumber = (...keys: string[]): number | null => {
+      const value = keys
+        .map((key) => candidate[key])
+        .find((item) => item != null);
+      return typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? value
+        : null;
+    };
+    const canonicalLocation = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null;
+      const normalized = value.trim();
+      return normalized ? normalized : null;
+    };
+    const canonicalWorkModes = (value: unknown): AiWorkMode[] => {
+      const values = Array.isArray(value)
+        ? value
+        : value == null
+        ? []
+        : [value];
+      return values.filter((item): item is AiWorkMode =>
+        ['onsite', 'hybrid', 'remote'].includes(String(item)),
+      );
+    };
     const jobSkills = skills(recruitmentJob.skills);
+    const preferredSkills = skills(job.preferredSkills ?? job.preferred_skills);
     return {
       cv_id: cv._id,
       job_id: recruitmentJob._id,
       candidate: {
+        // Use only explicit structured canonical fields. The free-form
+        // experience array and parsed text are never interpreted as years,
+        // level, location, or work-mode evidence.
         skills: skills(cv.skills),
-        years_experience: null,
-        level: null,
-        location: null,
-        work_modes: [] as AiWorkMode[],
+        years_experience: canonicalNumber(
+          'yearsExperience',
+          'years_experience',
+          'experienceYears',
+        ),
+        level: asLevel(
+          typeof candidate.level === 'string' ? candidate.level : null,
+        ),
+        location: canonicalLocation(candidate.location),
+        work_modes: canonicalWorkModes(
+          candidate.workModes ?? candidate.work_modes,
+        ),
       },
       job: {
         required_skills: jobSkills,
-        preferred_skills: [],
-        min_years_experience: null,
-        max_years_experience: null,
+        preferred_skills: preferredSkills,
+        min_years_experience:
+          typeof job.minYearsExperience === 'number'
+            ? job.minYearsExperience
+            : typeof job.min_years_experience === 'number'
+            ? job.min_years_experience
+            : null,
+        max_years_experience:
+          typeof job.maxYearsExperience === 'number'
+            ? job.maxYearsExperience
+            : typeof job.max_years_experience === 'number'
+            ? job.max_years_experience
+            : null,
         level: asLevel(recruitmentJob.level),
-        location: recruitmentJob.location || null,
-        work_modes: [] as AiWorkMode[],
+        location: canonicalLocation(recruitmentJob.location),
+        work_modes: canonicalWorkModes(
+          job.workMode ?? job.work_mode ?? job.workModes ?? job.work_modes,
+        ),
       },
     };
+  }
+
+  private compatibility(
+    match: Awaited<ReturnType<AiServiceClient['matchCv']>>,
+  ): Record<string, unknown> {
+    const compatibility: Record<string, unknown> = {
+      matchedSkills: match.matched_skills,
+      missingRequiredSkills: match.missing_required_skills,
+      strengths: match.strengths,
+      gaps: match.gaps,
+      semanticComponentVersion: match.semantic_component_version,
+    };
+    for (const [responseKey, persistedKey] of [
+      ['experience', 'experience'],
+      ['location', 'location'],
+      ['work_mode', 'workMode'],
+    ] as const) {
+      const component = match.components[responseKey];
+      if (component) compatibility[persistedKey] = component;
+    }
+
+    // Keep this allowlist ready for the response contract's explicit fields;
+    // never copy an arbitrary provider response into JSONB.
+    const response = match as unknown as Record<string, unknown>;
+    for (const [responseKey, persistedKey] of [
+      ['location_compatibility', 'location'],
+      ['work_mode_compatibility', 'workMode'],
+      ['locationCompatibility', 'location'],
+      ['workModeCompatibility', 'workMode'],
+    ] as const) {
+      if (response[responseKey] !== undefined)
+        compatibility[persistedKey] = response[responseKey];
+    }
+    return compatibility;
   }
 
   @Process('process-cv')
@@ -264,6 +422,7 @@ export class CVProcessingProcessor {
         cvId: data.cvId,
         jobId: data.jobId,
         applicationId: data.applicationId,
+        status: In([CVProcessingStatus.PENDING, CVProcessingStatus.FAILED]),
       },
       {
         status: CVProcessingStatus.PROCESSING,
@@ -306,6 +465,7 @@ export class CVProcessingProcessor {
           applicationId: data.applicationId,
           contentHash: data.contentHash,
           jobSourceVersion: data.jobSourceVersion,
+          status: CVProcessingStatus.PROCESSING,
         },
         {
           matchScore: match.overall_score,
@@ -313,13 +473,7 @@ export class CVProcessingProcessor {
           missingSkills: match.missing_required_skills,
           explanation: match.explanation,
           components: match.components,
-          compatibility: {
-            matchedSkills: match.matched_skills,
-            missingRequiredSkills: match.missing_required_skills,
-            strengths: match.strengths,
-            gaps: match.gaps,
-            semanticComponentVersion: match.semantic_component_version,
-          },
+          compatibility: this.compatibility(match),
           scoringVersion: match.scoring_version,
           modelVersion: match.semantic_component_version,
           normalizationVersion: 'cv-job-normalization-v1',
@@ -354,6 +508,7 @@ export class CVProcessingProcessor {
             isDeleted: false,
             contentHash: data.contentHash,
             jobSourceVersion: data.jobSourceVersion,
+            status: CVProcessingStatus.PROCESSING,
           },
           { status: CVProcessingStatus.FAILED, errorMessage: code },
         );

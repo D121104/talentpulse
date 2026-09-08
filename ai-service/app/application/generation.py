@@ -4,6 +4,7 @@ import json
 from typing import Final, Literal
 from uuid import UUID
 
+from app.core.errors import ServiceError
 from app.domain.rag import (
     AnswerBlock,
     GenerationProvider,
@@ -38,6 +39,11 @@ def render_generation_prompt(request: RagGenerateRequest) -> str:
         "retrieval_evidence": [
             item.model_dump(mode="json") for item in request.retrieval_evidence[:20]
         ],
+        "matching_evidence": (
+            request.matching_evidence.model_dump(mode="json")
+            if request.matching_evidence is not None
+            else None
+        ),
     }
     encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return (
@@ -61,8 +67,18 @@ class GenerationService:
     def __init__(self, provider: GenerationProvider) -> None:
         self._provider = provider
 
+    @property
+    def provider(self) -> GenerationProvider:
+        return self._provider
+
     def generate(self, request: RagGenerateRequest) -> RagGenerateResponse:
+        if request.policy.data_scope != "PUBLIC_ACTIVE_JOBS":
+            raise ServiceError("invalid_policy", "Only public active jobs are supported.", 422)
         prompt = render_generation_prompt(request)
+        # Deterministic matching owns the numeric result. Comparison requests with
+        # validated evidence never ask the provider to recalculate or rewrite it.
+        if request.intent == "CV_JOB_COMPARISON" and request.matching_evidence is not None:
+            return self._fallback(request, degraded=True)
         degraded = False
         generated: ProviderGeneration | None = None
         try:
@@ -198,45 +214,36 @@ class GenerationService:
     def _comparison_fallback(
         request: RagGenerateRequest,
     ) -> tuple[list[AnswerBlock], list[TypedClaim], list[str], list[UUID]]:
-        assert request.authorized_cv_snapshot is not None
-        cv_skills = {skill.casefold() for skill in request.authorized_cv_snapshot.skills}
-        claims: list[TypedClaim] = []
-        citations: list[str] = []
-        ids: list[UUID] = []
-        for evidence in request.retrieval_evidence:
-            job = next(
-                (
-                    item
-                    for item in request.canonical_active_job_context
-                    if item.job_id == evidence.job_id
-                ),
-                None,
-            )
-            if job is None:
-                continue
-            overlap = [skill for skill in job.skills if skill.casefold() in cv_skills]
-            claims.append(
-                TypedClaim(
-                    claim_id=f"match-{job.job_id}",
-                    type="INFERENCE",
-                    subject_id=job.job_id,
-                    value={"matched_skills": len(overlap)},
-                    citation_keys=[evidence.citation_key],
-                )
-            )
-            citations.append(evidence.citation_key)
-            ids.append(job.job_id)
+        evidence = request.matching_evidence
+        assert evidence is not None
+        citation = next(
+            (
+                item.citation_key
+                for item in request.retrieval_evidence
+                if item.job_id == evidence.job_id
+            ),
+            None,
+        )
+        if citation is None:
+            return [], [], [], []
+        text = (
+            f"Deterministic match score: {evidence.overall_score:.2f}. "
+            f"{evidence.explanation[:1_700]}"
+        )
+        claim = TypedClaim(
+            claim_id=f"match-{evidence.job_id}",
+            type="INFERENCE",
+            subject_id=evidence.job_id,
+            value={
+                "overall_score": evidence.overall_score,
+                "matched_skills": len(evidence.matched_skills),
+                "missing_required_skills": len(evidence.missing_required_skills),
+            },
+            citation_keys=[citation],
+        )
         return (
-            [
-                AnswerBlock(
-                    kind="INFERENCE",
-                    text=(
-                        "The comparison is limited to the supplied CV skills and "
-                        "active-job context."
-                    ),
-                )
-            ],
-            claims,
-            citations,
-            ids,
+            [AnswerBlock(kind="INFERENCE", text=text[:2_000])],
+            [claim],
+            [citation],
+            [evidence.job_id],
         )

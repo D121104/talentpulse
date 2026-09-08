@@ -24,6 +24,7 @@ def _uuid(value: object) -> UUID:
 
 UuidValue = Annotated[UUID, BeforeValidator(_uuid)]
 BoundedText = Annotated[str, Field(min_length=1, max_length=4_000)]
+NormalizedUserMessage = Annotated[str, Field(min_length=1, max_length=2_000)]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
 ScalarValue: TypeAlias = str | int | float | bool | None  # noqa: UP040
 
@@ -95,7 +96,7 @@ class ServicePolicy(StrictModel):
 
 class RagRetrieveRequest(StrictModel):
     identity: IdentityFields
-    normalized_user_message: BoundedText
+    normalized_user_message: NormalizedUserMessage
     locale: Annotated[str, Field(min_length=2, max_length=16)]
     recent_history: list[BoundedText] = Field(default_factory=list, max_length=8)
     filter_state: StructuredFilterState
@@ -197,9 +198,47 @@ class RetrievalEvidence(StrictModel):
 RagIntent = Literal["JOB_SEARCH", "CV_ANALYSIS", "CV_JOB_COMPARISON", "ADVICE"]
 
 
+class MatchingComponent(StrictModel):
+    score: float = Field(ge=0, le=1)
+    weight: float = Field(ge=0, le=1)
+    available: bool
+    evidence: list[ShortText] = Field(default_factory=list, max_length=20)
+
+    @field_validator("score", "weight")
+    @classmethod
+    def finite_value(cls, value: float) -> float:
+        if not isfinite(value):
+            raise ValueError("matching component value must be finite")
+        return value
+
+
+class MatchingEvidence(StrictModel):
+    """Authoritative deterministic CV/job matching output for generation."""
+
+    cv_id: UuidValue
+    job_id: UuidValue
+    overall_score: float = Field(ge=0, le=1)
+    components: dict[str, MatchingComponent] = Field(max_length=20)
+    matched_skills: list[ShortText] = Field(default_factory=list, max_length=200)
+    missing_required_skills: list[ShortText] = Field(default_factory=list, max_length=200)
+    strengths: list[ShortText] = Field(default_factory=list, max_length=20)
+    gaps: list[ShortText] = Field(default_factory=list, max_length=20)
+    explanation: Annotated[str, Field(min_length=1, max_length=2_000)]
+    degraded: bool
+    scoring_version: Annotated[str, Field(min_length=1, max_length=80)]
+    semantic_component_version: Annotated[str, Field(min_length=1, max_length=80)]
+
+    @field_validator("overall_score")
+    @classmethod
+    def finite_score(cls, value: float) -> float:
+        if not isfinite(value):
+            raise ValueError("matching score must be finite")
+        return value
+
+
 class RagGenerateRequest(StrictModel):
     identity: IdentityFields
-    normalized_user_message: BoundedText
+    normalized_user_message: NormalizedUserMessage
     intent: RagIntent
     locale: Annotated[str, Field(min_length=2, max_length=16)]
     recent_history: list[BoundedText] = Field(default_factory=list, max_length=8)
@@ -209,6 +248,7 @@ class RagGenerateRequest(StrictModel):
         default_factory=list, max_length=8
     )
     retrieval_evidence: list[RetrievalEvidence] = Field(default_factory=list, max_length=20)
+    matching_evidence: MatchingEvidence | None = None
     explicit_filters: ExplicitFilters
     policy: ServicePolicy
     consent_version: Annotated[str, Field(min_length=1, max_length=80)] | None = None
@@ -241,6 +281,20 @@ class RagGenerateRequest(StrictModel):
         evidence_ids = {item.job_id for item in self.retrieval_evidence}
         if not evidence_ids.issubset(context_ids):
             raise ValueError("retrieval evidence must refer to canonical job context")
+        if self.intent == "CV_JOB_COMPARISON" and self.matching_evidence is None:
+            raise ValueError("deterministic matching evidence is required for comparison")
+        if self.matching_evidence is not None:
+            if self.intent != "CV_JOB_COMPARISON":
+                raise ValueError("matching evidence is only allowed for comparison")
+            if (
+                self.authorized_cv_snapshot is None
+                or self.matching_evidence.cv_id != self.authorized_cv_snapshot.cv_id
+            ):
+                raise ValueError("matching evidence must refer to the authorized CV")
+            if self.matching_evidence.job_id not in context_ids:
+                raise ValueError("matching evidence must refer to canonical job context")
+            if self.matching_evidence.job_id not in evidence_ids:
+                raise ValueError("matching evidence must refer to retrieval evidence")
         return self
 
 

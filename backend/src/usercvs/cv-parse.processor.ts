@@ -149,9 +149,13 @@ export class UserCvParseProcessor {
         },
         {
           parsedText,
-          // The Python service currently returns text and a content hash, not sections.
-          // Preserve existing structured fields rather than deriving PII-bearing sections locally.
           contentHash: response.content_sha256,
+          skills: response.skills ?? [],
+          education: response.education ?? [],
+          experience: response.experience ?? [],
+          certificates: response.certificates ?? [],
+          warnings: response.warnings ?? [],
+          parserVersion: response.parser_version,
           parsedAt: new Date(),
           parseErrorCode: null,
           parseStatus: CVParseStatus.READY,

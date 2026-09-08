@@ -1,6 +1,7 @@
 import { UserCvParseProcessor, UserCvParseJobData } from './cv-parse.processor';
 import { CVParseStatus } from './cv-parse-status';
 import { aiContentVersion } from './cv-parse.processor';
+import { AiServiceClient } from 'src/ai-matching/ai-service.client';
 
 jest.mock('src/ai-matching/cv-download', () => ({
   CvDownloadError: class CvDownloadError extends Error {
@@ -122,6 +123,11 @@ describe('UserCvParseProcessor', () => {
       extracted_text: parsedText,
       text_char_count: parsedText.length,
       parser_version: 'test',
+       skills: ['TypeScript', 'NestJS'],
+       education: ['Computer Science'],
+       experience: ['Backend Engineer'],
+       certificates: ['AWS Certified'],
+       warnings: ['Some dates were inferred'],
     });
 
     await processor.handleParse({ data: jobData } as any);
@@ -137,7 +143,13 @@ describe('UserCvParseProcessor', () => {
         contentHash:
           '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
         parseStatus: CVParseStatus.READY,
-      }),
+               skills: ['TypeScript', 'NestJS'],
+         education: ['Computer Science'],
+         experience: ['Backend Engineer'],
+         certificates: ['AWS Certified'],
+         warnings: ['Some dates were inferred'],
+         parserVersion: 'test',
+       }),
     );
   });
 
@@ -237,4 +249,50 @@ describe('UserCvParseProcessor', () => {
       expect.objectContaining({ parseStatus: CVParseStatus.FAILED }),
     );
   });
+
+  it('accepts bounded structured parse fields and rejects malformed or unknown fields', () => {
+    const client = new AiServiceClient({ get: jest.fn() } as any);
+    const request = {
+      cv_id: '00000000-0000-4000-8000-000000000001',
+      filename: 'cv.pdf',
+      media_type: 'application/pdf',
+      content_version: 1,
+    };
+    const extractedText = 'A valid extracted CV text';
+    const response = {
+      cv_id: request.cv_id,
+      content_version: request.content_version,
+      media_type: request.media_type,
+      content_sha256: 'a'.repeat(64),
+      extracted_text: extractedText,
+      text_char_count: extractedText.length,
+      parser_version: 'parser-v1',
+      skills: ['TypeScript'],
+      education: ['Computer Science'],
+      experience: ['Backend Engineer'],
+      certificates: ['AWS Certified'],
+      warnings: ['A date was inferred'],
+    };
+
+    expect((client as any).validateParseResponse(response, request)).toEqual(response);
+    expect(() =>
+      (client as any).validateParseResponse(
+        { ...response, skills: ['x'.repeat(501)] },
+        request,
+      ),
+    ).toThrow('Invalid parse response');
+    expect(() =>
+      (client as any).validateParseResponse(
+        { ...response, warnings: ['bad\u0000warning'] },
+        request,
+      ),
+    ).toThrow('Invalid parse response');
+    expect(() =>
+      (client as any).validateParseResponse(
+        { ...response, provider_debug: 'not allowed' },
+        request,
+      ),
+    ).toThrow('unsupported fields');
+  });
+
 });

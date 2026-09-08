@@ -12,9 +12,9 @@ import { FilesService } from './files.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CvUploadValidator, MAX_CV_UPLOAD_BYTES } from './files.service';
 
 const uploadThrottle = { default: { limit: 10, ttl: 60_000 } };
-const maxUploadSize = 5 * 1024 * 1024;
 
 @Controller('files')
 @ApiTags('Files Controller')
@@ -29,10 +29,8 @@ export class FilesController {
   uploadFile(
     @UploadedFile(
       new ParseFilePipeBuilder()
-        .addFileTypeValidator({
-          fileType: /(pdf|msword|officedocument\.wordprocessingml|docx)$/,
-        })
-        .addMaxSizeValidator({ maxSize: maxUploadSize })
+        .addMaxSizeValidator({ maxSize: MAX_CV_UPLOAD_BYTES })
+        .addValidator(new CvUploadValidator())
         .build({ errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY }),
     )
     file: Express.Multer.File,
@@ -49,7 +47,7 @@ export class FilesController {
         .addFileTypeValidator({
           fileType: /(jpg|jpeg|png|gif|webp|bmp|svg\+xml)$/,
         })
-        .addMaxSizeValidator({ maxSize: maxUploadSize })
+        .addMaxSizeValidator({ maxSize: MAX_CV_UPLOAD_BYTES })
         .build({ errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY }),
     )
     file: Express.Multer.File,

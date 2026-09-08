@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -11,6 +12,33 @@ import {
 } from '../candidate-assistant.types';
 
 @Entity('ai_chat_messages')
+@Check(
+  'CHK_ai_chat_messages_role',
+  `"role" IN ('USER', 'ASSISTANT')`,
+)
+@Check(
+  'CHK_ai_chat_messages_status',
+  '"status" IN (\'PROCESSING\', \'COMPLETED\', \'FAILED\')',
+)
+@Check(
+  'CHK_ai_chat_messages_user_content',
+  `"role" <> 'USER' OR ("content" IS NOT NULL AND length(btrim("content")) > 0)`,
+)
+@Check(
+  'CHK_ai_chat_messages_parent_not_self',
+  '"parentMessageId" IS NULL OR "parentMessageId" <> "_id"',
+)
+@Check(
+  'CHK_ai_chat_messages_client_id_role',
+  `("role" = 'USER' AND "clientMessageId" IS NOT NULL) OR ("role" = 'ASSISTANT' AND "clientMessageId" IS NULL)`,
+)
+@Check(
+  'CHK_ai_chat_messages_failed_error',
+  `"status" <> 'FAILED' OR "errorCode" IS NOT NULL`,
+)
+@Index('UQ_ai_chat_messages_session_id', ['sessionId', '_id'], {
+  unique: true,
+})
 @Index('UQ_ai_chat_messages_client_id', ['sessionId', 'clientMessageId'], {
   unique: true,
   where: '"clientMessageId" IS NOT NULL',

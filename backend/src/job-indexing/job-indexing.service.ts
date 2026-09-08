@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Company } from 'src/companies/entities/company.entity';
@@ -9,15 +9,15 @@ import {
   JOB_INDEX_MAX_ATTEMPTS,
   JOB_INDEX_LEASE_SECONDS,
   JOB_INDEX_MAX_BACKFILL_OPERATIONS,
+  JOB_INDEX_VERSION,
 } from './job-indexing.constants';
 import {
+  buildCanonicalJobSnapshot,
   buildCanonicalProjection,
-  buildJobPayload,
-  deterministicJobPointId,
   getJobSourceVersion,
 } from './job-indexing.normalization';
-import { JobEmbeddingProvider, JobVectorIndex } from './job-vector-index';
-import { JobIndexOutboxStatus } from './job-indexing.types';
+import { JobIndexingClient } from 'src/ai-matching/ai-service.client';
+import { CanonicalJobProjection } from './job-indexing.types';
 
 export interface JobIndexDrainResult {
   claimed: number;
@@ -37,14 +37,12 @@ export class JobIndexingService {
     @InjectRepository(Job) private readonly jobRepo: Repository<Job>,
     @InjectRepository(Company)
     private readonly companyRepo: Repository<Company>,
-    @Inject('JOB_EMBEDDING_PROVIDER')
-    private readonly embeddingProvider: JobEmbeddingProvider,
-    @Inject('JOB_VECTOR_INDEX')
-    private readonly vectorIndex: JobVectorIndex,
+    @Inject('JOB_INDEXING_CLIENT')
+    private readonly indexingClient: JobIndexingClient,
   ) {}
 
   async initializeIndex(): Promise<void> {
-    await this.vectorIndex.initialize();
+    // FastAPI owns provider/index initialization; NestJS only dispatches jobs.
   }
 
   async backfill(
@@ -209,49 +207,46 @@ export class JobIndexingService {
       : null;
     if (currentSourceVersion !== outbox.sourceVersion) return 'completed';
 
+    const identity = {
+      request_id: deterministicJobIndexOperationId('request', outbox),
+      trace_id: deterministicJobIndexOperationId('trace', outbox),
+      operation_attempt_id: deterministicJobIndexOperationId('attempt', outbox),
+    };
+    const idempotencyKey = deterministicJobIndexIdempotencyKey(outbox);
+
     if (!projection || !projection.active) {
-      await this.vectorIndex.delete(outbox.aggregateId);
+      const response = await this.indexingClient.deleteJob({
+        identity,
+        job_id: outbox.aggregateId,
+        idempotency_key: idempotencyKey,
+        source_version: outbox.sourceVersion,
+        representation_version: JOB_INDEX_VERSION,
+      });
+      assertSuccessfulJobIndexResponse(response, 'DELETE', outbox, identity);
       return 'completed';
     }
 
-    const existing = await this.vectorIndex.get(outbox.aggregateId);
-    const payload = buildJobPayload(projection);
-    if (
-      existing &&
-      existing.payload.content_hash === payload.content_hash &&
-      existing.payload.representation_version ===
-        payload.representation_version &&
-      existing.payload.source_version === payload.source_version
-    ) {
-      return 'completed';
-    }
+    const response = await this.indexingClient.upsertJob({
+      identity,
+      job: buildCanonicalJobSnapshot(projection.job, projection.company),
+      idempotency_key: idempotencyKey,
+      source_version: outbox.sourceVersion,
+      representation_version: JOB_INDEX_VERSION,
+      content_hash: projection.contentHash,
+    });
+    assertSuccessfulJobIndexResponse(response, 'UPSERT', outbox, identity);
 
-    const vector = await this.embeddingProvider.embed(projection.text);
-    if (vector.length !== 1024)
-      throw new Error(
-        'Embedding provider returned an invalid vector dimension',
-      );
     const latest = await this.loadProjection(outbox.aggregateId);
-    if (!latest) {
-      await this.vectorIndex.delete(outbox.aggregateId);
-      return 'completed';
-    }
-    if (!latest.active) {
-      await this.vectorIndex.delete(outbox.aggregateId);
-      return 'completed';
-    }
     if (
+      latest &&
       getJobSourceVersion(latest.job, latest.company) !== outbox.sourceVersion
     ) {
       return 'completed';
     }
-    await this.vectorIndex.upsert({
-      id: deterministicJobPointId(outbox.aggregateId),
-      vector,
-      payload,
-    });
     return 'completed';
   }
+
+  // Projection loading remains a NestJS/PostgreSQL concern.
 
   private async loadProjection(jobId: string) {
     const job = await this.jobRepo.findOne({
@@ -264,5 +259,65 @@ export class JobIndexingService {
       withDeleted: true,
     });
     return company ? buildCanonicalProjection(job, company) : null;
+  }
+}
+
+function deterministicJobIndexOperationId(
+  kind: 'request' | 'trace' | 'attempt',
+  outbox: JobIndexOutbox,
+): string {
+  return deterministicUuid(
+    `talentpulse:job-index:${kind}:${outbox._id}:${outbox.sourceVersion}:${
+      kind === 'request' ? 'stable' : outbox.attemptCount
+    }`,
+  );
+}
+
+function deterministicJobIndexIdempotencyKey(outbox: JobIndexOutbox): string {
+  return `job-index:${outbox.eventType}:${outbox.aggregateId}:${outbox.sourceVersion}:${JOB_INDEX_VERSION}`;
+}
+
+function deterministicUuid(value: string): string {
+  const digest = createHash('sha256').update(value).digest('hex');
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(
+    13,
+    16,
+  )}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
+
+function assertSuccessfulJobIndexResponse(
+  response: {
+    operation: string;
+    status: string;
+    job_id: string;
+    source_version: string;
+    representation_version: string;
+    request_id: string;
+    trace_id: string;
+    operation_attempt_id: string;
+  },
+  operation: 'UPSERT' | 'DELETE',
+  outbox: JobIndexOutbox,
+  identity: {
+    request_id: string;
+    trace_id: string;
+    operation_attempt_id: string;
+  },
+): void {
+  const validStatus =
+    operation === 'UPSERT'
+      ? response.status === 'INDEXED'
+      : response.status === 'DELETED' || response.status === 'ALREADY_DELETED';
+  if (
+    response.operation !== operation ||
+    !validStatus ||
+    response.job_id !== outbox.aggregateId ||
+    response.source_version !== outbox.sourceVersion ||
+    response.representation_version !== JOB_INDEX_VERSION ||
+    response.request_id !== identity.request_id ||
+    response.trace_id !== identity.trace_id ||
+    response.operation_attempt_id !== identity.operation_attempt_id
+  ) {
+    throw new Error('AI service returned an invalid job index response');
   }
 }

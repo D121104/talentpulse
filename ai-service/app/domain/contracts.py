@@ -121,14 +121,42 @@ class JobProfile(StrictModel):
         return self
 
 
+MAX_EXTRACTED_TEXT_CHARS = 100_000
+MAX_STRUCTURED_ITEMS = 50
+MAX_STRUCTURED_ITEM_CHARS = 500
+MAX_PARSE_WARNINGS = 20
+MAX_PARSE_WARNING_CHARS = 240
+
+
 class CVParseResponse(StrictModel):
     cv_id: UUID = Field(strict=False)
-    content_version: int
+    content_version: int = Field(ge=1, le=2_147_483_647)
     media_type: MediaTypeInput
     content_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-    extracted_text: Annotated[str, Field(max_length=100_000)]
-    text_char_count: int = Field(ge=0)
-    parser_version: str = "text-parser-v1"
+    extracted_text: Annotated[str, Field(max_length=MAX_EXTRACTED_TEXT_CHARS)]
+    text_char_count: int = Field(ge=0, le=MAX_EXTRACTED_TEXT_CHARS)
+    skills: list[Annotated[str, Field(min_length=1, max_length=MAX_STRUCTURED_ITEM_CHARS)]] = Field(
+        default_factory=list, max_length=MAX_STRUCTURED_ITEMS
+    )
+    education: list[Annotated[str, Field(min_length=1, max_length=MAX_STRUCTURED_ITEM_CHARS)]] = (
+        Field(default_factory=list, max_length=MAX_STRUCTURED_ITEMS)
+    )
+    experience: list[Annotated[str, Field(min_length=1, max_length=MAX_STRUCTURED_ITEM_CHARS)]] = (
+        Field(default_factory=list, max_length=MAX_STRUCTURED_ITEMS)
+    )
+    certificates: list[
+        Annotated[str, Field(min_length=1, max_length=MAX_STRUCTURED_ITEM_CHARS)]
+    ] = Field(default_factory=list, max_length=MAX_STRUCTURED_ITEMS)
+    warnings: list[Annotated[str, Field(min_length=1, max_length=MAX_PARSE_WARNING_CHARS)]] = Field(
+        default_factory=list, max_length=MAX_PARSE_WARNINGS
+    )
+    parser_version: Annotated[str, Field(min_length=1, max_length=40)] = "structured-parser-v1"
+
+    @model_validator(mode="after")
+    def text_count_matches_extracted_text(self) -> "CVParseResponse":
+        if self.text_char_count != len(self.extracted_text):
+            raise ValueError("text_char_count must match extracted_text length")
+        return self
 
 
 class MatchRequest(StrictModel):

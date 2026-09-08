@@ -86,3 +86,51 @@ def test_auth_disabled_fails_closed_outside_local_environments(settings) -> None
     settings.auth_required = False
     with pytest.raises(RuntimeError, match="Authentication cannot be disabled"):
         create_app(settings)
+
+
+def test_parse_response_has_bounded_structured_fields_and_forbids_extras() -> None:
+    from app.domain.contracts import CVParseResponse
+    from pydantic import ValidationError
+
+    response = CVParseResponse(
+        cv_id=uuid4(),
+        content_version=1,
+        media_type="application/pdf",
+        content_sha256="a" * 64,
+        extracted_text="A parsed CV",
+        text_char_count=11,
+        skills=["Python"],
+        education=["BSc Computer Science"],
+        experience=["Backend Engineer"],
+        certificates=["AWS Certified Developer"],
+        warnings=["Some content was not classified."],
+    )
+
+    assert response.parser_version == "structured-parser-v1"
+    assert response.model_dump()["skills"] == ["Python"]
+
+    with pytest.raises(ValidationError):
+        CVParseResponse(
+            cv_id=uuid4(),
+            content_version=1,
+            media_type="application/pdf",
+            content_sha256="a" * 64,
+            extracted_text="A parsed CV",
+            text_char_count=11,
+            unexpected=True,
+        )
+
+
+def test_parse_response_rejects_unbounded_structured_items() -> None:
+    from app.domain.contracts import CVParseResponse
+
+    with pytest.raises(ValueError):
+        CVParseResponse(
+            cv_id=uuid4(),
+            content_version=1,
+            media_type="application/pdf",
+            content_sha256="a" * 64,
+            extracted_text="A parsed CV",
+            text_char_count=11,
+            skills=["x"] * 51,
+        )
