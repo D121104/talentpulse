@@ -364,7 +364,7 @@ Resources:
             set -euo pipefail
             mkdir -p /opt/talentpulse/{releases,bin} /etc/talentpulse /run/talentpulse
             chmod 0750 /opt/talentpulse /opt/talentpulse/releases /opt/talentpulse/bin /etc/talentpulse
-            dnf install -y docker awscli-2 amazon-cloudwatch-agent curl unzip jq
+            dnf install -y docker awscli-2 amazon-cloudwatch-agent curl unzip jq python3
             systemctl enable --now docker
             mkdir -p /usr/local/lib/docker/cli-plugins
             curl --fail --silent --show-error --location \
@@ -404,10 +404,14 @@ Resources:
             [[ "$bundle" == "s3://${DeploymentBundleBucket}/bundles/$commit" ]] || { printf 'invalid bundle\n' >&2; exit 1; }
             tmp="$(mktemp -d /opt/talentpulse/.bootstrap.XXXXXX)"
             trap 'rm -rf "$tmp"' EXIT
-            for object in docker-compose.yml nginx/default.conf ai-entrypoint.sh .env.example SHA256SUMS; do
+            mkdir -p "$tmp/nginx" "$tmp/ai-service"
+            for object in docker-compose.yml nginx/default.conf ai-entrypoint.sh .env.example release_bundle.py RELEASE-MANIFEST.json SHA256SUMS ai-service/pyproject.toml ai-service/uv.lock; do
               aws --no-cli-pager s3 cp "$bundle/$object" "$tmp/$object" --only-show-errors >/dev/null
             done
-            (cd "$tmp" && sha256sum -c SHA256SUMS >/dev/null)
+            python3 "$tmp/release_bundle.py" verify \
+              --bundle-dir "$tmp" --source-commit "$commit" \
+              --backend-image "$6" --ai-image "$8"
+            install -o root -g root -m 0750 "$tmp/release_bundle.py" /opt/talentpulse/bin/release_bundle.py
             install -o root -g root -m 0750 "$tmp/ai-entrypoint.sh" /opt/talentpulse/bin/deploy-demo.real
             exec /opt/talentpulse/bin/deploy-demo.real "$@"
             BOOTSTRAP

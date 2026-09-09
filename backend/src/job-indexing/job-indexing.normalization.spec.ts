@@ -8,6 +8,9 @@ import {
   buildJobRepresentationFromSnapshot,
   computeJobContentHash,
   computeJobContentHashFromSnapshot,
+  buildCanonicalJobSourceVersionProjection,
+  getJobSourceVersion,
+  serializeCanonicalJobSourceVersion,
   deterministicJobPointId,
 } from './job-indexing.normalization';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
@@ -70,6 +73,61 @@ describe('job indexing normalization', () => {
     expect(document).toBe(expectedDocument);
     expect(computeJobContentHash(job, company)).toBe(
       createHash('sha256').update(expectedDocument, 'utf8').digest('hex'),
+    );
+  });
+
+  it('uses an explicit timestamp-only canonical source-version projection', () => {
+    const { job, company } = fixture();
+    const sourceProjection = buildCanonicalJobSourceVersionProjection(
+      job,
+      company,
+    );
+
+    expect(sourceProjection).toEqual({
+      job_updated_at: '2026-01-01T00:00:00.000Z',
+      company_updated_at: '2026-01-01T00:00:00.000Z',
+    });
+    expect(serializeCanonicalJobSourceVersion(sourceProjection)).toBe(
+      '2026-01-01T00:00:00.000Z|2026-01-01T00:00:00.000Z',
+    );
+    expect(getJobSourceVersion(job, company)).toBe(
+      createHash('sha256')
+        .update('2026-01-01T00:00:00.000Z|2026-01-01T00:00:00.000Z', 'utf8')
+        .digest('hex'),
+    );
+
+    // Non-timestamp fields are intentionally outside the source-state
+    // projection; persistence's UpdateDateColumn supplies the fencing change.
+    const baseline = fixture();
+    const baselineContentHash = computeJobContentHash(
+      baseline.job,
+      baseline.company,
+    );
+    job.description = 'Build a different description';
+    company.name = 'A different company name';
+    expect(getJobSourceVersion(job, company)).toBe(
+      getJobSourceVersion(baseline.job, baseline.company),
+    );
+    expect(computeJobContentHash(job, company)).not.toBe(baselineContentHash);
+    expect(getJobSourceVersion(job, company)).not.toBe(
+      computeJobContentHash(job, company),
+    );
+
+    const contentHashBeforeTimestampMutation = computeJobContentHash(
+      job,
+      company,
+    );
+    job.updatedAt = new Date('2026-01-02T00:00:00Z');
+    expect(getJobSourceVersion(job, company)).not.toBe(
+      getJobSourceVersion(baseline.job, baseline.company),
+    );
+    expect(computeJobContentHash(job, company)).toBe(
+      contentHashBeforeTimestampMutation,
+    );
+
+    company.updatedAt = new Date('2026-01-02T00:00:00Z');
+    expect(getJobSourceVersion(job, company)).not.toBe(
+      getJobSourceVersion(baseline.job, baseline.company),
     );
   });
 

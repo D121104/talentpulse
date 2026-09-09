@@ -23,7 +23,10 @@ import {
   AiCvConsentEvent,
   AiCvConsentEventType,
 } from './entities/ai-cv-consent-event.entity';
-import { GrantAiCvConsentDto, RevokeAiCvConsentDto } from './dto/ai-cv-consent.dto';
+import {
+  GrantAiCvConsentDto,
+  RevokeAiCvConsentDto,
+} from './dto/ai-cv-consent.dto';
 
 type ConsentRepository = Repository<AiCvConsent>;
 type EventRepository = Repository<AiCvConsentEvent>;
@@ -49,7 +52,11 @@ export class AiCvConsentsService {
       const consentRepo = manager.getRepository(AiCvConsent);
       const eventRepo = manager.getRepository(AiCvConsentEvent);
       const existing = await consentRepo.findOne({
-        where: { userId, scope: policy.scope, status: AiCvConsentStatus.GRANTED },
+        where: {
+          userId,
+          scope: policy.scope,
+          status: AiCvConsentStatus.GRANTED,
+        },
       });
 
       if (existing) {
@@ -59,7 +66,9 @@ export class AiCvConsentsService {
         ) {
           return existing;
         }
-        throw new ConflictException(AI_CV_CONSENT_ERROR_MESSAGES.POLICY_MISMATCH);
+        throw new ConflictException(
+          AI_CV_CONSENT_ERROR_MESSAGES.POLICY_MISMATCH,
+        );
       }
 
       const now = new Date();
@@ -94,7 +103,10 @@ export class AiCvConsentsService {
     });
   }
 
-  async revoke(userId: string, dto: RevokeAiCvConsentDto): Promise<AiCvConsent> {
+  async revoke(
+    userId: string,
+    dto: RevokeAiCvConsentDto,
+  ): Promise<AiCvConsent> {
     this.assertUuid(userId, AI_CV_CONSENT_ERROR_MESSAGES.INVALID_USER_ID);
     const policy = this.getPolicy(dto.scope);
     this.assertClientPolicyMatches(dto.consentVersion, dto.policyHash, policy);
@@ -104,10 +116,16 @@ export class AiCvConsentsService {
       const consentRepo = manager.getRepository(AiCvConsent);
       const eventRepo = manager.getRepository(AiCvConsentEvent);
       const consent = await consentRepo.findOne({
-        where: { userId, scope: policy.scope, status: AiCvConsentStatus.GRANTED },
+        where: {
+          userId,
+          scope: policy.scope,
+          status: AiCvConsentStatus.GRANTED,
+        },
       });
       if (!consent) {
-        throw new NotFoundException(AI_CV_CONSENT_ERROR_MESSAGES.NO_ACTIVE_CONSENT);
+        throw new NotFoundException(
+          AI_CV_CONSENT_ERROR_MESSAGES.NO_ACTIVE_CONSENT,
+        );
       }
 
       const now = new Date();
@@ -193,7 +211,10 @@ export class AiCvConsentsService {
     policyHash: string,
     policy: ReturnType<typeof getActiveAiCvConsentPolicy>,
   ): void {
-    if (consentVersion !== policy.consentVersion || policyHash !== policy.policyHash) {
+    if (
+      consentVersion !== policy.consentVersion ||
+      policyHash !== policy.policyHash
+    ) {
       throw new ConflictException(AI_CV_CONSENT_ERROR_MESSAGES.POLICY_MISMATCH);
     }
   }
@@ -202,7 +223,11 @@ export class AiCvConsentsService {
     if (!isUUID(value)) throw new BadRequestException(message);
   }
 
-  private async lockScope(manager: EntityManager, userId: string, scope: string) {
+  private async lockScope(
+    manager: EntityManager,
+    userId: string,
+    scope: string,
+  ) {
     if (typeof manager.query === 'function') {
       await manager.query(
         `SELECT pg_advisory_xact_lock(hashtext('ai_cv_consent:' || $1 || ':' || $2))`,
@@ -211,7 +236,9 @@ export class AiCvConsentsService {
     }
   }
 
-  private runTransaction<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
+  private runTransaction<T>(
+    work: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
     if (this.dataSource) return this.dataSource.transaction(work);
     return this.consentRepo.manager.transaction(work);
   }

@@ -212,8 +212,45 @@ def test_filter_translation_always_applies_lifecycle_and_structured_filters() ->
     }
     assert any(item.get("should") for item in must)
     assert sum(item["key"] == "skills" for item in must if "key" in item) == 1
-    assert translated["must_not"] == []
+    assert translated["must_not"] == [
+        {"key": "representation_marker", "match": {"value": "talentpulse-demo-representation-v1"}}
+    ]
     assert translated["should"] == []
+
+
+def test_retrieval_excludes_representation_marker_even_if_provider_returns_it() -> None:
+    marker_id = uuid4()
+    active_id = uuid4()
+    chunks = [
+        RetrievedChunk(
+            marker_id,
+            1.0,
+            {
+                "is_active": "false",
+                "is_deleted": "true",
+                "company_is_active": "false",
+                "company_is_deleted": "true",
+                "status": "REPRESENTATION_MARKER",
+            },
+        ),
+        RetrievedChunk(
+            active_id,
+            0.9,
+            {
+                "is_active": "true",
+                "is_deleted": "false",
+                "company_is_active": "true",
+                "company_is_deleted": "false",
+            },
+        ),
+    ]
+
+    result = RetrievalService(
+        DeterministicEmbeddingProvider(), InMemoryVectorRetriever(chunks)
+    ).retrieve(retrieve_request())
+
+    assert result.job_ids == [active_id]
+    assert marker_id not in result.job_ids
 
 
 def test_retrieval_deduplicates_chunks_limits_to_twenty_and_allowlists_metadata() -> None:

@@ -14,6 +14,8 @@ import { Repository } from 'typeorm';
 import { Role } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 import { JobsService } from 'src/jobs/jobs.service';
+import { Company } from 'src/companies/entities/company.entity';
+import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
 import { AiChatMessage } from './entities/ai-chat-message.entity';
 import { AiChatSession } from './entities/ai-chat-session.entity';
@@ -50,6 +52,8 @@ export class CandidateAssistantService {
     private readonly consentService: CandidateAssistantConsentService,
     private readonly quotaService: CandidateAssistantQuotaService,
     private readonly jobsService: JobsService,
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
     private readonly userCVsService: UserCVsService,
     @Inject(CANDIDATE_ASSISTANT_AI_CLIENT)
     private readonly aiClient: CandidateAssistantAiClient,
@@ -313,22 +317,34 @@ export class CandidateAssistantService {
     const jobs = ids?.length
       ? await Promise.all(ids.map((id) => this.jobsService.findOne(id)))
       : await this.jobsService.getAll();
-    return jobs.slice(0, 20).map((job) => ({
-      id: job._id,
-      title: job.name,
-      description: job.description || null,
-      skills: Array.isArray(job.skills)
-        ? job.skills
-            .filter((x): x is string => typeof x === 'string')
-            .slice(0, 50)
-        : [],
-      location: job.location || null,
-      level: job.level || null,
-      salary: job.salary == null ? null : Number(job.salary),
-      company: job.company
-        ? { id: job.company._id, name: job.company.name }
-        : null,
-    }));
+    return Promise.all(
+      jobs.slice(0, 20).map(async (job) => {
+        const company = job.company?._id
+          ? await this.companyRepo.findOne({
+              where: { _id: job.company._id },
+              withDeleted: true,
+            })
+          : null;
+        if (!company) throw new NotFoundException('Company not found');
+        return {
+          id: job._id,
+          title: job.name,
+          description: job.description || null,
+          skills: Array.isArray(job.skills)
+            ? job.skills
+                .filter((x): x is string => typeof x === 'string')
+                .slice(0, 50)
+            : [],
+          location: job.location || null,
+          level: job.level || null,
+          salary: job.salary == null ? null : Number(job.salary),
+          company: job.company
+            ? { id: job.company._id, name: job.company.name }
+            : null,
+          jobSourceVersion: getJobSourceVersion(job, company),
+        };
+      }),
+    );
   }
   private boundFilters(filters?: Record<string, unknown>) {
     if (!filters) return {};

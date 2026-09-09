@@ -212,3 +212,19 @@ def test_parse_response_rejects_unbounded_structured_items() -> None:
             text_char_count=11,
             skills=["x"] * 51,
         )
+
+
+def test_cv_match_golden_fixture_validates() -> None:
+    import json
+    from pathlib import Path
+
+    from app.domain.contracts import MatchRequest, MatchResponse
+
+    fixture = json.loads(
+        Path(__file__).parents[2].joinpath("contracts/cv-match-v1.json").read_text()
+    )
+    request = MatchRequest.model_validate(fixture["request"])
+    response = MatchResponse.model_validate(fixture["response"])
+    assert request.identity.request_id == response.request_id
+    assert request.content_hash == response.content_hash
+    assert request.job_source_version == response.job_source_version

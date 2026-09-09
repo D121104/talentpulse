@@ -202,7 +202,9 @@ export class UsersController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Boost candidate profile to the top of HR CV search' })
+  @ApiOperation({
+    summary: 'Boost candidate profile to the top of HR CV search',
+  })
   @ApiBearerAuth()
   @Post('/candidate/boost-profile')
   boostProfile(@User() user: IUser) {
@@ -226,7 +228,9 @@ export class UsersController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Update candidate job seeking & visibility settings' })
+  @ApiOperation({
+    summary: 'Update candidate job seeking & visibility settings',
+  })
   @ApiBearerAuth()
   @Patch('/candidate/settings')
   updateCandidateSettings(

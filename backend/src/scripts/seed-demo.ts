@@ -24,7 +24,8 @@ const JOBS = [
     salary: 45000000,
     level: 'SENIOR',
     location: 'Ho Chi Minh City (hybrid)',
-    description: 'Synthetic demo role for bounded job indexing and retrieval checks.',
+    description:
+      'Synthetic demo role for bounded job indexing and retrieval checks.',
   },
   {
     name: 'Demo AI Platform Engineer',
@@ -32,7 +33,8 @@ const JOBS = [
     salary: 50000000,
     level: 'SENIOR',
     location: 'Hanoi (remote)',
-    description: 'Synthetic demo role for semantic retrieval and provider readiness checks.',
+    description:
+      'Synthetic demo role for semantic retrieval and provider readiness checks.',
   },
   {
     name: 'Demo Platform Reliability Engineer',
@@ -40,40 +42,54 @@ const JOBS = [
     salary: 42000000,
     level: 'MID',
     location: 'Da Nang (onsite)',
-    description: 'Synthetic demo role for deterministic filters and reconciliation checks.',
+    description:
+      'Synthetic demo role for deterministic filters and reconciliation checks.',
   },
 ] as const;
 
 function requiredSecret(): string {
   const direct = process.env.DEMO_SEED_PASSWORD;
   const file = process.env.DEMO_SEED_PASSWORD_FILE;
-  if (direct && file) throw new Error('use only one protected demo seed password input');
+  if (direct && file)
+    throw new Error('use only one protected demo seed password input');
   if (direct) return direct;
-  if (!file) throw new Error('DEMO_SEED_PASSWORD or DEMO_SEED_PASSWORD_FILE is required');
+  if (!file)
+    throw new Error(
+      'DEMO_SEED_PASSWORD or DEMO_SEED_PASSWORD_FILE is required',
+    );
   const mode = statSync(file).mode & 0o777;
-  if ((mode & 0o077) !== 0) throw new Error('DEMO_SEED_PASSWORD_FILE must not be group/world readable');
+  if ((mode & 0o077) !== 0)
+    throw new Error('DEMO_SEED_PASSWORD_FILE must not be group/world readable');
   const value = readFileSync(file, 'utf8').replace(/\r?\n$/, '');
   if (!value) throw new Error('DEMO_SEED_PASSWORD_FILE is empty');
   return value;
 }
 
 function assertRuntime(): void {
-  if (process.env.NODE_ENV !== 'demo') throw new Error('NODE_ENV must be exactly demo');
-  if (process.env.DB_DATABASE !== 'talentpulse_demo') throw new Error('DB_DATABASE must be exactly talentpulse_demo');
-  if (process.env.DB_SYNCHRONIZE !== 'false') throw new Error('DB_SYNCHRONIZE must be exactly false');
-  if (!process.env.DB_SSL_CA_FILE) throw new Error('DB_SSL_CA_FILE is required');
+  if (process.env.NODE_ENV !== 'demo')
+    throw new Error('NODE_ENV must be exactly demo');
+  if (process.env.DB_DATABASE !== 'talentpulse_demo')
+    throw new Error('DB_DATABASE must be exactly talentpulse_demo');
+  if (process.env.DB_SYNCHRONIZE !== 'false')
+    throw new Error('DB_SYNCHRONIZE must be exactly false');
+  if (!process.env.DB_SSL_CA_FILE)
+    throw new Error('DB_SSL_CA_FILE is required');
 }
 
 async function seed(manager: EntityManager, password: string): Promise<void> {
   const companyRepo = manager.getRepository(Company);
   const userRepo = manager.getRepository(User);
   const jobRepo = manager.getRepository(Job);
-  const companyName = process.env.DEMO_SEED_COMPANY_NAME?.trim() || DEFAULT_COMPANY_NAME;
-  const hrEmail = process.env.DEMO_SEED_HR_EMAIL?.trim().toLowerCase() || DEFAULT_HR_EMAIL;
-  if (!companyName || !hrEmail) throw new Error('demo seed identity is invalid');
+  const companyName =
+    process.env.DEMO_SEED_COMPANY_NAME?.trim() || DEFAULT_COMPANY_NAME;
+  const hrEmail =
+    process.env.DEMO_SEED_HR_EMAIL?.trim().toLowerCase() || DEFAULT_HR_EMAIL;
+  if (!companyName || !hrEmail)
+    throw new Error('demo seed identity is invalid');
 
   let company = await companyRepo.findOne({ where: { _id: DEMO_COMPANY_ID } });
-  if (!company) company = await companyRepo.findOne({ where: { name: companyName } });
+  if (!company)
+    company = await companyRepo.findOne({ where: { name: companyName } });
   if (!company) {
     company = companyRepo.create({ _id: DEMO_COMPANY_ID, name: companyName });
   }
@@ -118,12 +134,18 @@ async function seed(manager: EntityManager, password: string): Promise<void> {
     const data = JOBS[index];
     let job = await jobRepo.findOne({ where: { _id: DEMO_JOB_IDS[index] } });
     if (!job) job = await jobRepo.findOne({ where: { name: data.name } });
-    if (!job) job = jobRepo.create({ _id: DEMO_JOB_IDS[index], name: data.name });
+    if (!job)
+      job = jobRepo.create({ _id: DEMO_JOB_IDS[index], name: data.name });
     Object.assign(job, {
       name: data.name,
       description: data.description,
       skills: [...data.skills],
-      company: { _id: company._id, name: company.name, logo: null, isActive: true },
+      company: {
+        _id: company._id,
+        name: company.name,
+        logo: null,
+        isActive: true,
+      },
       salary: data.salary,
       level: data.level,
       location: data.location,
@@ -145,20 +167,27 @@ async function main(): Promise<void> {
   assertRuntime();
   const maxJobs = Number(process.env.DEMO_SEED_MAX_JOBS ?? JOBS.length);
   if (!Number.isInteger(maxJobs) || maxJobs < JOBS.length || maxJobs > 100) {
-    throw new Error(`DEMO_SEED_MAX_JOBS must be an integer between ${JOBS.length} and 100`);
+    throw new Error(
+      `DEMO_SEED_MAX_JOBS must be an integer between ${JOBS.length} and 100`,
+    );
   }
   const password = requiredSecret();
   const dataSource = new DataSource(createDataSourceOptions());
   await dataSource.initialize();
   try {
     await dataSource.transaction((manager) => seed(manager, password));
-    process.stdout.write(JSON.stringify({ seeded: true, company: 'demo', jobs: JOBS.length }) + '\n');
+    process.stdout.write(
+      JSON.stringify({ seeded: true, company: 'demo', jobs: JOBS.length }) +
+        '\n',
+    );
   } finally {
     await dataSource.destroy();
   }
 }
 
 void main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  );
   process.exitCode = 1;
 });

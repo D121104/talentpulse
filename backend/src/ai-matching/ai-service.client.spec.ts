@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { ConfigService } from '@nestjs/config';
 import { generateKeyPairSync } from 'crypto';
 import {
@@ -18,8 +20,18 @@ const parseRequest = {
   content_version: 1,
 };
 const matchRequest = {
+  identity: {
+    request_id: '00000000-0000-4000-8000-000000000011',
+    trace_id: '00000000-0000-4000-8000-000000000012',
+    operation_attempt_id: '00000000-0000-4000-8000-000000000013',
+  },
   cv_id: '00000000-0000-4000-8000-000000000001',
   job_id: '00000000-0000-4000-8000-000000000002',
+  content_hash: 'a'.repeat(64),
+  content_version: 'cv-content-v1',
+  job_source_version: 'job-source-v1',
+  idempotency_key: 'cv-match:00000000-0000-4000-8000-000000000001:fixture-v1',
+  locale: 'en',
   candidate: {
     skills: ['TypeScript'],
     years_experience: null,
@@ -58,8 +70,16 @@ const parseResponse = {
   parser_version: 'v1',
 };
 const matchResponse = {
+  request_id: matchRequest.identity.request_id,
+  trace_id: matchRequest.identity.trace_id,
+  operation_attempt_id: matchRequest.identity.operation_attempt_id,
   cv_id: matchRequest.cv_id,
   job_id: matchRequest.job_id,
+  content_hash: matchRequest.content_hash,
+  content_version: matchRequest.content_version,
+  job_source_version: matchRequest.job_source_version,
+  idempotency_key: matchRequest.idempotency_key,
+  locale: matchRequest.locale,
   overall_score: 0.8,
   components: {},
   matched_skills: ['TypeScript'],
@@ -233,6 +253,22 @@ describe('AiServiceClient', () => {
       message: 'AI service rejected the request',
     });
   });
+  it('validates the shared CV match golden fixture and preserves its metadata', async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(__dirname, '../../../contracts/cv-match-v1.json'),
+        'utf8',
+      ),
+    ) as { request: typeof matchRequest; response: typeof matchResponse };
+    const client = new AiServiceClient(config(auth));
+    request.mockResolvedValue({ status: 200, data: fixture.response });
+
+    await expect(client.matchCv(fixture.request)).resolves.toEqual(
+      fixture.response,
+    );
+    expect(request.mock.calls[0][0].data).toEqual(fixture.request);
+  });
+
   it('rejects response identity/version mismatches and unsupported fields', async () => {
     const client = new AiServiceClient(config(auth));
     request.mockResolvedValue({

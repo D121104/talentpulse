@@ -204,8 +204,16 @@ class MatchService:
         degraded = semantic is None
         explanation = self._explanation(overall, strengths, gaps, degraded)
         return MatchResponse(
+            request_id=request.identity.request_id,
+            trace_id=request.identity.trace_id,
+            operation_attempt_id=request.identity.operation_attempt_id,
             cv_id=request.cv_id,
             job_id=request.job_id,
+            content_hash=request.content_hash,
+            content_version=request.content_version,
+            job_source_version=request.job_source_version,
+            idempotency_key=request.idempotency_key,
+            locale=request.locale,
             overall_score=overall,
             components=response_components,
             matched_skills=matched_skills,

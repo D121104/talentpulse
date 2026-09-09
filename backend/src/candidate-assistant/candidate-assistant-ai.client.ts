@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'crypto';
 import {
   AiServiceClient,
   AiServiceError,
@@ -33,6 +34,21 @@ const CLAIM_TYPES = new Set([
 ]);
 
 type RecordValue = Record<string, unknown>;
+type GenerationMatchingEvidence = Pick<
+  MatchResponse,
+  | 'cv_id'
+  | 'job_id'
+  | 'overall_score'
+  | 'components'
+  | 'matched_skills'
+  | 'missing_required_skills'
+  | 'strengths'
+  | 'gaps'
+  | 'explanation'
+  | 'degraded'
+  | 'scoring_version'
+  | 'semantic_component_version'
+>;
 
 type RetrievalItem = {
   job_id: string;
@@ -254,12 +270,14 @@ export class CandidateAssistantAiServiceClient
       ) {
         invalidResponse();
       }
-      let matchingEvidence: Awaited<
-        ReturnType<AiServiceClient['matchCv']>
-      > | null = null;
+      let matchingEvidence: GenerationMatchingEvidence | null = null;
       if (selectedJob && request.cv) {
         const comparison = await this.aiServiceClient.matchCv(
-          this.toMatchRequest(request.cv, selectedJob),
+          this.toMatchRequest(request.cv, selectedJob, {
+            request_id: request.requestId,
+            trace_id: request.traceId,
+            operation_attempt_id: request.operationAttemptId,
+          }),
         );
         if (
           !comparison ||
@@ -267,7 +285,10 @@ export class CandidateAssistantAiServiceClient
           comparison.job_id !== selectedJob.id
         )
           invalidResponse();
-        matchingEvidence = comparison;
+        // The assistant generation contract predates cv-match-v1. Keep its
+        // allowlisted matching evidence shape while the nested match call uses
+        // the strict provenance contract above; no raw CV/JD data is copied.
+        matchingEvidence = this.toGenerationMatchingEvidence(comparison);
       }
       const generated = await this.aiServiceClient.generateRag({
         identity,
@@ -505,8 +526,27 @@ export class CandidateAssistantAiServiceClient
     return { blocks, citations, filterState: responseFilterState };
   }
 
-  private toDeterministicMatchBlock(
+  private toGenerationMatchingEvidence(
     match: MatchResponse,
+  ): GenerationMatchingEvidence {
+    return {
+      cv_id: match.cv_id,
+      job_id: match.job_id,
+      overall_score: match.overall_score,
+      components: match.components,
+      matched_skills: match.matched_skills,
+      missing_required_skills: match.missing_required_skills,
+      strengths: match.strengths,
+      gaps: match.gaps,
+      explanation: match.explanation,
+      degraded: match.degraded,
+      scoring_version: match.scoring_version,
+      semantic_component_version: match.semantic_component_version,
+    };
+  }
+
+  private toDeterministicMatchBlock(
+    match: GenerationMatchingEvidence,
   ): CandidateAssistantBlock {
     const components = Object.fromEntries(
       Object.entries(match.components)
@@ -565,10 +605,24 @@ export class CandidateAssistantAiServiceClient
   private toMatchRequest(
     cv: NonNullable<CandidateAssistantAiRequest['cv']>,
     job: CandidateAssistantAiRequest['jobs'][number],
+    identity: {
+      request_id: string;
+      trace_id: string;
+      operation_attempt_id: string;
+    },
   ) {
+    const idempotencyFingerprint = createHash('sha256')
+      .update(`${cv.cvId}:${cv.contentVersion}:${job.jobSourceVersion}`, 'utf8')
+      .digest('hex');
     return {
+      identity,
       cv_id: cv.cvId,
       job_id: job.id,
+      content_hash: cv.contentHash,
+      content_version: cv.contentVersion,
+      job_source_version: job.jobSourceVersion,
+      idempotency_key: `cv-match:${cv.cvId}:${idempotencyFingerprint}`,
+      locale: 'en',
       candidate: {
         skills: cv.skills.slice(0, 200),
         years_experience: null,

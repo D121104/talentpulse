@@ -13,7 +13,11 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { User as UserDec, ResponseMessage, Public } from '../decorator/customize';
+import {
+  User as UserDec,
+  ResponseMessage,
+  Public,
+} from '../decorator/customize';
 import { IUser } from '../users/users.interface';
 import { PaymentsService, CreatePaymentOrderDto } from './payments.service';
 
@@ -38,8 +42,9 @@ export class PaymentsController {
     @Res() res: Response,
   ) {
     try {
-      const { redirectUrl } =
-        await this.paymentsService.verifyPaymentOrder(orderCode);
+      const { redirectUrl } = await this.paymentsService.verifyPaymentOrder(
+        orderCode,
+      );
       return res.redirect(redirectUrl);
     } catch {
       const frontendUrl = process.env.URL_FRONTEND || 'http://localhost:5173';
@@ -84,4 +89,3 @@ export class PaymentsController {
     return this.paymentsService.expireSpecificOrder(orderCode, user._id);
   }
 }
-

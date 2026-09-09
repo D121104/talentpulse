@@ -4,7 +4,7 @@ import { JobIndexOutbox } from './entities/job-index-outbox.entity';
 import { JobIndexingSubscriber } from './job-indexing.subscriber';
 
 function managerFor(job: any, company: any) {
-  const upsert = jest.fn().mockResolvedValue(undefined);
+  const insert = jest.fn().mockResolvedValue(undefined);
   const jobRepository = {
     findOne: jest.fn().mockResolvedValue(job),
     find: jest.fn().mockResolvedValue([job]),
@@ -16,7 +16,10 @@ function managerFor(job: any, company: any) {
       getOne: jest.fn().mockResolvedValue(company),
     })),
   };
-  const outboxRepository = { upsert };
+  const outboxRepository = {
+    findOne: jest.fn().mockResolvedValue(null),
+    insert,
+  };
   return {
     manager: {
       getRepository(entity: unknown) {
@@ -26,7 +29,7 @@ function managerFor(job: any, company: any) {
         throw new Error('unexpected repository');
       },
     } as any,
-    upsert,
+    insert,
   };
 }
 
@@ -42,24 +45,24 @@ const company = {
 
 describe('JobIndexingSubscriber', () => {
   it('enqueues inserts using the transaction manager and idempotency key', async () => {
-    const { manager, upsert } = managerFor(job, company);
+    const { manager, insert } = managerFor(job, company);
     const subscriber = new JobIndexingSubscriber();
     await subscriber.afterInsert({
       manager,
       entity: job,
       metadata: { target: Job },
     } as any);
-    expect(upsert).toHaveBeenCalledWith(
+    expect(insert).toHaveBeenCalledWith(
       expect.objectContaining({
         aggregateId: 'job-1',
         eventType: 'JOB_CHANGED',
+        sourceVersion: expect.any(String),
       }),
-      ['aggregateId', 'sourceVersion', 'eventType'],
     );
   });
 
   it('enqueues every job when the canonical company changes', async () => {
-    const { manager, upsert } = managerFor(job, company);
+    const { manager, insert } = managerFor(job, company);
     const subscriber = new JobIndexingSubscriber();
     await subscriber.afterUpdate({
       manager,
@@ -67,6 +70,6 @@ describe('JobIndexingSubscriber', () => {
       databaseEntity: { _id: 'company-1' },
       metadata: { target: Company },
     } as any);
-    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(insert).toHaveBeenCalledTimes(1);
   });
 });

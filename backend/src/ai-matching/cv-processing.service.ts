@@ -7,7 +7,10 @@ import {
   CVMatchResult,
   CVProcessingStatus,
 } from './entities/cv-match-result.entity';
-import { CVProcessingJobData } from './cv-processing.processor';
+import {
+  CVProcessingJobData,
+  consentIdempotencyKey,
+} from './cv-processing.processor';
 
 const retryOptions = {
   attempts: 3,
@@ -84,7 +87,11 @@ export class CVProcessingService {
       aiRankingConsentGranted: true,
       aiRankingConsentVersion: params.aiRankingConsentVersion,
       aiRankingConsentPolicyHash: params.aiRankingConsentPolicyHash,
-      consentIdempotencyKey: params.consentIdempotencyKey,
+      consentIdempotencyKey: consentIdempotencyKey(
+        params.applicationId,
+        params.cvContentVersion,
+        params.jobSourceVersion,
+      ),
     };
 
     await this.cvProcessingQueue.add('process-cv', payload, {
@@ -101,13 +108,28 @@ export class CVProcessingService {
   async getRankedCandidates(
     jobId: string,
     topN = 10,
+    currentJobSourceVersion: string,
   ): Promise<CVMatchResult[]> {
-    return this.cvMatchResultRepo.find({
-      where: { jobId, status: CVProcessingStatus.COMPLETED, isDeleted: false },
-      order: { matchScore: 'DESC' },
-      take: topN,
-      relations: ['user', 'cv', 'application'],
-    });
+    return this.cvMatchResultRepo
+      .createQueryBuilder('result')
+      .leftJoinAndSelect('result.user', 'user')
+      .leftJoinAndSelect('result.cv', 'cv')
+      .leftJoinAndSelect('result.application', 'application')
+      .where('result.jobId = :jobId', { jobId })
+      .andWhere('result.status = :status', {
+        status: CVProcessingStatus.COMPLETED,
+      })
+      .andWhere('result.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('result.jobSourceVersion = :jobSourceVersion', {
+        jobSourceVersion: currentJobSourceVersion,
+      })
+      .andWhere('cv.contentHash IS NOT NULL')
+      .andWhere('result.contentHash = cv.contentHash')
+      .andWhere('(cv.isDeleted = false OR cv.isDeleted IS NULL)')
+      .andWhere('cv.deletedAt IS NULL')
+      .orderBy('result.matchScore', 'DESC')
+      .take(topN)
+      .getMany();
   }
 
   async getProcessingStatus(jobId: string): Promise<{

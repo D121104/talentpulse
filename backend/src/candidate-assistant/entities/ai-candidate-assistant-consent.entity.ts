@@ -14,7 +14,7 @@ export enum CandidateAssistantConsentStatus {
 @Entity('ai_candidate_assistant_consents')
 @Check(
   'CHK_ai_candidate_assistant_consents_status',
-  '"status" IN (\'GRANTED\', \'REVOKED\')',
+  "\"status\" IN ('GRANTED', 'REVOKED')",
 )
 @Check(
   'CHK_ai_candidate_assistant_consents_timestamps',

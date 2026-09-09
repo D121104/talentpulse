@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     qdrant_alias: str | None = None
     qdrant_index_version: str | None = None
     qdrant_api_key: str | None = None
+    # Qdrant administration is an explicit operator action, never startup work.
+    qdrant_admin_enabled: bool = False
     bedrock_region: str | None = None
     bedrock_model: str | None = None
 

@@ -1,9 +1,6 @@
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import {
-  GrantAiCvConsentDto,
-  RevokeAiCvConsentDto,
-} from './ai-cv-consent.dto';
+import { GrantAiCvConsentDto, RevokeAiCvConsentDto } from './ai-cv-consent.dto';
 import {
   AiCvConsentScope,
   getActiveAiCvConsentPolicy,

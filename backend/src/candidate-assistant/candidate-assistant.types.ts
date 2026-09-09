@@ -29,6 +29,7 @@ export interface CandidateAssistantJobContext {
   level: string | null;
   salary: number | null;
   company: { id: string; name: string } | null;
+  jobSourceVersion: string;
 }
 
 export interface CandidateAssistantCitation {
@@ -61,6 +62,7 @@ export interface CandidateAssistantAiRequest {
   cv?: {
     cvId: string;
     contentHash: string;
+    contentVersion: string;
     title: string | null;
     skills: string[];
     education: string[];

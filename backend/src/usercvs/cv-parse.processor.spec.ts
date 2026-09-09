@@ -2,6 +2,7 @@ import { UserCvParseProcessor, UserCvParseJobData } from './cv-parse.processor';
 import { CVParseStatus } from './cv-parse-status';
 import { aiContentVersion } from './cv-parse.processor';
 import { AiServiceClient } from 'src/ai-matching/ai-service.client';
+import { IsNull } from 'typeorm';
 
 jest.mock('src/ai-matching/cv-download', () => ({
   CvDownloadError: class CvDownloadError extends Error {
@@ -123,11 +124,11 @@ describe('UserCvParseProcessor', () => {
       extracted_text: parsedText,
       text_char_count: parsedText.length,
       parser_version: 'test',
-       skills: ['TypeScript', 'NestJS'],
-       education: ['Computer Science'],
-       experience: ['Backend Engineer'],
-       certificates: ['AWS Certified'],
-       warnings: ['Some dates were inferred'],
+      skills: ['TypeScript', 'NestJS'],
+      education: ['Computer Science'],
+      experience: ['Backend Engineer'],
+      certificates: ['AWS Certified'],
+      warnings: ['Some dates were inferred'],
     });
 
     await processor.handleParse({ data: jobData } as any);
@@ -143,13 +144,13 @@ describe('UserCvParseProcessor', () => {
         contentHash:
           '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
         parseStatus: CVParseStatus.READY,
-               skills: ['TypeScript', 'NestJS'],
-         education: ['Computer Science'],
-         experience: ['Backend Engineer'],
-         certificates: ['AWS Certified'],
-         warnings: ['Some dates were inferred'],
-         parserVersion: 'test',
-       }),
+        skills: ['TypeScript', 'NestJS'],
+        education: ['Computer Science'],
+        experience: ['Backend Engineer'],
+        certificates: ['AWS Certified'],
+        warnings: ['Some dates were inferred'],
+        parserVersion: 'test',
+      }),
     );
   });
 
@@ -216,7 +217,7 @@ describe('UserCvParseProcessor', () => {
         url: jobData.expectedUrl,
         contentVersion: jobData.contentVersion,
         isDeleted: false,
-        deletedAt: null,
+        deletedAt: IsNull(),
       }),
     );
     expect(userCvRepo.update.mock.calls[1][1]).toEqual(
@@ -242,7 +243,7 @@ describe('UserCvParseProcessor', () => {
         url: jobData.expectedUrl,
         contentVersion: jobData.contentVersion,
         isDeleted: false,
-        deletedAt: null,
+        deletedAt: IsNull(),
       }),
     );
     expect(userCvRepo.update.mock.calls[1][1]).toEqual(
@@ -274,7 +275,9 @@ describe('UserCvParseProcessor', () => {
       warnings: ['A date was inferred'],
     };
 
-    expect((client as any).validateParseResponse(response, request)).toEqual(response);
+    expect((client as any).validateParseResponse(response, request)).toEqual(
+      response,
+    );
     expect(() =>
       (client as any).validateParseResponse(
         { ...response, skills: ['x'.repeat(501)] },
@@ -294,5 +297,4 @@ describe('UserCvParseProcessor', () => {
       ),
     ).toThrow('unsupported fields');
   });
-
 });

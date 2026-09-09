@@ -86,6 +86,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
         password: configService.get<string>('DB_PASSWORD', 'postgres123'),
         database: configService.get<string>('DB_DATABASE', 'recruitment_db'),
         autoLoadEntities: true,
+        subscribers: [JobIndexingSubscriber],
         synchronize:
           configService.get<string>(
             'DB_SYNCHRONIZE',

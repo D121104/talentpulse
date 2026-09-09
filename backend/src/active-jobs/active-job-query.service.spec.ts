@@ -31,11 +31,7 @@ describe('isCanonicalActiveJob', () => {
       ),
     ).toBe(false);
     expect(
-      isCanonicalActiveJob(
-        { ...validJob, endDate: now },
-        company,
-        now,
-      ),
+      isCanonicalActiveJob({ ...validJob, endDate: now }, company, now),
     ).toBe(false);
   });
 
@@ -43,9 +39,9 @@ describe('isCanonicalActiveJob', () => {
     ['missing start date', { startDate: null }],
     ['missing end date', { endDate: null }],
   ])('%s is not active', (_label, dates) => {
-    expect(
-      isCanonicalActiveJob({ ...validJob, ...dates }, company, now),
-    ).toBe(false);
+    expect(isCanonicalActiveJob({ ...validJob, ...dates }, company, now)).toBe(
+      false,
+    );
   });
 
   it.each([
@@ -63,7 +59,10 @@ describe('isCanonicalActiveJob', () => {
   it.each([
     ['inactive company', { isActive: false }],
     ['deleted company flag', { isDeleted: true }],
-    ['soft-deleted company', { deletedAt: new Date('2025-12-31T00:00:00.000Z') }],
+    [
+      'soft-deleted company',
+      { deletedAt: new Date('2025-12-31T00:00:00.000Z') },
+    ],
   ])('%s is not active', (_label, companyState) => {
     expect(
       isCanonicalActiveJob(validJob, { ...company, ...companyState }, now),

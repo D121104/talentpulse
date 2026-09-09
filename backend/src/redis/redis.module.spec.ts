@@ -77,8 +77,6 @@ describe('RedisModule', () => {
   it('exports CacheModule because both runtime branches import a cache module', () => {
     const exportsMetadata = Reflect.getMetadata('exports', RedisModule);
 
-    expect(exportsMetadata).toEqual(
-      expect.arrayContaining([RedisService]),
-    );
+    expect(exportsMetadata).toEqual(expect.arrayContaining([RedisService]));
   });
 });

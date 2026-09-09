@@ -21,7 +21,9 @@ defaults.parseInputDatesAsUTC = true;
 //    Ensure TIMESTAMP WITHOUT TIME ZONE is parsed as UTC by appending 'Z', preventing double-offset shifts in GMT+7.
 types.setTypeParser(1114, (stringValue: string) => {
   if (!stringValue) return null;
-  const isoStr = stringValue.includes('T') ? stringValue : stringValue.replace(' ', 'T');
+  const isoStr = stringValue.includes('T')
+    ? stringValue
+    : stringValue.replace(' ', 'T');
   return new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
 });
 

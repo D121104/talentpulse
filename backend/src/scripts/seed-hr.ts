@@ -5,7 +5,10 @@ import * as dotenv from 'dotenv';
 import { User, PremiumPlan } from '../users/entities/user.entity';
 import { Company } from '../companies/entities/company.entity';
 import { Job } from '../jobs/entities/job.entity';
-import { Application, ApplicationStatus } from '../applications/entities/application.entity';
+import {
+  Application,
+  ApplicationStatus,
+} from '../applications/entities/application.entity';
 import { UserCV } from '../usercvs/entities/usercv.entity';
 import { Skill } from '../skills/entities/skill.entity';
 import { Role } from '../decorator/customize';
@@ -52,7 +55,8 @@ async function runSeed() {
       gender: 'male',
       age: 28,
       address: 'Cầu Giấy, Hà Nội',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+      avatar:
+        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
       isApproved: true,
       isLocked: false,
       isDeleted: false,
@@ -72,7 +76,8 @@ async function runSeed() {
     hrUser.isPremium = true;
     hrUser.premiumPlan = PremiumPlan.HR_PREMIUM;
     hrUser.premiumExpiresAt = oneYearLater;
-    hrUser.avatar = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80';
+    hrUser.avatar =
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80';
     hrUser = await userRepo.save(hrUser);
   }
 
@@ -90,7 +95,7 @@ async function runSeed() {
     'REDUX',
     'FIGMA',
     'UI/UX',
-    
+
     // Backend & Frameworks
     'NODEJS',
     'NESTJS',
@@ -105,14 +110,14 @@ async function runSeed() {
     '.NET CORE',
     'PHP',
     'LARAVEL',
-    
+
     // Database & Caching
     'POSTGRESQL',
     'MYSQL',
     'MONGODB',
     'REDIS',
     'ELASTICSEARCH',
-    
+
     // Cloud, DevOps & Tools
     'DOCKER',
     'KUBERNETES',
@@ -127,7 +132,7 @@ async function runSeed() {
     'MICROSERVICES',
     'RESTFUL API',
     'GRAPHQL',
-    
+
     // AI / Data / Mobile
     'PYTORCH',
     'TENSORFLOW',
@@ -155,7 +160,9 @@ async function runSeed() {
       addedSkillCount++;
     }
   }
-  console.log(`✓ Đã đồng bộ Master Skills Catalog (${initialSkills.length} kỹ năng trong CSDL, thêm mới: ${addedSkillCount})`);
+  console.log(
+    `✓ Đã đồng bộ Master Skills Catalog (${initialSkills.length} kỹ năng trong CSDL, thêm mới: ${addedSkillCount})`,
+  );
 
   // 3. Tạo hoặc Cập nhật Công ty Demo (do hrUser làm creator)
   let company = await companyRepo.findOne({
@@ -185,7 +192,8 @@ async function runSeed() {
     company.address = 'Keangnam Landmark 72, Phạm Hùng, Cầu Giấy, Hà Nội';
     company.description =
       'Tập đoàn công nghệ và giải pháp tuyển dụng nhân sự ứng dụng trí tuệ nhân tạo hàng đầu Việt Nam.';
-    company.logo = 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=200&auto=format&fit=crop&q=60';
+    company.logo =
+      'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=200&auto=format&fit=crop&q=60';
     company.isActive = true;
     company.isDeleted = false;
     company.createdBy = { _id: hrUser._id, email: hrUser.email };
@@ -214,7 +222,8 @@ async function runSeed() {
       gender: 'male',
       age: 26,
       address: 'Đống Đa, Hà Nội',
-      avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80',
+      avatar:
+        'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80',
       isApproved: true,
       isLocked: false,
       isDeleted: false,
@@ -241,7 +250,9 @@ async function runSeed() {
 
   // 5. Tạo HR Ứng tuyển đang chờ duyệt (Pending HR)
   const hrApplicantEmail = 'hr.applicant@talentpulse.com';
-  let hrApplicant = await userRepo.findOne({ where: { email: hrApplicantEmail } });
+  let hrApplicant = await userRepo.findOne({
+    where: { email: hrApplicantEmail },
+  });
   if (!hrApplicant) {
     hrApplicant = userRepo.create({
       email: hrApplicantEmail,
@@ -251,7 +262,8 @@ async function runSeed() {
       gender: 'female',
       age: 24,
       address: 'Thanh Xuân, Hà Nội',
-      avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80',
+      avatar:
+        'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80',
       isApproved: true,
       isLocked: false,
       isDeleted: false,
@@ -276,7 +288,10 @@ async function runSeed() {
       },
     ];
     await companyRepo.save(company);
-    console.log('✓ Đã thêm HR vào danh sách chờ duyệt công ty:', hrApplicant.email);
+    console.log(
+      '✓ Đã thêm HR vào danh sách chờ duyệt công ty:',
+      hrApplicant.email,
+    );
   }
 
   // 6. Tạo HR Tự do mới đăng ký (Chưa có công ty)
@@ -291,7 +306,8 @@ async function runSeed() {
       gender: 'male',
       age: 25,
       address: 'Hà Đông, Hà Nội',
-      avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80',
+      avatar:
+        'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80',
       isApproved: true,
       isLocked: false,
       isDeleted: false,
@@ -308,7 +324,16 @@ async function runSeed() {
   if (!job1) {
     job1 = jobRepo.create({
       name: 'Senior Fullstack Developer (NodeJS / React)',
-      skills: ['React', 'TypeScript', 'Node.js', 'NestJS', 'PostgreSQL', 'TailwindCSS', 'Redux', 'RESTful API'],
+      skills: [
+        'React',
+        'TypeScript',
+        'Node.js',
+        'NestJS',
+        'PostgreSQL',
+        'TailwindCSS',
+        'Redux',
+        'RESTful API',
+      ],
       company: {
         _id: company._id,
         name: company.name,
@@ -353,7 +378,16 @@ async function runSeed() {
   if (!job2) {
     job2 = jobRepo.create({
       name: 'AI / Machine Learning Engineer (Python & PyTorch)',
-      skills: ['Python', 'PyTorch', 'TensorFlow', 'FastAPI', 'Docker', 'NLP', 'Machine Learning', 'Transformers'],
+      skills: [
+        'Python',
+        'PyTorch',
+        'TensorFlow',
+        'FastAPI',
+        'Docker',
+        'NLP',
+        'Machine Learning',
+        'Transformers',
+      ],
       company: {
         _id: company._id,
         name: company.name,
@@ -431,7 +465,9 @@ async function runSeed() {
 
   for (const cand of candidatesData) {
     const isCandPremium = cand.email === 'tuan.nguyen.dev@gmail.com';
-    let candidateUser = await userRepo.findOne({ where: { email: cand.email } });
+    let candidateUser = await userRepo.findOne({
+      where: { email: cand.email },
+    });
     if (!candidateUser) {
       candidateUser = userRepo.create({
         email: cand.email,
@@ -445,15 +481,21 @@ async function runSeed() {
         isLocked: false,
         isDeleted: false,
         isPremium: isCandPremium,
-        premiumPlan: isCandPremium ? PremiumPlan.CANDIDATE_PREMIUM : PremiumPlan.FREE,
+        premiumPlan: isCandPremium
+          ? PremiumPlan.CANDIDATE_PREMIUM
+          : PremiumPlan.FREE,
         premiumExpiresAt: isCandPremium ? oneYearLater : (null as any),
         createdBy: { _id: 'system', email: 'system@talentpulse.com' },
       });
       candidateUser = await userRepo.save(candidateUser);
     } else {
       candidateUser.isPremium = isCandPremium;
-      candidateUser.premiumPlan = isCandPremium ? PremiumPlan.CANDIDATE_PREMIUM : PremiumPlan.FREE;
-      candidateUser.premiumExpiresAt = isCandPremium ? oneYearLater : (null as any);
+      candidateUser.premiumPlan = isCandPremium
+        ? PremiumPlan.CANDIDATE_PREMIUM
+        : PremiumPlan.FREE;
+      candidateUser.premiumExpiresAt = isCandPremium
+        ? oneYearLater
+        : (null as any);
       candidateUser = await userRepo.save(candidateUser);
     }
 
@@ -466,7 +508,9 @@ async function runSeed() {
         title: `CV - ${cand.name}`,
         description: `Hồ sơ năng lực chuyên môn của ${cand.name}`,
         fileType: 'pdf',
-        parsedText: `Ứng viên ${cand.name}, chuyên môn: ${cand.skills.join(', ')}. Kinh nghiệm làm việc 3 năm trong ngành phần mềm.`,
+        parsedText: `Ứng viên ${cand.name}, chuyên môn: ${cand.skills.join(
+          ', ',
+        )}. Kinh nghiệm làm việc 3 năm trong ngành phần mềm.`,
         skills: cand.skills,
         education: ['Đại học Bách Khoa Hà Nội (CNTT)'],
         experience: ['3 năm Software Engineer tại Top Fintech'],
@@ -511,12 +555,24 @@ async function runSeed() {
   console.log('\n========================================');
   console.log('🎉 KHỞI TẠO SEED HR & COMPANY THÀNH CÔNG!');
   console.log('========================================');
-  console.log('👑 HR Trưởng (Lead HR)     : hr@talentpulse.com        | Pass: 12345678 (Duyệt/Xóa HR, ko rời cty)');
-  console.log('👤 HR Thành viên (Member)  : hr.member@talentpulse.com | Pass: 12345678 (Có nút Rời công ty)');
-  console.log('⏳ HR Đang chờ duyệt (Join): hr.applicant@talentpulse.com| Pass: 12345678 (Nằm trong danh sách duyệt)');
-  console.log('🆕 HR Mới tự do (No Comp)  : hr.new@talentpulse.com    | Pass: 12345678 (Tìm kiếm debounce hoặc Tạo cty)');
-  console.log('🏢 Doanh nghiệp            : TalentPulse Technology Group (isActive: true)');
-  console.log(`📦 Skills Catalog          : Đã nạp đầy đủ ${initialSkills.length} kỹ năng chuẩn vào bảng skills`);
+  console.log(
+    '👑 HR Trưởng (Lead HR)     : hr@talentpulse.com        | Pass: 12345678 (Duyệt/Xóa HR, ko rời cty)',
+  );
+  console.log(
+    '👤 HR Thành viên (Member)  : hr.member@talentpulse.com | Pass: 12345678 (Có nút Rời công ty)',
+  );
+  console.log(
+    '⏳ HR Đang chờ duyệt (Join): hr.applicant@talentpulse.com| Pass: 12345678 (Nằm trong danh sách duyệt)',
+  );
+  console.log(
+    '🆕 HR Mới tự do (No Comp)  : hr.new@talentpulse.com    | Pass: 12345678 (Tìm kiếm debounce hoặc Tạo cty)',
+  );
+  console.log(
+    '🏢 Doanh nghiệp            : TalentPulse Technology Group (isActive: true)',
+  );
+  console.log(
+    `📦 Skills Catalog          : Đã nạp đầy đủ ${initialSkills.length} kỹ năng chuẩn vào bảng skills`,
+  );
   console.log('========================================\n');
 
   await AppDataSource.destroy();

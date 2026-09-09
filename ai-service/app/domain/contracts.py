@@ -9,6 +9,26 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+def _parse_uuid(value: object) -> UUID:
+    return value if isinstance(value, UUID) else UUID(str(value))
+
+
+UuidValue = Annotated[UUID, BeforeValidator(_parse_uuid)]
+VersionValue = Annotated[
+    str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+]
+Sha256Value = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+LocaleValue = Annotated[
+    str, Field(min_length=2, max_length=16, pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})?$")
+]
+
+
+class MatchIdentity(StrictModel):
+    request_id: UuidValue
+    trace_id: UuidValue
+    operation_attempt_id: UuidValue
+
+
 class MediaType(StrEnum):
     PDF = "application/pdf"
     DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -113,6 +133,18 @@ class JobProfile(StrictModel):
     location: Annotated[str, Field(min_length=1, max_length=160)] | None = None
     work_modes: list[WorkMode] = Field(default_factory=list, max_length=3)
 
+    @field_validator("work_modes", mode="before")
+    @classmethod
+    def parse_work_modes(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return [item if isinstance(item, WorkMode) else WorkMode(item) for item in value]
+
+    @field_validator("work_modes")
+    @classmethod
+    def unique_work_modes(cls, value: list[WorkMode]) -> list[WorkMode]:
+        return list(dict.fromkeys(value))
+
     @model_validator(mode="after")
     def valid_year_range(self) -> "JobProfile":
         if self.min_years_experience is not None and self.max_years_experience is not None:
@@ -160,10 +192,25 @@ class CVParseResponse(StrictModel):
 
 
 class MatchRequest(StrictModel):
-    cv_id: UUID = Field(strict=False)
-    job_id: UUID = Field(strict=False)
+    identity: MatchIdentity
+    cv_id: UuidValue
+    job_id: UuidValue
+    content_hash: Sha256Value
+    content_version: VersionValue
+    job_source_version: VersionValue
+    idempotency_key: Annotated[
+        str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    ]
+    locale: LocaleValue
     candidate: CVProfile
     job: JobProfile
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def trimmed_idempotency_key(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("idempotency_key must be trimmed")
+        return value
 
 
 class MatchComponent(StrictModel):
@@ -176,8 +223,18 @@ class MatchComponent(StrictModel):
 
 
 class MatchResponse(StrictModel):
-    cv_id: UUID = Field(strict=False)
-    job_id: UUID = Field(strict=False)
+    request_id: UuidValue
+    trace_id: UuidValue
+    operation_attempt_id: UuidValue
+    cv_id: UuidValue
+    job_id: UuidValue
+    content_hash: Sha256Value
+    content_version: VersionValue
+    job_source_version: VersionValue
+    idempotency_key: Annotated[
+        str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    ]
+    locale: LocaleValue
     overall_score: float = Field(ge=0, le=1)
     components: dict[str, MatchComponent]
     matched_skills: list[str] = Field(max_length=200)

@@ -20,6 +20,7 @@ const selectedJob = {
   location: 'Hanoi',
   level: 'senior',
   salary: 3000,
+  jobSourceVersion: 'job-source-v1',
   company: { id: '88888888-8888-4888-8888-888888888888', name: 'Example Co' },
 };
 const additionalJob = {
@@ -30,11 +31,13 @@ const additionalJob = {
   location: 'Da Nang',
   level: 'mid',
   salary: 2500,
+  jobSourceVersion: 'job-source-v2',
   company: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Other Co' },
 };
 const cv = {
   cvId: '99999999-9999-4999-8999-999999999999',
   contentHash: 'a'.repeat(64),
+  contentVersion: 'cv-content-v1',
   title: 'Candidate CV',
   skills: ['Node.js'],
   education: [],
@@ -127,8 +130,18 @@ describe('CandidateAssistantAiServiceClient', () => {
     });
     expect(response.blocks[0].text).toContain('72%');
     expect(aiServiceClient.matchCv).toHaveBeenCalledWith({
+      identity: {
+        request_id: requestIds.requestId,
+        trace_id: requestIds.traceId,
+        operation_attempt_id: requestIds.operationAttemptId,
+      },
       cv_id: cv.cvId,
       job_id: selectedJob.id,
+      content_hash: cv.contentHash,
+      content_version: cv.contentVersion,
+      job_source_version: selectedJob.jobSourceVersion,
+      idempotency_key: expect.stringMatching(/^cv-match:/),
+      locale: 'en',
       candidate: {
         skills: ['Node.js'],
         years_experience: null,

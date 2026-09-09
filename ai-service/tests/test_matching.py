@@ -14,7 +14,22 @@ from fastapi.testclient import TestClient
 def request(candidate: CVProfile, job: JobProfile) -> MatchRequest:
     from uuid import uuid4
 
-    return MatchRequest(cv_id=uuid4(), job_id=uuid4(), candidate=candidate, job=job)
+    return MatchRequest(
+        identity={
+            "request_id": uuid4(),
+            "trace_id": uuid4(),
+            "operation_attempt_id": uuid4(),
+        },
+        cv_id=uuid4(),
+        job_id=uuid4(),
+        content_hash="a" * 64,
+        content_version="cv-content-v1",
+        job_source_version="job-source-v1",
+        idempotency_key="cv-match:test:cv-content-v1:job-source-v1",
+        locale="en",
+        candidate=candidate,
+        job=job,
+    )
 
 
 def test_skill_scoring_normalizes_case_and_punctuation() -> None:
@@ -66,8 +81,18 @@ class SpyEmbedding:
 
 def test_match_route_uses_composition_root_embedding_provider() -> None:
     valid_match_payload: dict[str, object] = {
+        "identity": {
+            "request_id": str(uuid4()),
+            "trace_id": str(uuid4()),
+            "operation_attempt_id": str(uuid4()),
+        },
         "cv_id": str(uuid4()),
         "job_id": str(uuid4()),
+        "content_hash": "a" * 64,
+        "content_version": "cv-content-v1",
+        "job_source_version": "job-source-v1",
+        "idempotency_key": "cv-match:test:cv-content-v1:job-source-v1",
+        "locale": "en",
         "candidate": {
             "skills": ["Python", "PostgreSQL"],
             "years_experience": 4.0,

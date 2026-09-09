@@ -102,7 +102,12 @@ export class OnlineCVsController {
     @Body() body: { htmlContent?: string; isPremium?: boolean },
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.exportToPdf(id, user, body?.htmlContent, body?.isPremium);
+    return this.onlineCVsService.exportToPdf(
+      id,
+      user,
+      body?.htmlContent,
+      body?.isPremium,
+    );
   }
 
   @UseGuards(JwtAuthGuard)

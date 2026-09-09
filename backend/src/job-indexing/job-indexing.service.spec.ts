@@ -38,8 +38,14 @@ function company() {
 }
 
 describe('JobIndexingService', () => {
-  it('upserts one outbox event for the same job source version', async () => {
-    const outboxRepo = { upsert: jest.fn().mockResolvedValue(undefined) };
+  it('does not reset an existing outbox event for the same job source version', async () => {
+    const outboxRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        status: 'COMPLETED',
+        attemptCount: 3,
+      }),
+      insert: jest.fn(),
+    };
     const service = new JobIndexingService(
       {} as any,
       outboxRepo as any,
@@ -48,16 +54,31 @@ describe('JobIndexingService', () => {
       {} as any,
     );
     await service.enqueue('job-1');
-    await service.enqueue('job-1');
-    expect(outboxRepo.upsert).toHaveBeenCalledTimes(2);
-    expect(outboxRepo.upsert.mock.calls[0][1]).toEqual([
-      'aggregateId',
-      'sourceVersion',
-      'eventType',
-    ]);
-    expect(outboxRepo.upsert.mock.calls[0][0].sourceVersion).toBe(
-      outboxRepo.upsert.mock.calls[1][0].sourceVersion,
+
+    expect(outboxRepo.findOne).toHaveBeenCalledWith({
+      where: {
+        aggregateId: 'job-1',
+        sourceVersion: getJobSourceVersion(activeJob(), company()),
+        eventType: 'JOB_CHANGED',
+      },
+    });
+    expect(outboxRepo.insert).not.toHaveBeenCalled();
+  });
+
+  it('ignores a concurrent unique-constraint conflict while inserting an event', async () => {
+    const outboxRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      insert: jest.fn().mockRejectedValue({ code: '23505' }),
+    };
+    const service = new JobIndexingService(
+      {} as any,
+      outboxRepo as any,
+      { findOne: jest.fn().mockResolvedValue(activeJob()) } as any,
+      { findOne: jest.fn().mockResolvedValue(company()) } as any,
+      {} as any,
     );
+
+    await expect(service.enqueue('job-1')).resolves.toBeUndefined();
   });
 
   it('deletes an inactive job through the FastAPI boundary', async () => {

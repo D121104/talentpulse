@@ -104,7 +104,8 @@ export class OnlineCV {
 
   @Column({
     type: 'jsonb',
-    default: '["objective", "education", "experience", "skills", "activities", "certificates", "awards"]',
+    default:
+      '["objective", "education", "experience", "skills", "activities", "certificates", "awards"]',
   })
   sectionOrder: string[];
 

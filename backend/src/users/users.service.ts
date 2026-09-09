@@ -615,7 +615,9 @@ export class UsersService {
     }
 
     if (user.role !== Role.USER) {
-      throw new BadRequestException('Tính năng Đẩy Top chỉ dành cho tài khoản Ứng viên (Candidate)');
+      throw new BadRequestException(
+        'Tính năng Đẩy Top chỉ dành cho tài khoản Ứng viên (Candidate)',
+      );
     }
 
     const isPremium = this.isCandidatePremium(user);
@@ -662,7 +664,8 @@ export class UsersService {
     await this.userRepo.save(user);
 
     return {
-      message: '🚀 Đẩy top hồ sơ thành công! Hồ sơ của bạn đã được đưa lên vị trí ưu tiên hàng đầu trong tìm kiếm CV của Nhà Tuyển Dụng.',
+      message:
+        '🚀 Đẩy top hồ sơ thành công! Hồ sơ của bạn đã được đưa lên vị trí ưu tiên hàng đầu trong tìm kiếm CV của Nhà Tuyển Dụng.',
       lastBoostedAt: user.lastBoostedAt,
       boostExpiresAt: user.boostExpiresAt,
       isBoosted: true,

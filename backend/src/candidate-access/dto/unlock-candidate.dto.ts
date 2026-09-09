@@ -3,7 +3,9 @@ import { CandidateAccessType } from '../entities/candidate-access.entity';
 
 export class UnlockCandidateDto {
   @IsNotEmpty({ message: 'cvType không được để trống' })
-  @IsEnum(CandidateAccessType, { message: 'cvType phải là ONLINE_CV hoặc UPLOADED_CV' })
+  @IsEnum(CandidateAccessType, {
+    message: 'cvType phải là ONLINE_CV hoặc UPLOADED_CV',
+  })
   cvType: CandidateAccessType;
 
   @IsNotEmpty({ message: 'cvId không được để trống' })

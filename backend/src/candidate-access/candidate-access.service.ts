@@ -30,36 +30,120 @@ const FREE_HR_DAILY_CV_LIMIT = 5;
 
 const DOMAIN_DICTIONARY: Record<string, string[]> = {
   IT_SOFTWARE: [
-    'it', 'phần mềm', 'software', 'developer', 'frontend', 'backend', 'fullstack',
-    'devops', 'engineer', 'react', 'nodejs', 'java', 'spring', 'python', 'golang',
-    'php', 'vue', 'angular', 'mobile', 'flutter', 'swift', 'kotlin', 'tester',
-    'qa', 'qc', 'database', 'sql', 'postgres', 'aws', 'docker', 'ai', 'data',
+    'it',
+    'phần mềm',
+    'software',
+    'developer',
+    'frontend',
+    'backend',
+    'fullstack',
+    'devops',
+    'engineer',
+    'react',
+    'nodejs',
+    'java',
+    'spring',
+    'python',
+    'golang',
+    'php',
+    'vue',
+    'angular',
+    'mobile',
+    'flutter',
+    'swift',
+    'kotlin',
+    'tester',
+    'qa',
+    'qc',
+    'database',
+    'sql',
+    'postgres',
+    'aws',
+    'docker',
+    'ai',
+    'data',
   ],
   SALES_BUSINESS: [
-    'kinh doanh', 'sales', 'bán hàng', 'tư vấn', 'telesale', 'bất động sản',
-    'phát triển thị trường', 'chăm sóc khách hàng', 'cskh', 'account', 'b2b',
-    'b2c', 'thương mại', 'sale', 'bảo hiểm', 'tài chính',
+    'kinh doanh',
+    'sales',
+    'bán hàng',
+    'tư vấn',
+    'telesale',
+    'bất động sản',
+    'phát triển thị trường',
+    'chăm sóc khách hàng',
+    'cskh',
+    'account',
+    'b2b',
+    'b2c',
+    'thương mại',
+    'sale',
+    'bảo hiểm',
+    'tài chính',
   ],
   MARKETING_MEDIA: [
-    'marketing', 'digital', 'seo', 'content', 'copywriter', 'social',
-    'truyền thông', 'ads', 'quảng cáo', 'facebook ads', 'google ads',
-    'pr', 'sự kiện', 'media', 'tiktok', 'branding',
+    'marketing',
+    'digital',
+    'seo',
+    'content',
+    'copywriter',
+    'social',
+    'truyền thông',
+    'ads',
+    'quảng cáo',
+    'facebook ads',
+    'google ads',
+    'pr',
+    'sự kiện',
+    'media',
+    'tiktok',
+    'branding',
   ],
   FINANCE_ACCOUNTING: [
-    'kế toán', 'kiểm toán', 'tài chính', 'thuế', 'ngân hàng', 'thủ quỹ',
-    'kế toán tổng hợp', 'kế toán trưởng', 'finance', 'accounting',
+    'kế toán',
+    'kiểm toán',
+    'tài chính',
+    'thuế',
+    'ngân hàng',
+    'thủ quỹ',
+    'kế toán tổng hợp',
+    'kế toán trưởng',
+    'finance',
+    'accounting',
   ],
   DESIGN_CREATIVE: [
-    'ui/ux', 'design', 'designer', 'thiết kế', 'đồ họa', 'figma',
-    'photoshop', 'illustrator', 'video editor', '3d', 'sáng tạo',
+    'ui/ux',
+    'design',
+    'designer',
+    'thiết kế',
+    'đồ họa',
+    'figma',
+    'photoshop',
+    'illustrator',
+    'video editor',
+    '3d',
+    'sáng tạo',
   ],
   HR_ADMIN: [
-    'nhân sự', 'tuyển dụng', 'hành chính', 'hr', 'c&b', 'tiền lương',
-    'headhunter', 'đào tạo', 'pháp chế',
+    'nhân sự',
+    'tuyển dụng',
+    'hành chính',
+    'hr',
+    'c&b',
+    'tiền lương',
+    'headhunter',
+    'đào tạo',
+    'pháp chế',
   ],
   LOGISTICS_SUPPLY: [
-    'logistics', 'xuất nhập khẩu', 'kho vận', 'supply chain', 'vận tải',
-    'giao nhận', 'mua hàng', 'procurement',
+    'logistics',
+    'xuất nhập khẩu',
+    'kho vận',
+    'supply chain',
+    'vận tải',
+    'giao nhận',
+    'mua hàng',
+    'procurement',
   ],
 };
 
@@ -71,9 +155,15 @@ function estimateMonths(startStr?: string, endStr?: string): number {
     if (!str) return null;
     const clean = str.trim().toLowerCase();
     if (
-      ['hiện tại', 'hien tai', 'present', 'now', 'nay', 'đang làm', 'dang lam'].includes(
-        clean,
-      )
+      [
+        'hiện tại',
+        'hien tai',
+        'present',
+        'now',
+        'nay',
+        'đang làm',
+        'dang lam',
+      ].includes(clean)
     ) {
       return now;
     }
@@ -160,7 +250,9 @@ function parseExperienceStats(
   if (computedYears >= 1) {
     summary = `${computedYears} năm KN (${placesCount} nơi từng làm)`;
   } else if (computedYears > 0) {
-    summary = `${Math.round(totalMonths)} tháng KN (${placesCount} nơi từng làm)`;
+    summary = `${Math.round(
+      totalMonths,
+    )} tháng KN (${placesCount} nơi từng làm)`;
   } else {
     summary = `Đã làm việc tại ${placesCount} nơi`;
   }
@@ -249,7 +341,10 @@ export function extractCandidateSkills(skillsData: any): string[] {
 
   for (const item of skillsData) {
     if (typeof item === 'string') {
-      const tokens = item.split(/[,;\/•|\n]+/).map((t) => t.trim()).filter(Boolean);
+      const tokens = item
+        .split(/[,;\/•|\n]+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
       if (tokens.length > 1) {
         tokens.forEach(addSkill);
       } else {
@@ -350,14 +445,19 @@ export class CandidateAccessService {
     if (!hrUser || !hrUser.company || !hrUser.company._id) return null;
 
     const companyId = hrUser.company._id;
-    const company = await this.companyRepo.findOne({ where: { _id: companyId } });
+    const company = await this.companyRepo.findOne({
+      where: { _id: companyId },
+    });
     const companyJobs = await this.jobRepo.find({
       where: { isDeleted: false },
     });
 
     // Filter jobs belonging to this company
     const myCompanyJobs = companyJobs.filter(
-      (j) => j.company && j.company._id && String(j.company._id) === String(companyId),
+      (j) =>
+        j.company &&
+        j.company._id &&
+        String(j.company._id) === String(companyId),
     );
 
     const targetSkills: string[] = [];
@@ -365,7 +465,8 @@ export class CandidateAccessService {
     const rawKeywords: string[] = [];
 
     if (company?.name) rawKeywords.push(company.name.toLowerCase());
-    if (company?.description) rawKeywords.push(company.description.toLowerCase());
+    if (company?.description)
+      rawKeywords.push(company.description.toLowerCase());
 
     for (const job of myCompanyJobs) {
       if (job.name) {
@@ -388,7 +489,9 @@ export class CandidateAccessService {
     const combinedText = rawKeywords.join(' ');
     const industryDomains: string[] = [];
 
-    for (const [domainKey, domainKeywords] of Object.entries(DOMAIN_DICTIONARY)) {
+    for (const [domainKey, domainKeywords] of Object.entries(
+      DOMAIN_DICTIONARY,
+    )) {
       const matchCount = domainKeywords.filter((kw) =>
         combinedText.includes(kw),
       ).length;
@@ -429,9 +532,7 @@ export class CandidateAccessService {
     // 1. Skill Match with company jobs (+15 pts per match)
     for (const cSkill of companyProfile.targetSkills) {
       if (
-        lowerCandSkills.some(
-          (sk) => sk.includes(cSkill) || cSkill.includes(sk),
-        )
+        lowerCandSkills.some((sk) => sk.includes(cSkill) || cSkill.includes(sk))
       ) {
         matchedSkills.push(cSkill);
         score += 15;
@@ -449,7 +550,9 @@ export class CandidateAccessService {
     }
 
     // 3. Domain Alignment (+25 pts)
-    const candText = `${lowerCandTitle} ${lowerCandSkills.join(' ')} ${lowerCandObjective}`;
+    const candText = `${lowerCandTitle} ${lowerCandSkills.join(
+      ' ',
+    )} ${lowerCandObjective}`;
     let matchedDomainName = '';
 
     for (const domain of companyProfile.industryDomains) {
@@ -466,7 +569,8 @@ export class CandidateAccessService {
           matchedDomainName = 'Tài chính / Kế toán';
         else if (domain === 'DESIGN_CREATIVE')
           matchedDomainName = 'Thiết kế / UI-UX';
-        else if (domain === 'HR_ADMIN') matchedDomainName = 'Nhân sự / Hành chính';
+        else if (domain === 'HR_ADMIN')
+          matchedDomainName = 'Nhân sự / Hành chính';
         break;
       }
     }
@@ -477,7 +581,9 @@ export class CandidateAccessService {
     let reason = '';
     if (isRecommended) {
       if (matchedSkills.length > 0) {
-        reason = `🎯 Khớp ${score}% kỹ năng (${matchedSkills.slice(0, 2).join(', ')})`;
+        reason = `🎯 Khớp ${score}% kỹ năng (${matchedSkills
+          .slice(0, 2)
+          .join(', ')})`;
       } else if (matchedDomainName) {
         reason = `✨ Phù hợp lĩnh vực ${matchedDomainName}`;
       } else {
@@ -872,7 +978,9 @@ export class CandidateAccessService {
           });
           const hrName = hrUserRecord?.name || hrUser.name || 'Nhà tuyển dụng';
           const companyName =
-            hrUserRecord?.company?.name || hrUser.company?.name || 'Doanh nghiệp tuyển dụng';
+            hrUserRecord?.company?.name ||
+            hrUser.company?.name ||
+            'Doanh nghiệp tuyển dụng';
           const companyId = hrUserRecord?.company?._id || hrUser.company?._id;
 
           await this.notificationsService.create({
@@ -892,7 +1000,10 @@ export class CandidateAccessService {
             },
           });
         } catch (notifErr) {
-          this.logger.error('Failed to dispatch candidate unlock notification', notifErr);
+          this.logger.error(
+            'Failed to dispatch candidate unlock notification',
+            notifErr,
+          );
         }
       }
 
@@ -1022,7 +1133,10 @@ export class CandidateAccessService {
       accesses.map(async (acc) => {
         let cvInfo: any = null;
 
-        if (acc.accessType === CandidateAccessType.ONLINE_CV && acc.onlineCvId) {
+        if (
+          acc.accessType === CandidateAccessType.ONLINE_CV &&
+          acc.onlineCvId
+        ) {
           const cv = await this.onlineCVRepo.findOne({
             where: { _id: acc.onlineCvId },
           });

@@ -94,12 +94,19 @@ export class ApplicationsService implements OnModuleInit {
     if (!job) {
       throw new BadRequestException('Công việc không tồn tại');
     }
+    const canonicalCompanyId = job.company?._id;
+    if (!canonicalCompanyId) {
+      throw new BadRequestException('Công việc chưa có công ty hợp lệ');
+    }
+    if (companyId !== canonicalCompanyId) {
+      throw new BadRequestException('Công ty không khớp với công việc');
+    }
 
     const application = this.applicationRepo.create({
       cvId,
       userId: user._id,
       jobId,
-      companyId,
+      companyId: canonicalCompanyId,
       coverLetter,
       status: ApplicationStatus.PENDING,
       history: [
@@ -790,9 +797,20 @@ export class ApplicationsService implements OnModuleInit {
       };
     }
 
+    const canonicalCompany = job.company?._id
+      ? await this.companyRepo.findOne({
+          where: { _id: job.company._id },
+          withDeleted: true,
+        })
+      : null;
+    if (!canonicalCompany) {
+      throw new NotFoundException('Công ty của công việc không tồn tại');
+    }
+    const currentJobSourceVersion = getJobSourceVersion(job, canonicalCompany);
     const rankedResults = await this.cvProcessingService.getRankedCandidates(
       jobId,
       topN,
+      currentJobSourceVersion,
     );
 
     const candidateResults: ICandidateMatchResult[] = rankedResults.map(
@@ -822,8 +840,9 @@ export class ApplicationsService implements OnModuleInit {
       },
     );
 
-    const processingStatus =
-      await this.cvProcessingService.getProcessingStatus(jobId);
+    const processingStatus = await this.cvProcessingService.getProcessingStatus(
+      jobId,
+    );
 
     return {
       jobId,

@@ -177,6 +177,7 @@ describe('NestJS -> FastAPI candidate assistant RAG loopback contract', () => {
           location: 'Hanoi',
           level: 'senior',
           salary: 3000,
+          jobSourceVersion: 'job-source-v1',
           company: { id: ids.company, name: 'Synthetic Systems' },
         },
       ],

@@ -18,6 +18,7 @@ import {
 } from './job-indexing.normalization';
 import { JOB_EMBEDDING_DIMENSIONS } from './job-indexing.constants';
 import { JobIndexingService } from './job-indexing.service';
+import { JobIndexingSubscriber } from './job-indexing.subscriber';
 
 jest.setTimeout(120_000);
 
@@ -96,6 +97,7 @@ async function allocateHostPort(): Promise<number> {
 function dataSourceOptions(
   port: number,
   includeMigration: boolean,
+  includeCanonicalSchema = false,
 ): DataSourceOptions {
   return {
     type: 'postgres',
@@ -104,7 +106,10 @@ function dataSourceOptions(
     username: POSTGRES_USER,
     password: POSTGRES_PASSWORD,
     database: POSTGRES_DATABASE,
-    entities: [JobIndexOutbox],
+    entities: includeCanonicalSchema
+      ? [JobIndexOutbox, Job, Company]
+      : [JobIndexOutbox],
+    subscribers: includeCanonicalSchema ? [JobIndexingSubscriber] : [],
     migrations: includeMigration ? [JobIndexOutbox20260907170000] : [],
     migrationsTableName: 'job_index_integration_migrations',
     synchronize: false,
@@ -117,9 +122,12 @@ async function waitForDatabase(port: number): Promise<DataSource> {
   const deadline = Date.now() + 60_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
-    const dataSource = new DataSource(dataSourceOptions(port, true));
+    const dataSource = new DataSource(dataSourceOptions(port, true, true));
     try {
       await dataSource.initialize();
+      await dataSource.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+      await dataSource.runMigrations();
+      await dataSource.synchronize();
       return dataSource;
     } catch (error) {
       lastError = error;
@@ -252,6 +260,20 @@ class DeferredIndexingClient implements JobIndexingClient {
   }
 }
 
+class RecordingIndexingClient implements JobIndexingClient {
+  readonly calls: JobIndexRequest[] = [];
+
+  async upsertJob(request: JobIndexUpsertRequest): Promise<JobIndexResponse> {
+    this.calls.push(request);
+    return responseFor(request);
+  }
+
+  async deleteJob(request: JobIndexDeleteRequest): Promise<JobIndexResponse> {
+    this.calls.push(request);
+    return responseFor(request);
+  }
+}
+
 class FailingIndexingClient implements JobIndexingClient {
   async upsertJob(request: JobIndexUpsertRequest): Promise<JobIndexResponse> {
     void request;
@@ -371,7 +393,6 @@ integrationDescribe(
 
       try {
         setupDataSource = await waitForDatabase(hostPort);
-        await setupDataSource.runMigrations();
       } catch (error) {
         await destroyDataSource(setupDataSource);
         const removed = await runCommand('docker', [
@@ -391,6 +412,8 @@ integrationDescribe(
     afterEach(async () => {
       if (setupDataSource?.isInitialized) {
         await setupDataSource.query('DELETE FROM "job_index_outbox"');
+        await setupDataSource.query('DELETE FROM "jobs"');
+        await setupDataSource.query('DELETE FROM "companies"');
       }
     });
 
@@ -606,6 +629,157 @@ integrationDescribe(
           lastError: null,
         }),
       );
+    });
+
+    it('drives a real job mutation through the registered subscriber, outbox, fencing, and delete', async () => {
+      const { job: fixtureJob, company: fixtureCompany } = canonicalFixtures();
+      const companyRepo = setupDataSource.getRepository(Company);
+      const jobRepo = setupDataSource.getRepository(Job);
+      const outboxRepo = setupDataSource.getRepository(JobIndexOutbox);
+      const company = await companyRepo.save(
+        companyRepo.create(fixtureCompany),
+      );
+      const client = new RecordingIndexingClient();
+      const indexingService = new JobIndexingService(
+        setupDataSource,
+        outboxRepo,
+        jobRepo,
+        companyRepo,
+        client,
+      );
+
+      await setupDataSource.transaction(async (manager) => {
+        await manager
+          .getRepository(Job)
+          .save(manager.getRepository(Job).create(fixtureJob));
+      });
+
+      let persistedJob = await jobRepo.findOne({
+        where: { _id: fixtureJob._id },
+        withDeleted: true,
+      });
+      if (!persistedJob) throw new Error('Job fixture was not persisted');
+      const initialVersion = getJobSourceVersion(persistedJob, company);
+      const initialOutbox = await waitFor(
+        () =>
+          outboxRepo.findOneBy({
+            aggregateId: persistedJob._id,
+            sourceVersion: initialVersion,
+          }),
+        (row) => row !== null,
+        'the transactional insert outbox row',
+      );
+      expect(initialOutbox).toEqual(
+        expect.objectContaining({
+          status: 'PENDING',
+          eventType: 'JOB_CHANGED',
+        }),
+      );
+
+      expect(await indexingService.drain(1)).toEqual({
+        claimed: 1,
+        completed: 1,
+        failed: 0,
+        leaseLost: 0,
+      });
+      expect(client.calls).toHaveLength(1);
+      expect(client.calls[0]).toEqual(
+        expect.objectContaining({
+          job: expect.objectContaining({ job_id: fixtureJob._id }),
+          source_version: initialVersion,
+        }),
+      );
+
+      persistedJob.description = 'Build APIs v2';
+      persistedJob = await jobRepo.save(persistedJob);
+      const staleVersion = getJobSourceVersion(persistedJob, company);
+      await waitFor(
+        () =>
+          outboxRepo.findOneBy({
+            aggregateId: persistedJob._id,
+            sourceVersion: staleVersion,
+          }),
+        (row) => row !== null,
+        'the first update outbox row',
+      );
+
+      persistedJob.description = 'Build APIs v3';
+      persistedJob = await jobRepo.save(persistedJob);
+      const currentVersion = getJobSourceVersion(persistedJob, company);
+      await waitFor(
+        () =>
+          outboxRepo.findOneBy({
+            aggregateId: persistedJob._id,
+            sourceVersion: currentVersion,
+          }),
+        (row) => row !== null,
+        'the second update outbox row',
+      );
+
+      expect(await indexingService.drain(1)).toEqual({
+        claimed: 1,
+        completed: 1,
+        failed: 0,
+        leaseLost: 0,
+      });
+      expect(client.calls).toHaveLength(1);
+      expect(
+        await outboxRepo.findOneBy({
+          aggregateId: persistedJob._id,
+          sourceVersion: staleVersion,
+        }),
+      ).toEqual(expect.objectContaining({ status: 'COMPLETED' }));
+
+      expect(await indexingService.drain(1)).toEqual({
+        claimed: 1,
+        completed: 1,
+        failed: 0,
+        leaseLost: 0,
+      });
+      expect(client.calls).toHaveLength(2);
+      expect(client.calls[1]).toEqual(
+        expect.objectContaining({
+          job: expect.objectContaining({
+            job_id: fixtureJob._id,
+            description: 'Build APIs v3',
+          }),
+          source_version: currentVersion,
+        }),
+      );
+
+      persistedJob.isDeleted = true;
+      const removedJob = await jobRepo.softRemove(persistedJob);
+      const deleteVersion = getJobSourceVersion(removedJob, company);
+      await waitFor(
+        () =>
+          outboxRepo.findOneBy({
+            aggregateId: persistedJob._id,
+            sourceVersion: deleteVersion,
+          }),
+        (row) => row !== null,
+        'the soft-delete outbox row',
+      );
+
+      expect(await indexingService.drain(1)).toEqual({
+        claimed: 1,
+        completed: 1,
+        failed: 0,
+        leaseLost: 0,
+      });
+      expect(client.calls).toHaveLength(3);
+      expect(client.calls[2]).toEqual(
+        expect.objectContaining({
+          job_id: fixtureJob._id,
+          source_version: deleteVersion,
+        }),
+      );
+      expect('job' in client.calls[2]).toBe(false);
+      expect(
+        await outboxRepo.findOneBy({
+          aggregateId: fixtureJob._id,
+          sourceVersion: deleteVersion,
+        }),
+      ).toEqual(expect.objectContaining({ status: 'COMPLETED' }));
     });
 
     it('persists a bounded retry and completes after availability', async () => {

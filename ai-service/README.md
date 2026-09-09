@@ -13,6 +13,13 @@ uv sync
 uv run uvicorn app.main:app --app-dir . --host 0.0.0.0 --port 8001
 ```
 
+The Qdrant demo collection is initialized only by an explicit operator command; it
+is never run during application startup or readiness checks:
+
+```bash
+AI_QDRANT_ADMIN_ENABLED=true uv run qdrant-admin initialize
+```
+
 ## Authentication and scopes
 
 Internal routes require a bearer JWT with the endpoint-specific scope:
@@ -47,6 +54,11 @@ Non-local demo configuration uses:
 - Vector store: Qdrant Cloud collection
   `jobs_cohere_multilingual_v3_1024_demo_v1`, alias `jobs_current_demo`, index
   version `demo-v1`.
+- The operator command also creates/verifies one deterministic inactive representation
+  marker for this exact collection, alias, index version, embedding model, dimensions,
+  normalization version, and payload schema. Existing incompatible markers fail closed;
+  the command never deletes or repoints a collection/alias. Normal retrieval excludes
+  the marker through an explicit filter and lifecycle defense in depth.
 - Generation: Bedrock `amazon.nova-lite-v1:0`.
 
 The approved IAM Bedrock ARN must correspond to the runtime model/profile actually

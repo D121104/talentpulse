@@ -34,7 +34,9 @@ export class DeterministicJobEmbeddingProvider implements JobEmbeddingProvider {
 export class InMemoryJobVectorIndex implements JobVectorIndex {
   readonly points = new Map<string, JobVectorPoint>();
 
-  async initialize(): Promise<void> {}
+  async initialize(): Promise<void> {
+    return;
+  }
 
   async get(jobId: string): Promise<JobVectorPoint | null> {
     return this.points.get(deterministicJobPointId(jobId)) ?? null;

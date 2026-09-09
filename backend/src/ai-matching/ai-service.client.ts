@@ -85,6 +85,8 @@ export interface JobIndexIdentity {
   operation_attempt_id: string;
 }
 
+export type MatchIdentity = JobIndexIdentity;
+
 export interface JobIndexUpsertRequest {
   identity: JobIndexIdentity;
   job: CanonicalJobSnapshot;
@@ -132,8 +134,14 @@ export interface JobIndexingClient {
 }
 
 export interface MatchRequest {
+  identity: MatchIdentity;
   cv_id: string;
   job_id: string;
+  content_hash: string;
+  content_version: string;
+  job_source_version: string;
+  idempotency_key: string;
+  locale: string;
   candidate: CVProfileSnapshot;
   job: JobProfileSnapshot;
 }
@@ -144,8 +152,16 @@ export interface MatchComponent {
   evidence: string[];
 }
 export interface MatchResponse {
+  request_id: string;
+  trace_id: string;
+  operation_attempt_id: string;
   cv_id: string;
   job_id: string;
+  content_hash: string;
+  content_version: string;
+  job_source_version: string;
+  idempotency_key: string;
+  locale: string;
   overall_score: number;
   components: Record<string, MatchComponent>;
   matched_skills: string[];
@@ -268,10 +284,7 @@ function assertParseStringArray(
     value.length > maxItems ||
     value.some((item) => !isSafeString(item, 1, maxItemLength))
   ) {
-    throw new AiServiceError(
-      'AI_INVALID_RESPONSE',
-      'Invalid parse response',
-    );
+    throw new AiServiceError('AI_INVALID_RESPONSE', 'Invalid parse response');
   }
 }
 
@@ -854,7 +867,50 @@ export class AiServiceClient implements JobIndexingClient {
   }
 
   private validateMatchRequest(request: MatchRequest): void {
-    if (!request || !isUuid(request.cv_id) || !isUuid(request.job_id)) {
+    if (
+      !request ||
+      !isRecord(request) ||
+      !isRecord(request.identity) ||
+      !isUuid(request.cv_id) ||
+      !isUuid(request.job_id)
+    ) {
+      throw new AiServiceError('AI_INVALID_RESPONSE', 'Invalid match request');
+    }
+    assertExactKeys(request, [
+      'identity',
+      'cv_id',
+      'job_id',
+      'content_hash',
+      'content_version',
+      'job_source_version',
+      'idempotency_key',
+      'locale',
+      'candidate',
+      'job',
+    ]);
+    assertExactKeys(request.identity, [
+      'request_id',
+      'trace_id',
+      'operation_attempt_id',
+    ]);
+    if (
+      !isUuid(request.identity.request_id) ||
+      !isUuid(request.identity.trace_id) ||
+      !isUuid(request.identity.operation_attempt_id) ||
+      !isString(request.content_hash) ||
+      !/^[0-9a-f]{64}$/.test(request.content_hash) ||
+      !isVersion(request.content_version) ||
+      !isVersion(request.job_source_version) ||
+      !isString(request.idempotency_key) ||
+      request.idempotency_key.length < 1 ||
+      request.idempotency_key.length > 128 ||
+      request.idempotency_key !== request.idempotency_key.trim() ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(request.idempotency_key) ||
+      !isString(request.locale) ||
+      request.locale.length < 2 ||
+      request.locale.length > 16 ||
+      !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})?$/.test(request.locale)
+    ) {
       throw new AiServiceError('AI_INVALID_RESPONSE', 'Invalid match request');
     }
     this.validateProfile(request.candidate, false);
@@ -986,8 +1042,16 @@ export class AiServiceClient implements JobIndexingClient {
     if (!isRecord(value))
       throw new AiServiceError('AI_INVALID_RESPONSE', 'Invalid match response');
     assertExactKeys(value, [
+      'request_id',
+      'trace_id',
+      'operation_attempt_id',
       'cv_id',
       'job_id',
+      'content_hash',
+      'content_version',
+      'job_source_version',
+      'idempotency_key',
+      'locale',
       'overall_score',
       'components',
       'matched_skills',
@@ -1000,10 +1064,31 @@ export class AiServiceClient implements JobIndexingClient {
       'semantic_component_version',
     ]);
     if (
+      value.request_id !== request.identity.request_id ||
+      value.trace_id !== request.identity.trace_id ||
+      value.operation_attempt_id !== request.identity.operation_attempt_id ||
       value.cv_id !== request.cv_id ||
       value.job_id !== request.job_id ||
+      value.content_hash !== request.content_hash ||
+      value.content_version !== request.content_version ||
+      value.job_source_version !== request.job_source_version ||
+      value.idempotency_key !== request.idempotency_key ||
+      value.locale !== request.locale ||
+      !isUuid(value.request_id) ||
+      !isUuid(value.trace_id) ||
+      !isUuid(value.operation_attempt_id) ||
       !isUuid(value.cv_id) ||
       !isUuid(value.job_id) ||
+      !isString(value.content_hash) ||
+      !/^[0-9a-f]{64}$/.test(value.content_hash) ||
+      !isVersion(value.content_version) ||
+      !isVersion(value.job_source_version) ||
+      !isString(value.idempotency_key) ||
+      value.idempotency_key.length < 1 ||
+      value.idempotency_key.length > 128 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value.idempotency_key) ||
+      !isString(value.locale) ||
+      !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})?$/.test(value.locale) ||
       !isScore(value.overall_score) ||
       !isRecord(value.components) ||
       Object.keys(value.components).length > 20

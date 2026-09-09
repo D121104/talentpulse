@@ -4,7 +4,10 @@ import { Job } from 'src/jobs/entities/job.entity';
 import { Company } from 'src/companies/entities/company.entity';
 import { isCanonicalActiveJob } from 'src/active-jobs/active-job-query.service';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
-import { CanonicalJobProjection } from './job-indexing.types';
+import {
+  CanonicalJobProjection,
+  CanonicalJobSourceVersionProjection,
+} from './job-indexing.types';
 
 function decodeHtmlEntities(value: string): string {
   return decodeHTML(value);
@@ -120,12 +123,37 @@ export function computeJobContentHash(job: Job, company: Company): string {
   );
 }
 
+/**
+ * Canonical source state for indexing and CV-job freshness fencing.
+ *
+ * The current entities use their UpdateDateColumn timestamps as the source
+ * state. Business mutations therefore remain fenced by the persisted
+ * timestamps, while contentHash and JOB_INDEX_VERSION retain independent
+ * meanings. Non-canonical entity metadata is deliberately excluded.
+ */
+export function buildCanonicalJobSourceVersionProjection(
+  job: Job,
+  company: Company,
+): CanonicalJobSourceVersionProjection {
+  return {
+    job_updated_at: job.updatedAt?.toISOString() ?? '',
+    company_updated_at: company.updatedAt?.toISOString() ?? '',
+  };
+}
+
+export function serializeCanonicalJobSourceVersion(
+  projection: CanonicalJobSourceVersionProjection,
+): string {
+  return `${projection.job_updated_at}|${projection.company_updated_at}`;
+}
+
 export function getJobSourceVersion(job: Job, company: Company): string {
   return createHash('sha256')
     .update(
-      `${job.updatedAt?.toISOString() ?? ''}|${
-        company.updatedAt?.toISOString() ?? ''
-      }`,
+      serializeCanonicalJobSourceVersion(
+        buildCanonicalJobSourceVersionProjection(job, company),
+      ),
+      'utf8',
     )
     .digest('hex');
 }

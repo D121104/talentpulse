@@ -17,10 +17,10 @@ die() {
 
 [[ "$(id -u)" == 0 ]] || die 'must run as root'
 [[ -r "$CONFIG_FILE" ]] || die 'host deployment configuration is missing'
-# shellcheck disable=SC1091
+# shellcheck disable=SC1090 # The host-provisioned config is intentionally outside the repository.
 source "$CONFIG_FILE"
 
-for command_name in aws curl docker jq sha256sum sed stat install mktemp grep wc readlink sleep; do
+for command_name in aws cmp curl docker jq python3 sed stat install mktemp grep dirname readlink sleep; do
   command -v "$command_name" >/dev/null 2>&1 || die "required command is unavailable: $command_name"
 done
 
@@ -135,23 +135,31 @@ fetch_secret() {
 verify_instance
 verify_image_digest "$backend_image"
 verify_image_digest "$ai_image"
+docker pull "$ai_image" >/dev/null || die 'approved AI image download failed'
 
 stage="$(mktemp -d "$ROOT/.staging.XXXXXX")"
-cleanup_stage() { rm -rf "$stage"; }
-trap cleanup_stage EXIT
-mkdir -p "$stage/nginx"
+provenance_source="$(mktemp -d "$ROOT/.provenance.XXXXXX")"
+ai_container=''
+cleanup() {
+  [[ -z "$ai_container" ]] || docker rm "$ai_container" >/dev/null 2>&1 || true
+  rm -rf "$provenance_source" "$stage"
+}
+trap cleanup EXIT
+mkdir -p "$stage/nginx" "$stage/ai-service" "$provenance_source/ai-service"
 
-for object in docker-compose.yml nginx/default.conf ai-entrypoint.sh .env.example SHA256SUMS; do
+for object in docker-compose.yml nginx/default.conf ai-entrypoint.sh .env.example release_bundle.py RELEASE-MANIFEST.json SHA256SUMS ai-service/pyproject.toml ai-service/uv.lock; do
+  mkdir -p "$stage/$(dirname "$object")"
   aws_call s3 cp "$bundle/$object" "$stage/$object" --only-show-errors >/dev/null || die "bundle object download failed: $object"
 done
-(
-  cd "$stage"
-  [[ "$(wc -l < SHA256SUMS)" == 5 ]] || die 'bundle checksum manifest has an unexpected file count'
-  for object in docker-compose.yml nginx/default.conf ai-entrypoint.sh .env.example; do
-    grep -Fq "  $object" SHA256SUMS || die "bundle checksum manifest is missing: $object"
-  done
-  sha256sum -c SHA256SUMS >/dev/null || die 'bundle checksum verification failed'
-)
+
+ai_container="$(docker create "$ai_image")" || die 'approved AI image container creation failed'
+docker cp "$ai_container:/app/pyproject.toml" "$provenance_source/ai-service/pyproject.toml" >/dev/null || die 'AI image pyproject provenance is missing'
+docker cp "$ai_container:/app/uv.lock" "$provenance_source/ai-service/uv.lock" >/dev/null || die 'AI image uv.lock provenance is missing'
+docker rm "$ai_container" >/dev/null || die 'AI image provenance container cleanup failed'
+ai_container=''
+python3 "$stage/release_bundle.py" verify \
+  --bundle-dir "$stage" --source-root "$provenance_source" --source-commit "$commit" \
+  --backend-image "$backend_image" --ai-image "$ai_image" || die 'release provenance verification failed'
 grep -Fq "BACKEND_IMAGE=$backend_image" "$stage/.env.example" || die 'backend digest does not match bundle metadata'
 grep -Fq "AI_SERVICE_IMAGE=$ai_image" "$stage/.env.example" || die 'AI digest does not match bundle metadata'
 
@@ -164,7 +172,14 @@ mkdir -p "$release/nginx" "$runtime"
 chmod 0750 "$ROOT" "$ROOT/releases" "$ROOT/bin" "$release" "$runtime"
 cp "$stage/docker-compose.yml" "$release/docker-compose.yml"
 cp "$stage/nginx/default.conf" "$release/nginx/default.conf"
-chmod 0640 "$release/docker-compose.yml" "$release/nginx/default.conf"
+mkdir -p "$release/ai-service"
+cp "$stage/ai-service/pyproject.toml" "$release/ai-service/pyproject.toml"
+cp "$stage/ai-service/uv.lock" "$release/ai-service/uv.lock"
+cp "$stage/RELEASE-MANIFEST.json" "$release/RELEASE-MANIFEST.json"
+cp "$stage/SHA256SUMS" "$release/SHA256SUMS"
+cmp -s "$release/ai-service/pyproject.toml" "$provenance_source/ai-service/pyproject.toml" || die 'installed AI pyproject provenance does not match the approved image'
+cmp -s "$release/ai-service/uv.lock" "$provenance_source/ai-service/uv.lock" || die 'installed AI uv.lock provenance does not match the approved image'
+chmod 0640 "$release/docker-compose.yml" "$release/nginx/default.conf" "$release/ai-service/pyproject.toml" "$release/ai-service/uv.lock" "$release/RELEASE-MANIFEST.json" "$release/SHA256SUMS"
 
 backend_json="$runtime/.backend.json"
 ai_json="$runtime/.ai.json"
@@ -284,10 +299,10 @@ run_migrations() {
 }
 
 wait_health() {
-  local service container status attempt
+  local service container status
   for service in valkey ai-service backend nginx; do
     status=''
-    for attempt in {1..60}; do
+    for _attempt in {1..60}; do
       container="$(compose "$release" ps -q "$service")"
       if [[ -n "$container" ]]; then
         status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
@@ -297,7 +312,7 @@ wait_health() {
     done
     [[ "$status" == healthy ]] || return 1
   done
-  for attempt in {1..30}; do
+  for _attempt in {1..30}; do
     curl --fail --silent --show-error --max-time 5 http://127.0.0.1/origin-health >/dev/null && break
     sleep 2
   done

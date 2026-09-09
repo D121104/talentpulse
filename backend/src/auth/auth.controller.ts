@@ -75,17 +75,26 @@ export class AuthController {
   @Public()
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  async googleAuthRedirect(@Req() request: Request & { user: any }, @Res() response: Response) {
+  async googleAuthRedirect(
+    @Req() request: Request & { user: any },
+    @Res() response: Response,
+  ) {
     const frontendUrl = (
       this.configService.get<string>('URL_FRONTEND') || 'http://localhost:5173'
     ).replace(/\/$/, '');
 
     try {
       if (!request.user) {
-        return response.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+        return response.redirect(
+          `${frontendUrl}/login?error=google_auth_failed`,
+        );
       }
-      const code = await this.authService.createGoogleExchangeCode(request.user);
-      return response.redirect(`${frontendUrl}/auth/google/callback?code=${encodeURIComponent(code)}`);
+      const code = await this.authService.createGoogleExchangeCode(
+        request.user,
+      );
+      return response.redirect(
+        `${frontendUrl}/auth/google/callback?code=${encodeURIComponent(code)}`,
+      );
     } catch (error) {
       return response.redirect(`${frontendUrl}/login?error=google_auth_failed`);
     }
@@ -132,9 +141,7 @@ export class AuthController {
   @Public()
   @ApiOperation({ summary: 'Resend candidate account verification email' })
   @Post('resend-verification')
-  handleResendVerification(
-    @Body() body: { email?: string; userId?: string },
-  ) {
+  handleResendVerification(@Body() body: { email?: string; userId?: string }) {
     return this.authService.resendVerification(body.email, body.userId);
   }
 
@@ -142,7 +149,10 @@ export class AuthController {
   @ApiOperation({ summary: 'Logout and revoke the current refresh token' })
   @ApiBearerAuth()
   @Post('logout')
-  handleLogout(@Res({ passthrough: true }) response: Response, @User() user: IUser) {
+  handleLogout(
+    @Res({ passthrough: true }) response: Response,
+    @User() user: IUser,
+  ) {
     return this.authService.logout(user, response);
   }
 }

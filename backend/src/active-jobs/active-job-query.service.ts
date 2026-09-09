@@ -78,7 +78,10 @@ export class ActiveJobQueryService {
   }
 
   createActiveQuery(now = new Date()): SelectQueryBuilder<Job> {
-    return this.applyActivePredicate(this.jobRepo.createQueryBuilder('job'), now);
+    return this.applyActivePredicate(
+      this.jobRepo.createQueryBuilder('job'),
+      now,
+    );
   }
 
   createNonDeletedQuery(): SelectQueryBuilder<Job> {
@@ -106,12 +109,14 @@ export class ActiveJobQueryService {
       .getOne();
   }
 
-  async getLegacyReport(now = new Date()): Promise<
-    Array<{ reasonCode: string; count: number }>
-  > {
+  async getLegacyReport(
+    now = new Date(),
+  ): Promise<Array<{ reasonCode: string; count: number }>> {
     const jobs = await this.jobRepo.find({ withDeleted: true });
     const companies = await this.companyRepo.find({ withDeleted: true });
-    const companyById = new Map(companies.map((company) => [company._id, company]));
+    const companyById = new Map(
+      companies.map((company) => [company._id, company]),
+    );
     const counts = new Map<string, number>();
 
     for (const job of jobs) {
@@ -121,22 +126,22 @@ export class ActiveJobQueryService {
       const reasonCode = !job.startDate
         ? 'MISSING_START_DATE'
         : !job.endDate
-          ? 'MISSING_END_DATE'
-          : job.startDate >= job.endDate
-            ? 'INVALID_DATE_RANGE'
-            : job.isDeleted || job.deletedAt
-              ? 'DELETED_JOB'
-              : !job.isActive
-                ? 'INACTIVE_JOB'
-                : !job.company?._id || !companyById.has(job.company._id)
-                  ? 'MISSING_CANONICAL_COMPANY'
-                  : !companyById.get(job.company._id)?.isActive ||
-                      companyById.get(job.company._id)?.isDeleted ||
-                      companyById.get(job.company._id)?.deletedAt
-                    ? 'INACTIVE_CANONICAL_COMPANY'
-                    : job.startDate > now
-                      ? 'NOT_STARTED'
-                      : 'EXPIRED';
+        ? 'MISSING_END_DATE'
+        : job.startDate >= job.endDate
+        ? 'INVALID_DATE_RANGE'
+        : job.isDeleted || job.deletedAt
+        ? 'DELETED_JOB'
+        : !job.isActive
+        ? 'INACTIVE_JOB'
+        : !job.company?._id || !companyById.has(job.company._id)
+        ? 'MISSING_CANONICAL_COMPANY'
+        : !companyById.get(job.company._id)?.isActive ||
+          companyById.get(job.company._id)?.isDeleted ||
+          companyById.get(job.company._id)?.deletedAt
+        ? 'INACTIVE_CANONICAL_COMPANY'
+        : job.startDate > now
+        ? 'NOT_STARTED'
+        : 'EXPIRED';
       counts.set(reasonCode, (counts.get(reasonCode) ?? 0) + 1);
     }
 
@@ -146,4 +151,3 @@ export class ActiveJobQueryService {
     }));
   }
 }
-

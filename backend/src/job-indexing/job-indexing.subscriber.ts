@@ -13,8 +13,8 @@ import { getJobSourceVersion } from './job-indexing.normalization';
 
 export class JobIndexingSubscriber implements EntitySubscriberInterface {
   private isTarget(
-    event: { metadata: { target: Function | string } },
-    entity: Function,
+    event: { metadata: { target: unknown } },
+    entity: { name: string },
   ): boolean {
     return (
       event.metadata.target === entity || event.metadata.target === entity.name
@@ -38,12 +38,23 @@ export class JobIndexingSubscriber implements EntitySubscriberInterface {
       .getOne();
     if (!canonicalCompany) return;
 
-    await manager.getRepository(JobIndexOutbox).upsert(
-      {
+    const sourceVersion = getJobSourceVersion(job, canonicalCompany);
+    const outboxRepo = manager.getRepository(JobIndexOutbox);
+    const existing = await outboxRepo.findOne({
+      where: {
+        aggregateId: job._id,
+        sourceVersion,
+        eventType: 'JOB_CHANGED',
+      },
+    });
+    if (existing) return;
+
+    try {
+      await outboxRepo.insert({
         aggregateId: job._id,
         aggregateType: 'JOB',
         eventType: 'JOB_CHANGED',
-        sourceVersion: getJobSourceVersion(job, canonicalCompany),
+        sourceVersion,
         status: 'PENDING',
         attemptCount: 0,
         availableAt: new Date(),
@@ -51,8 +62,19 @@ export class JobIndexingSubscriber implements EntitySubscriberInterface {
         claimedAt: null,
         processedAt: null,
         lastError: null,
-      },
-      ['aggregateId', 'sourceVersion', 'eventType'],
+      });
+    } catch (error) {
+      // The unique constraint closes the race between concurrent subscribers.
+      if (!this.isUniqueViolation(error)) throw error;
+    }
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    return Boolean(
+      error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as { code?: unknown }).code === '23505',
     );
   }
 

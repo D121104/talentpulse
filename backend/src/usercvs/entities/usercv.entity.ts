@@ -113,5 +113,3 @@ export class UserCV {
   @DeleteDateColumn({ nullable: true })
   deletedAt: Date;
 }
-
-

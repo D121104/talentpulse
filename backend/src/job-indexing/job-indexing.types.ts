@@ -29,6 +29,11 @@ export interface CanonicalJobSnapshot {
   company_is_deleted: boolean;
 }
 
+export interface CanonicalJobSourceVersionProjection {
+  job_updated_at: string;
+  company_updated_at: string;
+}
+
 export interface CanonicalJobProjection {
   job: Job;
   company: Company;

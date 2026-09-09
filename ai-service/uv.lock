@@ -819,7 +819,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "pypdf", specifier = ">=5,<7" },
     { name = "python-docx", specifier = ">=1.1,<2" },
-    { name = "qdrant-client", specifier = ">=1.12,<2" },
+    { name = "qdrant-client", specifier = ">=1.19,<2" },
     { name = "uvicorn", specifier = ">=0.35,<1" },
 ]
 

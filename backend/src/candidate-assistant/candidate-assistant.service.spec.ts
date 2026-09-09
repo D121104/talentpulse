@@ -60,6 +60,11 @@ function setup(
       release: jest.fn(),
     } as any,
     { getAll: jest.fn().mockResolvedValue([]), findOne: jest.fn() } as any,
+    {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ _id: 'company-1', updatedAt: new Date() }),
+    } as any,
     { createCandidateAssistantSnapshot: jest.fn() } as any,
     { generate: jest.fn() } as any,
   );

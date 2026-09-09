@@ -71,25 +71,55 @@ export class PaymentOrder {
   })
   status: PaymentStatus;
 
-  @Column({ name: 'checkout_url', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'checkout_url',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   checkoutUrl: string | null;
 
-  @Column({ name: 'payment_link_id', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'payment_link_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   paymentLinkId: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   description: string | null;
 
-  @Column({ name: 'transaction_reference', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'transaction_reference',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   transactionReference: string | null;
 
-  @Column({ name: 'counter_account_bank_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'counter_account_bank_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   counterAccountBankName: string | null;
 
-  @Column({ name: 'counter_account_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'counter_account_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   counterAccountName: string | null;
 
-  @Column({ name: 'counter_account_number', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'counter_account_number',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   counterAccountNumber: string | null;
 
   @Column({ name: 'paid_at', type: 'timestamp', nullable: true })
@@ -101,7 +131,12 @@ export class PaymentOrder {
   @Column({ name: 'vat_invoice_requested', type: 'boolean', default: false })
   vatInvoiceRequested: boolean;
 
-  @Column({ name: 'vat_company_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'vat_company_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   vatCompanyName: string | null;
 
   @Column({ name: 'vat_tax_code', type: 'varchar', length: 50, nullable: true })

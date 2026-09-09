@@ -4,7 +4,10 @@ import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { IUser } from 'src/users/users.interface';
 import { Role, Roles, User } from 'src/decorator/customize';
 import { RolesGuard } from 'src/guards/roles.guard';
-import { GrantAiCvConsentDto, RevokeAiCvConsentDto } from './dto/ai-cv-consent.dto';
+import {
+  GrantAiCvConsentDto,
+  RevokeAiCvConsentDto,
+} from './dto/ai-cv-consent.dto';
 import { AiCvConsentsService } from './ai-cv-consents.service';
 
 @Controller('ai/cv-consents')

@@ -63,4 +63,22 @@ def parse_cv(
 )
 def match_cv(payload: MatchRequest, http_request: Request) -> MatchResponse:
     service = cast(MatchService, http_request.app.state.matching_service)
-    return service.match(payload)
+    response = service.match(payload)
+    if (
+        response.request_id != payload.identity.request_id
+        or response.trace_id != payload.identity.trace_id
+        or response.operation_attempt_id != payload.identity.operation_attempt_id
+        or response.cv_id != payload.cv_id
+        or response.job_id != payload.job_id
+        or response.content_hash != payload.content_hash
+        or response.content_version != payload.content_version
+        or response.job_source_version != payload.job_source_version
+        or response.idempotency_key != payload.idempotency_key
+        or response.locale != payload.locale
+    ):
+        raise ServiceError(
+            "invalid_match_provenance",
+            "Match response provenance did not match the request.",
+            502,
+        )
+    return response

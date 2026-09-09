@@ -65,13 +65,18 @@ export class MailService {
   }
 
   // Send account verification email for candidate
-  async sendAccountVerificationEmail(email: string, name: string, token: string) {
+  async sendAccountVerificationEmail(
+    email: string,
+    name: string,
+    token: string,
+  ) {
     const frontendUrl = process.env.URL_FRONTEND || 'http://localhost:5173';
     const verifyUrl = `${frontendUrl}/verify-account?token=${token}`;
 
     await this.mailerService.sendMail({
       to: email,
-      subject: '🛡️ [TalentPulse] Xác thực tài khoản ứng viên để mở khóa quyền lợi Đã Xác Thực',
+      subject:
+        '🛡️ [TalentPulse] Xác thực tài khoản ứng viên để mở khóa quyền lợi Đã Xác Thực',
       template: 'verify-account',
       context: {
         name: name || 'Bạn',

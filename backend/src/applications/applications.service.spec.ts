@@ -216,6 +216,22 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
     );
   });
 
+  it('rejects a DTO company that does not match the canonical job company', async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.service.create(
+        {
+          cvId: ids.cv,
+          jobId: ids.job,
+          companyId: '00000000-0000-4000-8000-000000000099',
+        } as any,
+        user,
+      ),
+    ).rejects.toThrow('Công ty không khớp với công việc');
+    expect(harness.applicationRepo.create).not.toHaveBeenCalled();
+  });
+
   it('creates the application without queueing CV processing when consent is absent', async () => {
     const harness = createHarness();
     const dto = {

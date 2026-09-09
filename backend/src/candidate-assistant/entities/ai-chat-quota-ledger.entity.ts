@@ -12,7 +12,7 @@ import { AiQuotaReservationStatus } from '../candidate-assistant.types';
 @Entity('ai_chat_quota_ledger')
 @Check(
   'CHK_ai_chat_quota_status',
-  '"status" IN (\'RESERVED\', \'COMMITTED\', \'RELEASED\')',
+  "\"status\" IN ('RESERVED', 'COMMITTED', 'RELEASED')",
 )
 @Check(
   'CHK_ai_chat_quota_reservation_state',

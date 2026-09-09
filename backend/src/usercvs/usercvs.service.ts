@@ -23,6 +23,7 @@ import { AI_CV_CONSENT_ERROR_MESSAGES } from 'src/ai-consents/ai-cv-consent.poli
 export interface CandidateCvSnapshot {
   cvId: string;
   contentHash: string;
+  contentVersion: string;
   title: string | null;
   target: string | null;
   skills: string[];
@@ -194,6 +195,7 @@ export class UserCVsService {
     return {
       cvId: cv._id,
       contentHash: cv.contentHash,
+      contentVersion: cv.contentVersion,
       title: cv.title || null,
       target: null,
       skills: [...(cv.skills || [])],
@@ -233,6 +235,7 @@ export class UserCVsService {
     return {
       cvId: cv._id,
       contentHash: cv.contentHash,
+      contentVersion: cv.contentVersion,
       title: cv.title || null,
       target: null,
       skills: [...(cv.skills || [])],

@@ -28,8 +28,18 @@ def client(settings: Settings) -> Iterator[TestClient]:
 
 def match_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
+        "identity": {
+            "request_id": str(uuid4()),
+            "trace_id": str(uuid4()),
+            "operation_attempt_id": str(uuid4()),
+        },
         "cv_id": str(uuid4()),
         "job_id": str(uuid4()),
+        "content_hash": "a" * 64,
+        "content_version": "cv-content-v1",
+        "job_source_version": "job-source-v1",
+        "idempotency_key": "cv-match:test:cv-content-v1:job-source-v1",
+        "locale": "en",
         "candidate": {
             "skills": ["Python", "PostgreSQL"],
             "years_experience": 4.0,

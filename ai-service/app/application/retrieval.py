@@ -16,6 +16,23 @@ from app.domain.rag import (
 )
 
 MAX_CANDIDATES: Final = 20
+REPRESENTATION_MARKER_FIELD: Final = "representation_marker"
+REPRESENTATION_MARKER_VALUE: Final = "talentpulse-demo-representation-v1"
+# This is deliberately derived from the fields used by translate_filters. It excludes
+# descriptive/raw text and payload fields that are not hard-filtered by retrieval.
+FILTERABLE_PAYLOAD_SCHEMA: Final[dict[str, str]] = {
+    "company_name": "keyword",
+    "location": "keyword",
+    "level": "keyword",
+    "company_id": "uuid",
+    "skills": "keyword",
+    "salary": "float",
+    "is_active": "bool",
+    "is_deleted": "bool",
+    "company_is_active": "bool",
+    "company_is_deleted": "bool",
+    REPRESENTATION_MARKER_FIELD: "keyword",
+}
 ALLOWED_METADATA: Final = frozenset(
     {
         "job_id",
@@ -83,7 +100,11 @@ def translate_filters(state: StructuredFilterState, explicit: ExplicitFilters) -
         must.append({"key": "salary", "range": {"gte": salary_gte}})
     if salary_lte is not None:
         must.append({"key": "salary", "range": {"lte": salary_lte}})
-    return {"must": must, "must_not": [], "should": []}
+    return {
+        "must": must,
+        "must_not": [_match(REPRESENTATION_MARKER_FIELD, REPRESENTATION_MARKER_VALUE)],
+        "should": [],
+    }
 
 
 def _safe_metadata(metadata: Mapping[str, object]) -> dict[str, str]:

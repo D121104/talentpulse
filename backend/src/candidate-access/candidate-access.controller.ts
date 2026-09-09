@@ -32,10 +32,7 @@ export class CandidateAccessController {
       'Search candidates public profile (No sensitive contact info/cvUrl in response)',
   })
   @ResponseMessage('Tìm kiếm hồ sơ ứng viên thành công')
-  searchCandidates(
-    @Query() dto: SearchCandidatesDto,
-    @User() user: IUser,
-  ) {
+  searchCandidates(@Query() dto: SearchCandidatesDto, @User() user: IUser) {
     return this.candidateAccessService.searchCandidates(dto, user);
   }
 

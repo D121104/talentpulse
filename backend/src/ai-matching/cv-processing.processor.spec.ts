@@ -157,8 +157,18 @@ describe('CVProcessingProcessor', () => {
       where: { _id: ids.application },
     });
     expect(setupResult.aiServiceClient.matchCv).toHaveBeenCalledWith({
+      identity: expect.objectContaining({
+        request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        trace_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        operation_attempt_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      }),
       cv_id: ids.cv,
       job_id: ids.job,
+      content_hash: data.contentHash,
+      content_version: data.cvContentVersion,
+      job_source_version: data.jobSourceVersion,
+      idempotency_key: data.consentIdempotencyKey,
+      locale: 'en',
       candidate: expect.objectContaining({ skills: ['TypeScript'] }),
       job: expect.objectContaining({
         required_skills: ['TypeScript', 'NestJS'],
@@ -167,6 +177,8 @@ describe('CVProcessingProcessor', () => {
     const aiRequest = setupResult.aiServiceClient.matchCv.mock.calls[0][0];
     expect(aiRequest.candidate).not.toHaveProperty('parsedText');
     expect(aiRequest.job).not.toHaveProperty('description');
+    expect(aiRequest).not.toHaveProperty('applicationId');
+    expect(aiRequest).not.toHaveProperty('userId');
   });
 
   it('passes explicit structured CV and job fields without deriving protected traits', async () => {

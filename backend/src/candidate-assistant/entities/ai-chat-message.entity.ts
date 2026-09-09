@@ -12,13 +12,10 @@ import {
 } from '../candidate-assistant.types';
 
 @Entity('ai_chat_messages')
-@Check(
-  'CHK_ai_chat_messages_role',
-  `"role" IN ('USER', 'ASSISTANT')`,
-)
+@Check('CHK_ai_chat_messages_role', `"role" IN ('USER', 'ASSISTANT')`)
 @Check(
   'CHK_ai_chat_messages_status',
-  '"status" IN (\'PROCESSING\', \'COMPLETED\', \'FAILED\')',
+  "\"status\" IN ('PROCESSING', 'COMPLETED', 'FAILED')",
 )
 @Check(
   'CHK_ai_chat_messages_user_content',

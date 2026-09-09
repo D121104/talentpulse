@@ -45,3 +45,28 @@ describe('CVProcessingService queue payloads', () => {
     expect(payload).not.toHaveProperty('job');
   });
 });
+
+it('returns only completed matches fresh for the current job and CV versions', async () => {
+  const queryBuilder = {
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    take: jest.fn().mockReturnThis(),
+    getMany: jest.fn().mockResolvedValue([]),
+  };
+  const resultRepo = {
+    createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+  };
+  const service = new CVProcessingService(resultRepo as any, {} as any);
+
+  await service.getRankedCandidates('job-1', 10, 'job-source-v2');
+
+  expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+    'result.jobSourceVersion = :jobSourceVersion',
+    { jobSourceVersion: 'job-source-v2' },
+  );
+  expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+    'result.contentHash = cv.contentHash',
+  );
+});

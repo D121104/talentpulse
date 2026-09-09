@@ -83,22 +83,35 @@ export class JobIndexingService {
       withDeleted: true,
     });
     if (!company) return;
-    await this.outboxRepo.upsert(
-      {
-        aggregateId: job._id,
-        aggregateType: 'JOB',
-        eventType: 'JOB_CHANGED',
-        sourceVersion: getJobSourceVersion(job, company),
-        status: 'PENDING',
-        attemptCount: 0,
-        availableAt: new Date(),
-        leaseUntil: null,
-        claimedAt: null,
-        processedAt: null,
-        lastError: null,
+    const sourceVersion = getJobSourceVersion(job, company);
+    const event = {
+      aggregateId: job._id,
+      aggregateType: 'JOB' as const,
+      eventType: 'JOB_CHANGED' as const,
+      sourceVersion,
+      status: 'PENDING' as const,
+      attemptCount: 0,
+      availableAt: new Date(),
+      leaseUntil: null,
+      claimedAt: null,
+      processedAt: null,
+      lastError: null,
+    };
+    const existing = await this.outboxRepo.findOne({
+      where: {
+        aggregateId: event.aggregateId,
+        sourceVersion: event.sourceVersion,
+        eventType: event.eventType,
       },
-      ['aggregateId', 'sourceVersion', 'eventType'],
-    );
+    });
+    if (existing) return;
+
+    try {
+      await this.outboxRepo.insert(event);
+    } catch (error) {
+      // The unique constraint closes the race between concurrent enqueuers.
+      if (!isUniqueViolation(error)) throw error;
+    }
   }
 
   async drain(maxOperations: number): Promise<JobIndexDrainResult> {
@@ -266,6 +279,15 @@ export class JobIndexingService {
     });
     return company ? buildCanonicalProjection(job, company) : null;
   }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error as { code?: unknown }).code === '23505',
+  );
 }
 
 function deterministicJobIndexOperationId(

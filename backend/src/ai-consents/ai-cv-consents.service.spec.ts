@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { AiCvConsentsService } from './ai-cv-consents.service';
 import {
   AiCvConsentScope,
@@ -175,7 +179,9 @@ describe('AiCvConsentsService', () => {
     } as unknown as AiCvConsent;
     consentRepo.findOne.mockResolvedValue(current);
 
-    await expect(service.getCurrent(userId, policy.scope)).resolves.toBe(current);
+    await expect(service.getCurrent(userId, policy.scope)).resolves.toBe(
+      current,
+    );
     expect(consentRepo.findOne).toHaveBeenCalledWith({
       where: { userId, scope: policy.scope },
       order: { updatedAt: 'DESC', createdAt: 'DESC' },
@@ -185,9 +191,9 @@ describe('AiCvConsentsService', () => {
   it('rejects current lookup for an invalid scope', async () => {
     const { service, consentRepo } = setup();
 
-    await expect(service.getCurrent(userId, 'export_everything')).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      service.getCurrent(userId, 'export_everything'),
+    ).rejects.toThrow(BadRequestException);
     expect(consentRepo.findOne).not.toHaveBeenCalled();
   });
 
@@ -195,6 +201,8 @@ describe('AiCvConsentsService', () => {
     const { service, consentRepo } = setup();
     consentRepo.findOne.mockResolvedValue(null);
 
-    await expect(service.revoke(userId, dto)).rejects.toThrow(NotFoundException);
+    await expect(service.revoke(userId, dto)).rejects.toThrow(
+      NotFoundException,
+    );
   });
 });

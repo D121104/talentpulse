@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job as BullJob } from 'bull';
 import { createHash } from 'crypto';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import {
   AiServiceClient,
   AiServiceError,
@@ -90,7 +90,7 @@ export class UserCvParseProcessor {
       {
         _id: cvId,
         isDeleted: false,
-        deletedAt: null,
+        deletedAt: IsNull(),
         url: expectedUrl,
         contentVersion,
       },
@@ -143,7 +143,7 @@ export class UserCvParseProcessor {
         {
           _id: cvId,
           isDeleted: false,
-          deletedAt: null,
+          deletedAt: IsNull(),
           url: expectedUrl,
           contentVersion,
         },
@@ -179,7 +179,7 @@ export class UserCvParseProcessor {
           {
             _id: cvId,
             isDeleted: false,
-            deletedAt: null,
+            deletedAt: IsNull(),
             url: expectedUrl,
             contentVersion,
           },

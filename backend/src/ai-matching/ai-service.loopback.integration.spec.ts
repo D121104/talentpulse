@@ -267,14 +267,29 @@ describe('NestJS -> FastAPI CV matching loopback contract', () => {
     expect(processResponse).toEqual({ success: true, matchScore: 1 });
     expect(matchCv).toHaveBeenCalledWith(
       expect.objectContaining({
+        identity: {
+          request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+          trace_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+          operation_attempt_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        },
         cv_id: ids.cv,
         job_id: ids.job,
+        content_hash: cv.contentHash,
+        content_version: cv.contentVersion,
+        job_source_version: result.jobSourceVersion,
+        idempotency_key: data.consentIdempotencyKey,
+        locale: 'en',
       }),
     );
     expect(aiResponse).toEqual(
       expect.objectContaining({
         cv_id: ids.cv,
         job_id: ids.job,
+        content_hash: cv.contentHash,
+        content_version: cv.contentVersion,
+        job_source_version: result.jobSourceVersion,
+        idempotency_key: data.consentIdempotencyKey,
+        locale: 'en',
         overall_score: 1,
         components: expect.objectContaining({
           semantic: expect.objectContaining({ score: 1, available: true }),
