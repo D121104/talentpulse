@@ -171,14 +171,14 @@ export class JobIndexingService {
           status: 'COMPLETED',
           processedAt: new Date(),
           leaseUntil: null,
+          leaseToken: null,
         },
       );
       return updated.affected ? 'completed' : 'lease_lost';
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown indexing error';
-      this.logger.error(`Job index outbox ${outbox._id} failed: ${message}`);
-      await this.outboxRepo.update(
+      const updated = await this.outboxRepo.update(
         {
           _id: outbox._id,
           status: 'PROCESSING',
@@ -191,9 +191,15 @@ export class JobIndexingService {
             Date.now() + Math.min(300, 2 ** outbox.attemptCount) * 1000,
           ),
           leaseUntil: null,
+          leaseToken: null,
           lastError: message.slice(0, 1000),
         },
       );
+      if (updated.affected === 0) {
+        this.logger.warn(`Job index outbox ${outbox._id} lease was lost`);
+        return 'lease_lost';
+      }
+      this.logger.error(`Job index outbox ${outbox._id} failed: ${message}`);
       return 'failed';
     }
   }

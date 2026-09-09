@@ -61,6 +61,7 @@ scratch/
 
 # Local agent configuration and state
 .kilo/
+skills-lock.json
 
 # Generated Graphify artifacts and cache
 graphify-out/
