@@ -878,5 +878,55 @@ export class CompaniesService {
       },
     };
   }
+
+  async getTopHiringCompanies(limit = 10) {
+    const now = new Date();
+
+    const rawResults = await this.companyRepo
+      .createQueryBuilder('c')
+      .leftJoin(
+        Job,
+        'j',
+        `j.company->>'_id' = c._id::text AND j.isDeleted = false AND j.isActive = true AND (j.startDate IS NULL OR j.startDate <= :now) AND (j.endDate IS NULL OR j.endDate >= :now)`,
+        { now },
+      )
+      .where('c.isActive = :isActive AND c.isDeleted = :isDeleted', {
+        isActive: true,
+        isDeleted: false,
+      })
+      .select([
+        'c._id as "_id"',
+        'c.name as "name"',
+        'c.logo as "logo"',
+        'c.address as "address"',
+        'c.scale as "scale"',
+        'c.taxCode as "taxCode"',
+        'c.isPremium as "isPremium"',
+        'COUNT(j._id) as "openJobs"',
+      ])
+      .groupBy('c._id')
+      .addGroupBy('c.name')
+      .addGroupBy('c.logo')
+      .addGroupBy('c.address')
+      .addGroupBy('c.scale')
+      .addGroupBy('c.taxCode')
+      .addGroupBy('c.isPremium')
+      .orderBy('"openJobs"', 'DESC')
+      .addOrderBy('c.isPremium', 'DESC')
+      .addOrderBy('c.name', 'ASC')
+      .limit(limit)
+      .getRawMany();
+
+    return rawResults.map((r) => ({
+      _id: r._id,
+      name: r.name,
+      logo: r.logo || null,
+      address: r.address || null,
+      scale: r.scale || null,
+      taxCode: r.taxCode || null,
+      isPremium: Boolean(r.isPremium),
+      openJobs: parseInt(r.openJobs, 10) || 0,
+    }));
+  }
 }
 

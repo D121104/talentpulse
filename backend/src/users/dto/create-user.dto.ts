@@ -23,6 +23,15 @@ export class Company {
 
   @IsOptional()
   isActive?: boolean;
+
+  @IsOptional()
+  scale?: string;
+
+  @IsOptional()
+  address?: string;
+
+  @IsOptional()
+  industry?: string;
 }
 
 export class RegisterUserDto {

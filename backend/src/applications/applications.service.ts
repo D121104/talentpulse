@@ -18,6 +18,7 @@ import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application.dto';
 import { UsersService } from 'src/users/users.service';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
+import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
 import { Role } from 'src/decorator/customize';
 import aqp from 'api-query-params';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -47,6 +48,7 @@ export class ApplicationsService implements OnModuleInit {
 
     private readonly usersService: UsersService,
     private readonly userCVsService: UserCVsService,
+    private readonly onlineCVsService: OnlineCVsService,
     private readonly notificationsService: NotificationsService,
     private readonly aiMatchingService: AIMatchingService,
     private readonly cvProcessingService: CVProcessingService,
@@ -67,13 +69,48 @@ export class ApplicationsService implements OnModuleInit {
     }
   }
 
-  // User applies for a job with selected CV
+  // User applies for a job with selected CV (supports both UserCV & OnlineCV)
   async create(createApplicationDto: CreateApplicationDto, user: IUser) {
     const { cvId, jobId, companyId, coverLetter } = createApplicationDto;
 
-    const cv = await this.userCVsService.findOne(cvId, user);
-    if (!cv) {
-      throw new BadRequestException('CV không tồn tại hoặc không thuộc về bạn');
+    // 1. Resolve CV: check if cvId belongs to uploaded UserCV or OnlineCV
+    let userCv: any = null;
+    let cvText = '';
+
+    try {
+      userCv = await this.userCVsService.findOne(cvId, user);
+    } catch {
+      userCv = null;
+    }
+
+    if (!userCv) {
+      try {
+        const onlineCv = await this.onlineCVsService.findOne(cvId, user);
+        if (onlineCv) {
+          // Bridge online CV to a UserCV record to satisfy DB foreign key & prep rich parsedText
+          userCv = await this.userCVsService.findOrCreateForOnlineCv(
+            onlineCv,
+            user,
+          );
+
+          // If online CV does not have exported pdfUrl yet, trigger background export
+          if (!onlineCv.pdfUrl) {
+            this.onlineCVsService
+              .exportToPdf(onlineCv._id, user)
+              .catch((err) =>
+                this.logger.warn(
+                  `Background PDF generation on apply failed: ${err?.message}`,
+                ),
+              );
+          }
+        }
+      } catch {
+        userCv = null;
+      }
+    }
+
+    if (!userCv) {
+      throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
     }
 
     const job = await this.jobsService.findOne(jobId);
@@ -82,7 +119,7 @@ export class ApplicationsService implements OnModuleInit {
     }
 
     const application = this.applicationRepo.create({
-      cvId,
+      cvId: userCv._id,
       userId: user._id,
       jobId,
       companyId,
@@ -106,40 +143,45 @@ export class ApplicationsService implements OnModuleInit {
 
     const savedApplication = await this.applicationRepo.save(application);
 
+    // Prepare CV text for AI matching
+    if (userCv.parsedText) {
+      cvText = userCv.parsedText;
+    } else if (userCv.url) {
+      // If CV was just uploaded and background parse queue hasn't processed it yet, extract on-the-fly
+      try {
+        cvText = (
+          await this.aiMatchingService.extractTextFromFile(userCv.url)
+        ).trim();
+        if (cvText) {
+          const sections =
+            this.aiMatchingService.extractSectionsFromText(cvText);
+          await this.userCVsService.updateParsedData(userCv._id, {
+            parsedText: cvText,
+            skills: sections.skills,
+            education: sections.education,
+            experience: sections.experience,
+            certificates: sections.certificates,
+          });
+        }
+      } catch (err) {
+        this.logger.warn(
+          `On-the-fly CV text extraction failed: ${err?.message}`,
+        );
+      }
+    }
+
     // Queue CV processing for AI matching (async)
     try {
       const jobSkills = Array.isArray(job.skills)
         ? job.skills.map((s: any) => (typeof s === 'string' ? s : s.name))
         : [];
 
-      let cvText = '';
-      const cvDoc = cv as any;
-
-      if (cvDoc.parsedText) {
-        cvText = cvDoc.parsedText;
-      } else if (cvDoc.onlineCvId) {
-        const parts = [
-          cvDoc.skills?.length ? `Skills: ${cvDoc.skills.join(', ')}` : '',
-          cvDoc.education?.length
-            ? `Education: ${cvDoc.education.join('. ')}`
-            : '',
-          cvDoc.experience?.length
-            ? `Experience: ${cvDoc.experience.join('. ')}`
-            : '',
-          cvDoc.certificates?.length
-            ? `Certificates: ${cvDoc.certificates.join(', ')}`
-            : '',
-          cvDoc.description || '',
-        ];
-        cvText = parts.filter(Boolean).join('\n');
-      }
-
       if (cvText && cvText.length > 10) {
         await this.cvProcessingService.queueCVProcessing({
-          cvId: cv._id.toString(),
+          cvId: userCv._id.toString(),
           userId: user._id,
           applicationId: savedApplication._id.toString(),
-          cvUrl: cv.url,
+          cvUrl: userCv.url,
           cvText,
           job: {
             _id: job._id.toString(),
@@ -149,9 +191,13 @@ export class ApplicationsService implements OnModuleInit {
             level: job.level,
           },
         });
+      } else {
+        this.logger.warn(
+          `CV text is too short or empty for CV ${userCv._id}, skipping AI matching`,
+        );
       }
     } catch (error) {
-      console.error('Failed to queue CV processing:', error);
+      this.logger.error('Failed to queue CV processing:', error);
     }
 
     const applicationInDb = await this.applicationRepo.findOne({
@@ -159,30 +205,43 @@ export class ApplicationsService implements OnModuleInit {
       relations: ['job', 'company', 'user'],
     });
 
-    if (applicationInDb && applicationInDb.companyId) {
-      const hrs = await this.usersService.findAllByCompanyId(
-        applicationInDb.companyId,
-      );
+    if (applicationInDb) {
+      const recipientUserIds = new Set<string>();
 
-      if (hrs && hrs.length > 0) {
-        for (const hr of hrs) {
-          const notiObj: CreateNotificationDto = {
-            userId: hr._id.toString(),
-            title: 'Đơn ứng tuyển mới',
-            content: `Bạn có một đơn ứng tuyển mới cho công việc ${
-              applicationInDb.job?.name || ''
-            } từ ứng viên ${applicationInDb.user?.name || ''}.`,
-            type: NotificationType.RESUME,
-            targetType: NotificationTargetType.APPLICATION,
-            targetId: savedApplication._id.toString(),
-            data: {
-              applicationId: savedApplication._id.toString(),
-              jobId: applicationInDb.jobId.toString(),
-            },
-          };
-
-          this.notificationsService.create(notiObj);
+      if (applicationInDb.companyId) {
+        const hrs = await this.usersService.findAllByCompanyId(
+          applicationInDb.companyId,
+        );
+        if (hrs && hrs.length > 0) {
+          hrs.forEach((hr: any) => {
+            if (hr?._id) recipientUserIds.add(hr._id.toString());
+          });
         }
+      }
+
+      if (applicationInDb.job?.createdBy?._id) {
+        recipientUserIds.add(applicationInDb.job.createdBy._id.toString());
+      }
+
+      for (const hrUserId of recipientUserIds) {
+        const notiObj: CreateNotificationDto = {
+          userId: hrUserId,
+          title: 'Đơn ứng tuyển mới',
+          content: `Ứng viên ${
+            applicationInDb.user?.name || 'mới'
+          } vừa nộp hồ sơ ứng tuyển vào vị trí "${
+            applicationInDb.job?.name || ''
+          }".`,
+          type: NotificationType.RESUME,
+          targetType: NotificationTargetType.APPLICATION,
+          targetId: savedApplication._id.toString(),
+          data: {
+            applicationId: savedApplication._id.toString(),
+            jobId: applicationInDb.jobId.toString(),
+          },
+        };
+
+        await this.notificationsService.create(notiObj);
       }
     }
 
@@ -259,7 +318,13 @@ export class ApplicationsService implements OnModuleInit {
     const formatted = applications.map((app) => ({
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       userId: app.user
         ? {
@@ -346,7 +411,13 @@ export class ApplicationsService implements OnModuleInit {
     const formatted = applications.map((app) => ({
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       userId: app.user
         ? {
@@ -381,7 +452,13 @@ export class ApplicationsService implements OnModuleInit {
     return applications.map((app) => ({
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       companyId: app.company
         ? {
@@ -416,7 +493,13 @@ export class ApplicationsService implements OnModuleInit {
     return {
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       userId: app.user
         ? {
@@ -1007,6 +1090,62 @@ export class ApplicationsService implements OnModuleInit {
     return {
       total: enrichedResults.length,
       result: enrichedResults,
+    };
+  }
+
+  // Candidate nudges/reminds HR about their application
+  async remindHR(id: string, user: IUser) {
+    const application = await this.applicationRepo.findOne({
+      where: { _id: id, userId: user._id, isDeleted: false },
+      relations: ['job', 'company'],
+    });
+
+    if (!application) {
+      throw new NotFoundException(
+        'Đơn ứng tuyển không tồn tại hoặc không thuộc quyền sở hữu của bạn',
+      );
+    }
+
+    const recipientUserIds = new Set<string>();
+    if (application.companyId) {
+      const hrs = await this.usersService.findAllByCompanyId(
+        application.companyId,
+      );
+      if (hrs && hrs.length > 0) {
+        hrs.forEach((hr: any) => {
+          if (hr?._id) recipientUserIds.add(hr._id.toString());
+        });
+      }
+    }
+
+    if (application.job?.createdBy?._id) {
+      recipientUserIds.add(application.job.createdBy._id.toString());
+    }
+
+    const candidateName = user.name || 'Ứng viên';
+    const jobName = application.job?.name || 'vị trí tuyển dụng';
+    const companyName = application.company?.name || 'Doanh nghiệp';
+
+    for (const hrUserId of recipientUserIds) {
+      await this.notificationsService.create({
+        userId: hrUserId,
+        title: 'Lời nhắc phản hồi hồ sơ từ ứng viên',
+        content: `Ứng viên ${candidateName} vừa gửi lời nhắc phản hồi cho hồ sơ ứng tuyển vị trí "${jobName}" tại ${companyName}.`,
+        type: NotificationType.RESUME,
+        targetType: NotificationTargetType.APPLICATION,
+        targetId: application._id,
+        data: {
+          applicationId: application._id,
+          jobId: application.jobId,
+          isReminder: true,
+          remindedAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    return {
+      success: true,
+      message: 'Đã gửi lời nhắc chuyên nghiệp tới Nhà tuyển dụng',
     };
   }
 }

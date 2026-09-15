@@ -1,5 +1,6 @@
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
+import { NotificationProvider } from './context/NotificationContext';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './auth/AuthContext';
 import { GuestRoute } from './auth/GuestRoute';
@@ -18,6 +19,10 @@ import EmployerDashboardPage from './pages/employer/EmployerDashboardPage';
 import PremiumPage from './pages/premium/PremiumPage';
 import PaymentHistoryPage from './pages/payment/PaymentHistoryPage';
 import PaymentVerifyPage from './pages/payment/PaymentVerifyPage';
+import JobSearchPage from './pages/jobs/JobSearchPage';
+import JobDetailPage from './pages/jobs/JobDetailPage';
+import SavedJobsPage from './pages/jobs/SavedJobsPage';
+import AppliedJobsPage from './pages/candidate/AppliedJobsPage';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
@@ -25,10 +30,15 @@ function App() {
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
-          <BrowserRouter>
-            <ScrollToTop />
-          <Routes>
+          <NotificationProvider>
+            <BrowserRouter>
+              <ScrollToTop />
+              <Routes>
             <Route path="/" element={<LandingPage />} />
+            <Route path="/jobs" element={<JobSearchPage />} />
+            <Route path="/jobs/:id" element={<JobDetailPage />} />
+            <Route path="/saved-jobs" element={<SavedJobsPage />} />
+            <Route path="/jobs/saved" element={<Navigate to="/saved-jobs" replace />} />
             <Route path="/verify-account" element={<VerifyAccountPage />} />
             <Route element={<GuestRoute />}>
               <Route path="/login" element={<LoginPage />} />
@@ -58,8 +68,12 @@ function App() {
             <Route element={<ProtectedRoute allowedRoles={['USER', 'ADMIN']} />}>
               <Route path="/my-cv" element={<MyCVPage />} />
               <Route path="/mycv" element={<Navigate to="/my-cv" replace />} />
+              <Route path="/cv/my-cv" element={<Navigate to="/my-cv" replace />} />
+              <Route path="/cv/mycv" element={<Navigate to="/my-cv" replace />} />
               <Route path="/profile-viewers" element={<ProfileViewersPage />} />
               <Route path="/profile/cv-views" element={<Navigate to="/profile-viewers" replace />} />
+              <Route path="/applied-jobs" element={<AppliedJobsPage />} />
+              <Route path="/jobs/applied" element={<Navigate to="/applied-jobs" replace />} />
               <Route path="/cv-templates" element={<CVTemplatePage />} />
               <Route path="/cv-editor/:id" element={<CVEditorPage />} />
               <Route path="/cv-editor/new" element={<CVEditorPage />} />
@@ -68,9 +82,10 @@ function App() {
 
           </Routes>
         </BrowserRouter>
-      </AuthProvider>
-    </ToastProvider>
-  </ThemeProvider>
+      </NotificationProvider>
+    </AuthProvider>
+  </ToastProvider>
+</ThemeProvider>
   );
 }
 

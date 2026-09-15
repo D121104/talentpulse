@@ -108,6 +108,10 @@ export interface HrJobItem {
   salary: number;
   quantity: number;
   level: string;
+  workingModel?: string;
+  education?: string;
+  benefits?: string[];
+  categories?: string[];
   description: string;
   location: string;
   startDate: string;
@@ -115,11 +119,14 @@ export interface HrJobItem {
   isActive: boolean;
   isHot?: boolean;
   boostedAt?: string | null;
+  boostExpiresAt?: string | null;
   applicationsCount?: number;
   company?: {
     _id: string;
     name: string;
     logo?: string;
+    scale?: string;
+    address?: string;
   };
   createdAt: string;
 }
@@ -248,6 +255,8 @@ export interface NotificationItem {
   targetId: string;
   isRead: boolean;
   createdAt: string;
+  userId?: string;
+  data?: Record<string, any>;
 }
 
 export interface CandidateEmployerViewItem {
@@ -363,10 +372,14 @@ export const employerApi = {
     data: {
       name: string;
       skills: string[];
-      company: { _id: string; name: string; logo?: string };
+      company: { _id: string; name: string; logo?: string; scale?: string; address?: string };
       salary: number;
       quantity: number;
       level: string;
+      workingModel?: string;
+      education?: string;
+      benefits?: string[];
+      categories?: string[];
       description: string;
       location: string;
       startDate: string;
@@ -384,6 +397,12 @@ export const employerApi = {
 
   boostJob: (id: string, accessToken: string) =>
     apiRequest<{ message: string; job: HrJobItem }>(`/jobs/${id}/boost`, {
+      method: 'PATCH',
+      accessToken,
+    }),
+
+  unboostJob: (id: string, accessToken: string) =>
+    apiRequest<{ message: string; job: HrJobItem }>(`/jobs/${id}/unboost`, {
       method: 'PATCH',
       accessToken,
     }),

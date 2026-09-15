@@ -1,21 +1,19 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
-import { Menu, X, Sun, Moon, LogOut, Briefcase, FileText, Sparkles, CheckCircle2, UploadCloud, LayoutTemplate, Eye } from 'lucide-react';
+import { Menu, X, Sun, Moon, LogOut, Briefcase, FileText, Sparkles, CheckCircle2, UploadCloud, LayoutTemplate, Eye, Send } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { useToast } from '../../context/ToastContext';
 import { LanguageSwitcher } from '../common/LanguageSwitcher';
 import { UserAvatar } from '../common/UserAvatar';
 import { UserDropdownMenu } from './UserDropdownMenu';
 import { CVDropdownMenu } from './CVDropdownMenu';
-import { getNotificationSocket } from '../../lib/socket';
+import { NotificationDropdown } from '../notifications/NotificationDropdown';
 
 export default function Header() {
   const { t } = useTranslation();
   const { theme, toggleTheme } = useTheme();
   const { user, status, logout } = useAuth();
-  const { info } = useToast();
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -25,25 +23,6 @@ export default function Header() {
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
-
-  // Realtime notification socket listener
-  useEffect(() => {
-    if (!user?._id) return;
-
-    const socket = getNotificationSocket(user._id);
-
-    const handleNotification = (notif: any) => {
-      if (notif?.title) {
-        info(notif.title, notif.content || 'Nhấn để xem chi tiết');
-      }
-    };
-
-    socket.on('notification', handleNotification);
-
-    return () => {
-      socket.off('notification', handleNotification);
-    };
-  }, [user?._id, info]);
 
   const handleLogout = async () => {
     await logout();
@@ -76,12 +55,12 @@ export default function Header() {
 
           {/* Desktop Nav */}
           <nav className="hidden lg:flex items-center gap-1">
-            <a
-              href="/#featured-jobs"
+            <Link
+              to="/jobs"
               className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary dark:hover:text-primary-light rounded-lg hover:bg-slate-100/60 dark:hover:bg-slate-800/60 transition-all duration-200"
             >
               {t('nav.jobs')}
-            </a>
+            </Link>
             <a
               href="/#categories"
               className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary dark:hover:text-primary-light rounded-lg hover:bg-slate-100/60 dark:hover:bg-slate-800/60 transition-all duration-200"
@@ -135,6 +114,13 @@ export default function Header() {
                 </>
               )}
             </div>
+
+            {/* Mobile Notification Dropdown when Authenticated */}
+            {status === 'authenticated' && user && (
+              <div className="lg:hidden flex items-center">
+                <NotificationDropdown />
+              </div>
+            )}
 
             {/* Mobile Menu Toggle */}
             <button
@@ -202,13 +188,13 @@ export default function Header() {
             )}
 
             {/* Standard Nav Links */}
-            <a
-              href="/#featured-jobs"
+            <Link
+              to="/jobs"
               onClick={() => setMobileMenuOpen(false)}
               className="block px-4 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors"
             >
               {t('nav.jobs')}
-            </a>
+            </Link>
             <a
               href="/#categories"
               onClick={() => setMobileMenuOpen(false)}
@@ -252,6 +238,14 @@ export default function Header() {
               >
                 <Eye className="h-4 w-4 text-slate-400" />
                 <span>{t('userMenu.profileViewers', 'Nhà tuyển dụng đã xem CV')}</span>
+              </Link>
+              <Link
+                to="/applied-jobs"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-2.5 px-3 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-primary rounded-xl hover:bg-white dark:hover:bg-slate-700 transition-colors"
+              >
+                <Send className="h-4 w-4 text-slate-400" />
+                <span>{t('userMenu.appliedJobs', 'Việc làm đã ứng tuyển')}</span>
               </Link>
               <Link
                 to="/cv-templates"

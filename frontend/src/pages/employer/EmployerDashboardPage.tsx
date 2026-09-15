@@ -24,6 +24,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { LanguageSwitcher } from '../../components/common/LanguageSwitcher';
 import { useToast } from '../../context/ToastContext';
+import { useNotification } from '../../context/NotificationContext';
 import {
   employerApi,
   type HrDashboardStats,
@@ -57,6 +58,7 @@ export default function EmployerDashboardPage() {
   const { theme, toggleTheme } = useTheme();
   const { user, accessToken, logout } = useAuth();
   const { info, success, error } = useToast();
+  const { unreadCount: unreadNotificationsCount, fetchUnreadCount: fetchUnreadNotifications } = useNotification();
   const navigate = useNavigate();
   const location = useLocation();
   const { id: routeJobId } = useParams<{ id?: string }>();
@@ -87,7 +89,6 @@ export default function EmployerDashboardPage() {
   );
 
   const [statsData, setStatsData] = useState<HrDashboardStats | null>(null);
-  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
@@ -136,22 +137,6 @@ export default function EmployerDashboardPage() {
       setEditingJob(null);
     }
   }, [isEditJobRoute, isCreateJobRoute, routeJobId, accessToken, navigate, error]);
-
-  const fetchUnreadNotifications = useCallback(async () => {
-    if (!accessToken) return;
-    try {
-      const res = await employerApi.getUnreadNotificationsCount(accessToken);
-      const count =
-        typeof res === 'number'
-          ? res
-          : typeof (res as any)?.count === 'number'
-            ? (res as any).count
-            : Number(res) || 0;
-      setUnreadNotificationsCount(count);
-    } catch (err) {
-      console.error('Failed to load unread notifications count', err);
-    }
-  }, [accessToken]);
 
   const fetchDashboardData = useCallback(async () => {
     if (!accessToken) return;
@@ -249,6 +234,10 @@ export default function EmployerDashboardPage() {
             salary: Number(formData.salary),
             quantity: Number(formData.quantity),
             level: formData.level,
+            workingModel: formData.workingModel,
+            education: formData.education,
+            benefits: formData.benefits,
+            categories: formData.categories,
             description: formData.description,
             location: formData.location,
             startDate: new Date(formData.startDate).toISOString(),
@@ -267,10 +256,16 @@ export default function EmployerDashboardPage() {
               _id: statsData.company._id,
               name: statsData.company.name,
               logo: statsData.company.logo,
+              scale: statsData.company.scale,
+              address: statsData.company.address,
             },
             salary: Number(formData.salary),
             quantity: Number(formData.quantity),
             level: formData.level,
+            workingModel: formData.workingModel,
+            education: formData.education,
+            benefits: formData.benefits,
+            categories: formData.categories,
             description: formData.description,
             location: formData.location,
             startDate: new Date(formData.startDate).toISOString(),
@@ -650,6 +645,7 @@ export default function EmployerDashboardPage() {
                     accessToken={accessToken}
                     todayPostedCount={statsData?.stats?.todayJobsPostedCount ?? 0}
                     maxDailyJobs={statsData?.stats?.maxDailyJobs ?? 5}
+                    isPremium={Boolean(statsData?.isPremium || (statsData?.stats?.maxDailyJobs ?? 0) >= 999)}
                     onNavigateTab={handleNavigateTab}
                     onRefreshStats={refreshAll}
                   />

@@ -14,6 +14,8 @@ import { MailModule } from 'src/mail/mail.module';
 import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 import { createNoopQueueProvider } from 'src/queues/queue-runtime';
 
+import { OnlineCVsModule } from 'src/online-cvs/online-cvs.module';
+
 const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
@@ -24,6 +26,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
       : []),
     UsersModule,
     UserCVsModule,
+    OnlineCVsModule,
     NotificationsModule,
     AIMatchingModule,
     MailModule,

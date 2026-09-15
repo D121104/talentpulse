@@ -33,10 +33,8 @@ export function isCanonicalActiveJob(
       company.isActive === true &&
       company.isDeleted === false &&
       !company.deletedAt &&
-      job.startDate &&
-      job.endDate &&
-      job.startDate <= now &&
-      now < job.endDate &&
+      (!job.startDate || job.startDate <= now) &&
+      (!job.endDate || now < job.endDate) &&
       job.company?._id === company._id,
   );
 }
@@ -61,19 +59,17 @@ export class ActiveJobQueryService {
     return queryBuilder
       .innerJoin(
         Company,
-        'canonicalCompany',
-        `canonicalCompany."_id"::text = job.company->>'_id'`,
+        'canonical_company',
+        `canonical_company."_id"::text = job.company->>'_id'`,
       )
       .andWhere('job."isActive" = true')
       .andWhere('job."isDeleted" = false')
       .andWhere('job."deletedAt" IS NULL')
-      .andWhere('canonicalCompany."isActive" = true')
-      .andWhere('canonicalCompany."isDeleted" = false')
-      .andWhere('canonicalCompany."deletedAt" IS NULL')
-      .andWhere('job."startDate" IS NOT NULL')
-      .andWhere('job."endDate" IS NOT NULL')
-      .andWhere('job."startDate" <= :activeJobNow')
-      .andWhere('job."endDate" > :activeJobNow')
+      .andWhere('canonical_company."isActive" = true')
+      .andWhere('canonical_company."isDeleted" = false')
+      .andWhere('canonical_company."deletedAt" IS NULL')
+      .andWhere('(job."startDate" IS NULL OR job."startDate" <= :activeJobNow)')
+      .andWhere('(job."endDate" IS NULL OR job."endDate" > :activeJobNow)')
       .setParameter('activeJobNow', now);
   }
 

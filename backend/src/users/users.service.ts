@@ -520,9 +520,18 @@ export class UsersService {
   isUserPremium(user: User | IUser | any): boolean {
     if (!user) return false;
     if (user.role === Role.ADMIN) return true;
-    if (!user.isPremium) return false;
+    const isPrem =
+      user.isPremium === true ||
+      user.isPremium === 'true' ||
+      user.isPremium === 1 ||
+      (user.premiumPlan && user.premiumPlan !== PremiumPlan.FREE);
+    if (!isPrem) return false;
     if (!user.premiumExpiresAt) return true; // Gói vĩnh viễn hoặc chưa hết hạn
-    return new Date(user.premiumExpiresAt) > new Date();
+    try {
+      return new Date(user.premiumExpiresAt).getTime() > Date.now();
+    } catch {
+      return true;
+    }
   }
 
   /**
@@ -532,7 +541,10 @@ export class UsersService {
     if (!user) return false;
     if (user.role === Role.ADMIN) return true;
     if (!this.isUserPremium(user)) return false;
-    return user.premiumPlan === PremiumPlan.HR_PREMIUM;
+    return (
+      user.premiumPlan === PremiumPlan.HR_PREMIUM ||
+      user.role === Role.HR
+    );
   }
 
   /**
@@ -542,7 +554,15 @@ export class UsersService {
     if (!user) return false;
     if (user.role === Role.ADMIN) return true;
     if (!this.isUserPremium(user)) return false;
-    return user.premiumPlan === PremiumPlan.CANDIDATE_PREMIUM;
+    if (user.premiumPlan === PremiumPlan.CANDIDATE_PREMIUM) return true;
+    if (user.role === Role.USER) return true;
+    if (
+      user.premiumPlan &&
+      String(user.premiumPlan).toUpperCase().includes('CANDIDATE')
+    ) {
+      return true;
+    }
+    return user.role !== Role.HR;
   }
 
   /**
