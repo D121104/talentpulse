@@ -24,6 +24,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { LanguageSwitcher } from '../../components/common/LanguageSwitcher';
 import { useToast } from '../../context/ToastContext';
+import { useNotification } from '../../context/NotificationContext';
 import {
   employerApi,
   type HrDashboardStats,
@@ -57,6 +58,7 @@ export default function EmployerDashboardPage() {
   const { theme, toggleTheme } = useTheme();
   const { user, accessToken, logout } = useAuth();
   const { info, success, error } = useToast();
+  const { unreadCount: unreadNotificationsCount, fetchUnreadCount: fetchUnreadNotifications } = useNotification();
   const navigate = useNavigate();
   const location = useLocation();
   const { id: routeJobId } = useParams<{ id?: string }>();
@@ -87,7 +89,6 @@ export default function EmployerDashboardPage() {
   );
 
   const [statsData, setStatsData] = useState<HrDashboardStats | null>(null);
-  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
@@ -136,22 +137,6 @@ export default function EmployerDashboardPage() {
       setEditingJob(null);
     }
   }, [isEditJobRoute, isCreateJobRoute, routeJobId, accessToken, navigate, error]);
-
-  const fetchUnreadNotifications = useCallback(async () => {
-    if (!accessToken) return;
-    try {
-      const res = await employerApi.getUnreadNotificationsCount(accessToken);
-      const count =
-        typeof res === 'number'
-          ? res
-          : typeof (res as any)?.count === 'number'
-            ? (res as any).count
-            : Number(res) || 0;
-      setUnreadNotificationsCount(count);
-    } catch (err) {
-      console.error('Failed to load unread notifications count', err);
-    }
-  }, [accessToken]);
 
   const fetchDashboardData = useCallback(async () => {
     if (!accessToken) return;

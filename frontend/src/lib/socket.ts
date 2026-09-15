@@ -41,21 +41,30 @@ export function getNotificationSocket(userId?: string): Socket {
       autoConnect: true,
       withCredentials: true,
       reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 2000,
+      reconnectionAttempts: 20,
+      reconnectionDelay: 1500,
       query: userId ? { userId } : undefined,
     });
-  } else if (userId && notificationSocket.io.opts.query && (notificationSocket.io.opts.query as any).userId !== userId) {
-    notificationSocket.disconnect();
-    notificationSocket = io(wsUrl, {
-      transports: ['websocket', 'polling'],
-      autoConnect: true,
-      withCredentials: true,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 2000,
-      query: { userId },
-    });
+  }
+
+  // If userId is provided, ensure socket is joined to user room
+  if (userId && notificationSocket) {
+    const currentQuery = (notificationSocket.io.opts.query as any) || {};
+    if (currentQuery.userId !== userId) {
+      currentQuery.userId = userId;
+      notificationSocket.io.opts.query = currentQuery;
+    }
+
+    const joinRoom = () => {
+      notificationSocket?.emit('join', { userId });
+    };
+
+    if (notificationSocket.connected) {
+      joinRoom();
+    } else {
+      notificationSocket.off('connect', joinRoom);
+      notificationSocket.on('connect', joinRoom);
+    }
   }
 
   return notificationSocket;

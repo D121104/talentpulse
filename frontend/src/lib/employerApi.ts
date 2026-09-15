@@ -255,6 +255,8 @@ export interface NotificationItem {
   targetId: string;
   isRead: boolean;
   createdAt: string;
+  userId?: string;
+  data?: Record<string, any>;
 }
 
 export interface CandidateEmployerViewItem {

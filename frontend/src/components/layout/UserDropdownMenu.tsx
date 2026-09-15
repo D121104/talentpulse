@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Bell,
   MessageSquare,
   ChevronDown,
   Briefcase,
@@ -26,6 +25,7 @@ import {
 import { formatDate, parseDate } from '../../lib/dateUtils';
 import { useAuth } from '../../auth/AuthContext';
 import { UserAvatar } from '../common/UserAvatar';
+import { NotificationDropdown } from '../notifications/NotificationDropdown';
 
 export function UserDropdownMenu() {
   const { t } = useTranslation();
@@ -88,17 +88,8 @@ export function UserDropdownMenu() {
 
   return (
     <div className="flex items-center gap-1.5 sm:gap-2.5">
-      {/* Quick Action: Notifications Icon */}
-      <button
-        type="button"
-        className="relative flex h-10 w-10 items-center justify-center rounded-full bg-slate-100/80 text-slate-600 transition hover:bg-primary/10 hover:text-primary dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-primary/20 dark:hover:text-primary-light cursor-pointer"
-        aria-label={t('userMenu.notifications')}
-        title={t('userMenu.notifications')}
-      >
-        <Bell className="h-5 w-5" />
-        {/* Subtle unread badge dot in Primary Blue */}
-        <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-primary ring-2 ring-white dark:ring-slate-900" />
-      </button>
+      {/* Quick Action: Notifications Dropdown (Candidate & HR) */}
+      <NotificationDropdown />
 
       {/* Quick Action: Messages Icon */}
       <button

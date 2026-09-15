@@ -1,5 +1,6 @@
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
+import { NotificationProvider } from './context/NotificationContext';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './auth/AuthContext';
 import { GuestRoute } from './auth/GuestRoute';
@@ -21,6 +22,7 @@ import PaymentVerifyPage from './pages/payment/PaymentVerifyPage';
 import JobSearchPage from './pages/jobs/JobSearchPage';
 import JobDetailPage from './pages/jobs/JobDetailPage';
 import SavedJobsPage from './pages/jobs/SavedJobsPage';
+import AppliedJobsPage from './pages/candidate/AppliedJobsPage';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
@@ -28,9 +30,10 @@ function App() {
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
-          <BrowserRouter>
-            <ScrollToTop />
-          <Routes>
+          <NotificationProvider>
+            <BrowserRouter>
+              <ScrollToTop />
+              <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/jobs" element={<JobSearchPage />} />
             <Route path="/jobs/:id" element={<JobDetailPage />} />
@@ -69,6 +72,8 @@ function App() {
               <Route path="/cv/mycv" element={<Navigate to="/my-cv" replace />} />
               <Route path="/profile-viewers" element={<ProfileViewersPage />} />
               <Route path="/profile/cv-views" element={<Navigate to="/profile-viewers" replace />} />
+              <Route path="/applied-jobs" element={<AppliedJobsPage />} />
+              <Route path="/jobs/applied" element={<Navigate to="/applied-jobs" replace />} />
               <Route path="/cv-templates" element={<CVTemplatePage />} />
               <Route path="/cv-editor/:id" element={<CVEditorPage />} />
               <Route path="/cv-editor/new" element={<CVEditorPage />} />
@@ -77,9 +82,10 @@ function App() {
 
           </Routes>
         </BrowserRouter>
-      </AuthProvider>
-    </ToastProvider>
-  </ThemeProvider>
+      </NotificationProvider>
+    </AuthProvider>
+  </ToastProvider>
+</ThemeProvider>
   );
 }
 

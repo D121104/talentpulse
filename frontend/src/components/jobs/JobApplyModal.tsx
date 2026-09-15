@@ -97,12 +97,16 @@ export default function JobApplyModal({
       setUploadingFile(true);
       const uploadRes = await fileUploadApi.uploadCvFile(file, accessToken);
       if (uploadRes?.url) {
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        const fileType: 'pdf' | 'doc' | 'docx' =
+          ext === 'doc' || ext === 'docx' ? ext : 'pdf';
+
         // Create UserCV record
         const createdCv = await userCvApi.create(
           {
             title: file.name.replace(/\.[^/.]+$/, ''),
             url: uploadRes.url,
-            fileType: file.type || 'application/pdf',
+            fileType,
             isPrimary: uploadedCvs.length === 0,
           },
           accessToken,
