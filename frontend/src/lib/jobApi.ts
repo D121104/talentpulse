@@ -5,6 +5,9 @@ export interface JobCompany {
   name?: string;
   logo?: string;
   isActive?: boolean;
+  scale?: string;
+  address?: string;
+  industry?: string;
 }
 
 export interface JobItem {
@@ -15,15 +18,23 @@ export interface JobItem {
   company?: JobCompany;
   salary?: number | string | null;
   level?: string;
+  workingModel?: string;
+  education?: string;
+  benefits?: string[];
+  categories?: string[];
   location?: string;
   startDate?: string;
   endDate?: string;
   quantity?: number;
   isHot?: boolean;
+  boostedAt?: string | null;
+  boostExpiresAt?: string | null;
   isFeatured?: boolean;
   isUrgent?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  savedAt?: string | Date;
+  isSaved?: boolean;
   _score?: number;
 }
 
@@ -230,3 +241,108 @@ export function formatRelativeTime(date?: string | Date): string {
   if (diffDays < 30) return `${diffDays} ngày trước`;
   return `${Math.floor(diffDays / 30)} tháng trước`;
 }
+
+// ----------------------------------------------------
+// Saved Jobs APIs (PostgreSQL + JWT authenticated)
+// ----------------------------------------------------
+
+export async function toggleSaveJobApi(
+  jobId: string,
+  accessToken: string,
+): Promise<{ isSaved: boolean; message: string; jobId: string }> {
+  return apiRequest<{ isSaved: boolean; message: string; jobId: string }>(
+    '/saved-jobs/toggle',
+    {
+      method: 'POST',
+      body: { jobId },
+      accessToken,
+    },
+  );
+}
+
+export async function getMySavedJobsApi(
+  accessToken: string,
+  params: { current?: number; pageSize?: number } = {},
+): Promise<SearchJobsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.current) queryParams.set('current', String(params.current));
+  if (params.pageSize) queryParams.set('pageSize', String(params.pageSize));
+
+  const queryString = queryParams.toString();
+  const url = queryString ? `/saved-jobs?${queryString}` : '/saved-jobs';
+
+  return apiRequest<SearchJobsResponse>(url, { accessToken });
+}
+
+export async function getMySavedJobIdsApi(
+  accessToken: string,
+): Promise<string[]> {
+  return apiRequest<string[]>('/saved-jobs/ids', { accessToken });
+}
+
+export async function removeSavedJobApi(
+  jobId: string,
+  accessToken: string,
+): Promise<{ isSaved: boolean; message: string; jobId: string }> {
+  return apiRequest<{ isSaved: boolean; message: string; jobId: string }>(
+    `/saved-jobs/${jobId}`,
+    {
+      method: 'DELETE',
+      accessToken,
+    },
+  );
+}
+
+export interface JobApplicantCountStatus {
+  isUnlocked: boolean;
+  applicantCount: number | null;
+  weeklyQuotaUsed: number;
+  weeklyQuotaRemaining: number;
+  weeklyQuotaMax: number;
+  nextResetDate: string;
+  isPremium: boolean;
+  isAdminOrHr?: boolean;
+}
+
+export async function getJobApplicantCountStatusApi(
+  jobId: string,
+  accessToken?: string | null,
+): Promise<JobApplicantCountStatus> {
+  return apiRequest<JobApplicantCountStatus>(
+    `/jobs/${jobId}/applicant-count-status`,
+    {
+      accessToken: accessToken || undefined,
+    },
+  );
+}
+
+export async function unlockJobApplicantCountApi(
+  jobId: string,
+  accessToken: string,
+): Promise<JobApplicantCountStatus> {
+  return apiRequest<JobApplicantCountStatus>(
+    `/jobs/${jobId}/unlock-applicant-count`,
+    {
+      method: 'POST',
+      accessToken,
+    },
+  );
+}
+
+export interface TopHiringCompany {
+  _id: string;
+  name: string;
+  logo?: string | null;
+  address?: string | null;
+  scale?: string | null;
+  taxCode?: string | null;
+  isPremium?: boolean;
+  openJobs: number;
+}
+
+export async function getTopHiringCompaniesApi(
+  limit: number = 10,
+): Promise<TopHiringCompany[]> {
+  return apiRequest<TopHiringCompany[]>(`/companies/top-hiring?limit=${limit}`);
+}
+

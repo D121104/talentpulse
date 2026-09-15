@@ -65,6 +65,8 @@ function App() {
             <Route element={<ProtectedRoute allowedRoles={['USER', 'ADMIN']} />}>
               <Route path="/my-cv" element={<MyCVPage />} />
               <Route path="/mycv" element={<Navigate to="/my-cv" replace />} />
+              <Route path="/cv/my-cv" element={<Navigate to="/my-cv" replace />} />
+              <Route path="/cv/mycv" element={<Navigate to="/my-cv" replace />} />
               <Route path="/profile-viewers" element={<ProfileViewersPage />} />
               <Route path="/profile/cv-views" element={<Navigate to="/profile-viewers" replace />} />
               <Route path="/cv-templates" element={<CVTemplatePage />} />

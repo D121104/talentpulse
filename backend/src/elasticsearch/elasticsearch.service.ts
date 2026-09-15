@@ -15,9 +15,15 @@ export interface ElasticsearchJobDoc {
     name: string;
     logo?: string;
     isActive?: boolean;
+    scale?: string;
+    address?: string;
   };
   salary: number;
   level: string;
+  workingModel?: string;
+  education?: string;
+  benefits?: string[];
+  categories?: string[];
   location: string;
   startDate: string | null;
   endDate: string | null;
@@ -181,11 +187,18 @@ export class ElasticsearchService implements OnModuleInit {
       },
       salary: Number(job.salary) || 0,
       level: job.level || '',
+      workingModel: job.workingModel || 'Làm việc tại văn phòng / Onsite',
+      education: job.education || 'Đại học trở lên',
+      benefits: Array.isArray(job.benefits) ? job.benefits : [],
+      categories: Array.isArray(job.categories) ? job.categories : [],
       location: job.location || '',
       startDate: job.startDate ? new Date(job.startDate).toISOString() : null,
       endDate: job.endDate ? new Date(job.endDate).toISOString() : null,
       isActive: job.isActive !== false,
-      isHot: Boolean(job.isHot),
+      isHot: Boolean(
+        job.isHot &&
+          (!job.boostExpiresAt || new Date(job.boostExpiresAt) > new Date()),
+      ),
       boostedAt: job.boostedAt ? new Date(job.boostedAt).toISOString() : null,
       boostExpiresAt: job.boostExpiresAt
         ? new Date(job.boostExpiresAt).toISOString()
@@ -673,10 +686,100 @@ export class ElasticsearchService implements OnModuleInit {
       });
     }
 
-    if (level && level.trim()) {
+    if (level && level.trim() && level.trim() !== 'Tất cả cấp bậc') {
+      const levelParts = level
+        .split(',')
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      const levelVariants = new Set<string>();
+
+      const LEVEL_ALIAS_MAP: Record<string, string[]> = {
+        intern: [
+          'INTERN',
+          'Intern',
+          'intern',
+          'Thực tập sinh',
+          'Thực tập sinh (Intern)',
+          'Thực tập',
+        ],
+        fresher: [
+          'FRESHER',
+          'Fresher',
+          'fresher',
+          'Mới đi làm (Fresher)',
+          'Mới tốt nghiệp',
+        ],
+        junior: [
+          'JUNIOR',
+          'Junior',
+          'junior',
+          'Junior (1 - 2 năm)',
+          'Nhân viên',
+        ],
+        middle: [
+          'MIDDLE',
+          'Middle',
+          'middle',
+          'Middle (2 - 4 năm)',
+          'Chuyên viên',
+        ],
+        senior: [
+          'SENIOR',
+          'Senior',
+          'senior',
+          'Senior (4+ năm)',
+          'Senior (5+ năm)',
+          'Cao cấp',
+        ],
+        lead: [
+          'LEAD',
+          'Lead',
+          'lead',
+          'Trưởng nhóm',
+          'Trưởng nhóm (Lead)',
+          'Lead / Trưởng nhóm',
+        ],
+        manager: [
+          'MANAGER',
+          'Manager',
+          'manager',
+          'Quản lý',
+          'Trưởng phòng',
+          'Quản lý (Manager)',
+          'Manager / Trưởng phòng',
+        ],
+        director: [
+          'DIRECTOR',
+          'Director',
+          'director',
+          'Giám đốc',
+          'Director / Giám đốc',
+        ],
+      };
+
+      for (const part of levelParts) {
+        const lower = part.toLowerCase();
+        levelVariants.add(part);
+        levelVariants.add(part.toUpperCase());
+        levelVariants.add(part.toLowerCase());
+        levelVariants.add(
+          part.charAt(0).toUpperCase() + part.slice(1).toLowerCase(),
+        );
+
+        for (const [key, aliases] of Object.entries(LEVEL_ALIAS_MAP)) {
+          if (
+            lower.includes(key) ||
+            aliases.some((a) => a.toLowerCase() === lower)
+          ) {
+            aliases.forEach((a) => levelVariants.add(a));
+          }
+        }
+      }
+
       must.push({
-        term: {
-          level: level.trim(),
+        terms: {
+          level: Array.from(levelVariants),
         },
       });
     }
@@ -693,11 +796,32 @@ export class ElasticsearchService implements OnModuleInit {
     }
 
     if (isHot !== undefined) {
-      must.push({
-        term: {
-          isHot: Boolean(isHot),
-        },
-      });
+      if (Boolean(isHot)) {
+        must.push({
+          bool: {
+            filter: [
+              { term: { isHot: true } },
+              {
+                bool: {
+                  should: [
+                    { bool: { must_not: { exists: { field: 'boostExpiresAt' } } } },
+                    { range: { boostExpiresAt: { gt: nowIso } } },
+                  ],
+                },
+              },
+            ],
+          },
+        });
+      } else {
+        must.push({
+          bool: {
+            should: [
+              { term: { isHot: false } },
+              { range: { boostExpiresAt: { lte: nowIso } } },
+            ],
+          },
+        });
+      }
     }
 
     if (isFeatured !== undefined) {

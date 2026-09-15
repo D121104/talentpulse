@@ -14,7 +14,7 @@ import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
-import { User, Roles, Role } from 'src/decorator/customize';
+import { User, Roles, Role, ResponseMessage } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 import { ApiTags } from '@nestjs/swagger';
 import { RolesGuard } from 'src/guards/roles.guard';
@@ -125,6 +125,32 @@ export class JobsController {
     return this.jobsService.findOne(id);
   }
 
+  @Get(':id/applicant-count-status')
+  @ResponseMessage('Lấy thông tin số lượng ứng viên và hạn mức xem')
+  async getApplicantCountStatus(@Param('id') id: string, @Req() req: any) {
+    let user = req.user;
+    if (!user && req.headers?.authorization) {
+      try {
+        const authHeader = req.headers.authorization;
+        const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+        const decoded: any = this.jwtService.decode(token);
+        if (decoded) {
+          user = decoded;
+        }
+      } catch {
+        // Ignore decode errors
+      }
+    }
+    return this.jobsService.getApplicantCountStatus(id, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/unlock-applicant-count')
+  @ResponseMessage('Mở khóa xem số lượng người ứng tuyển')
+  unlockApplicantCount(@Param('id') id: string, @User() user: IUser) {
+    return this.jobsService.unlockApplicantCount(id, user);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.HR)
   @Patch(':id')
@@ -141,6 +167,13 @@ export class JobsController {
   @Patch(':id/boost')
   boostJob(@Param('id') id: string, @User() user: IUser) {
     return this.jobsService.boostJob(id, user);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.HR)
+  @Patch(':id/unboost')
+  unboostJob(@Param('id') id: string, @User() user: IUser) {
+    return this.jobsService.unboostJob(id, user);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

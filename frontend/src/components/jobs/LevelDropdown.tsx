@@ -72,16 +72,16 @@ export default function LevelDropdown({
 
   const handleToggleSelectAll = () => {
     setSelectedLevels([]);
+    onChange('Tất cả cấp bậc');
   };
 
   const handleToggleLevel = (levelId: string) => {
-    setSelectedLevels((prev) => {
-      if (prev.includes(levelId)) {
-        return prev.filter((id) => id !== levelId);
-      } else {
-        return [...prev, levelId];
-      }
-    });
+    const next = selectedLevels.includes(levelId)
+      ? selectedLevels.filter((id) => id !== levelId)
+      : [...selectedLevels, levelId];
+
+    setSelectedLevels(next);
+    onChange(next.length === 0 ? 'Tất cả cấp bậc' : next.join(', '));
   };
 
   const handleApply = () => {
@@ -95,6 +95,7 @@ export default function LevelDropdown({
 
   const handleClearAll = () => {
     setSelectedLevels([]);
+    onChange('Tất cả cấp bậc');
   };
 
   const displayLabel = useMemo(() => {

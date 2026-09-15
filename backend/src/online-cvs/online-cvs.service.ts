@@ -390,6 +390,16 @@ export class OnlineCVsService {
         ...(contentToUse ? { htmlContent: contentToUse } : {}),
       });
 
+      // Also sync pdfUrl to linked UserCV records if present
+      try {
+        await this.onlineCVRepo.query(
+          'UPDATE user_cvs SET url = $1 WHERE "onlineCvId" = $2',
+          [uploadResult.url, id],
+        );
+      } catch {
+        // Ignore if not present
+      }
+
       return {
         _id: cv._id,
         pdfUrl: uploadResult.url,

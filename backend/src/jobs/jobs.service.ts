@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -19,6 +20,7 @@ import {
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { Job } from './entities/job.entity';
+import { JobApplicantView } from './entities/job-applicant-view.entity';
 import aqp from 'api-query-params';
 import { IUser } from 'src/users/users.interface';
 import { Role } from 'src/decorator/customize';
@@ -50,6 +52,20 @@ export function getIsoWeekString(d: Date = new Date()): string {
   const weekNumber =
     1 + Math.ceil((firstThursday - target.valueOf()) / 604800000);
   return `${d.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
+}
+
+export function getCurrentWeekRange(now: Date = new Date()) {
+  const current = new Date(now);
+  const day = current.getDay(); // 0 is Sunday, 1 is Monday, ...
+  const diffToMonday = (day === 0 ? -6 : 1) - day;
+  const startOfWeek = new Date(current);
+  startOfWeek.setDate(current.getDate() + diffToMonday);
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  const nextWeekReset = new Date(startOfWeek);
+  nextWeekReset.setDate(startOfWeek.getDate() + 7);
+
+  return { startOfWeek, nextWeekReset };
 }
 
 export function applyCompanyDiversity(
@@ -113,6 +129,9 @@ export class JobsService {
 
     @InjectRepository(OnlineCV)
     private readonly onlineCvRepo: Repository<OnlineCV>,
+
+    @InjectRepository(JobApplicantView)
+    private readonly jobApplicantViewRepo: Repository<JobApplicantView>,
 
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
@@ -217,8 +236,18 @@ export class JobsService {
 
     const totalPage = Math.ceil(totalRecord / limit);
 
+    const now = new Date();
     const jobsWithApplicationsCount = await Promise.all(
       jobs.map(async (job) => {
+        const isHotExpired = Boolean(
+          job.isHot && job.boostExpiresAt && new Date(job.boostExpiresAt) <= now,
+        );
+        if (isHotExpired) {
+          job.isHot = false;
+          void this.jobRepo.update(job._id, { isHot: false });
+          void this.enqueueJobSync(job._id);
+        }
+
         const applications = await this.applicationRepo.count({
           where: { jobId: job._id, isDeleted: false },
         });
@@ -300,8 +329,18 @@ export class JobsService {
 
     const totalPage = Math.ceil(totalRecord / limit);
 
+    const now = new Date();
     const jobsWithApplicationsCount = await Promise.all(
       jobs.map(async (job) => {
+        const isHotExpired = Boolean(
+          job.isHot && job.boostExpiresAt && new Date(job.boostExpiresAt) <= now,
+        );
+        if (isHotExpired) {
+          job.isHot = false;
+          void this.jobRepo.update(job._id, { isHot: false });
+          void this.enqueueJobSync(job._id);
+        }
+
         const applications = await this.applicationRepo.count({
           where: { jobId: job._id, isDeleted: false },
         });
@@ -373,6 +412,8 @@ export class JobsService {
       name: company.name,
       logo: company.logo,
       isActive: company.isActive,
+      scale: company.scale,
+      address: company.address,
     };
 
     const newJob = this.jobRepo.create({
@@ -455,8 +496,23 @@ export class JobsService {
         });
       }
 
-      if (filter.level) {
-        queryBuilder.andWhere('job.level = :level', { level: filter.level });
+      if (filter.level && filter.level !== 'Tất cả cấp bậc') {
+        const levelParts = filter.level
+          .split(',')
+          .map((l) => l.trim().toLowerCase())
+          .filter(Boolean);
+
+        const conditions: string[] = [];
+        const params: Record<string, string> = {};
+
+        levelParts.forEach((part, idx) => {
+          conditions.push(`LOWER(job.level) LIKE :levelPattern${idx}`);
+          params[`levelPattern${idx}`] = `%${part}%`;
+        });
+
+        if (conditions.length > 0) {
+          queryBuilder.andWhere(`(${conditions.join(' OR ')})`, params);
+        }
       }
 
       // Handle salary conditions
@@ -544,6 +600,18 @@ export class JobsService {
     if (!job) {
       throw new NotFoundException('Job not found');
     }
+
+    if (job.company?._id && (!job.company.scale || !job.company.address)) {
+      const comp = await this.companyRepo.findOne({
+        where: { _id: job.company._id },
+        select: ['_id', 'scale', 'address'],
+      });
+      if (comp) {
+        job.company.scale = job.company.scale || comp.scale;
+        job.company.address = job.company.address || comp.address;
+      }
+    }
+
     return job;
   }
 
@@ -558,6 +626,18 @@ export class JobsService {
     if (!job) {
       throw new NotFoundException('Job not found');
     }
+
+    if (job.company?._id && (!job.company.scale || !job.company.address)) {
+      const comp = await this.companyRepo.findOne({
+        where: { _id: job.company._id },
+        select: ['_id', 'scale', 'address'],
+      });
+      if (comp) {
+        job.company.scale = job.company.scale || comp.scale;
+        job.company.address = job.company.address || comp.address;
+      }
+    }
+
     return job;
   }
 
@@ -597,6 +677,8 @@ export class JobsService {
         name: company.name,
         logo: company.logo,
         isActive: company.isActive,
+        scale: company.scale,
+        address: company.address,
       };
     }
 
@@ -672,34 +754,6 @@ export class JobsService {
       throw new NotFoundException('User not found');
     }
 
-    const isHrPrem = this.usersService.isHrPremium(userInDb);
-    const now = new Date();
-
-    // Check & Enforce Boost Quota:
-    // HR Premium / Admin: 5 boosts per day
-    // HR Standard: 2 boosts per week
-    if (isHrPrem || user.role === Role.ADMIN) {
-      const dayKey = `hr_boost:${userInDb._id}:day:${now.toISOString().slice(0, 10)}`;
-      const usedToday =
-        Number(await this.redisService.getValue<number>(dayKey)) || 0;
-      if (usedToday >= 5 && user.role !== Role.ADMIN) {
-        throw new BadRequestException(
-          'Bạn đã sử dụng hết hạn mức đẩy TOP tin tuyển dụng hôm nay (5 tin/ngày). Vui lòng quay lại vào ngày mai!',
-        );
-      }
-      await this.redisService.setValue(dayKey, usedToday + 1, 48 * 3600);
-    } else {
-      const weekKey = `hr_boost:${userInDb._id}:week:${getIsoWeekString(now)}`;
-      const usedThisWeek =
-        Number(await this.redisService.getValue<number>(weekKey)) || 0;
-      if (usedThisWeek >= 2) {
-        throw new BadRequestException(
-          'Bạn đã sử dụng hết hạn mức đẩy TOP tin tuyển dụng tuần này (2 tin/tuần). Vui lòng nâng cấp gói HR Premium để được đẩy 5 tin/ngày!',
-        );
-      }
-      await this.redisService.setValue(weekKey, usedThisWeek + 1, 8 * 24 * 3600);
-    }
-
     const job = await this.activeJobQueryService.findNonDeletedById(id);
     if (!job) {
       throw new NotFoundException('Job not found');
@@ -713,6 +767,43 @@ export class JobsService {
       throw new BadRequestException(
         'Bạn chỉ có thể đẩy TOP tin tuyển dụng thuộc công ty của mình.',
       );
+    }
+
+    const isHrPrem = this.usersService.isHrPremium(userInDb);
+    const now = new Date();
+
+    // Check & Enforce Boost Quota:
+    // HR Premium / Admin: Unlimited boosts, but max 5 active HOT jobs simultaneously
+    // HR Standard: 1 boost per calendar month (HOT lasts 24h)
+    if (isHrPrem || user.role === Role.ADMIN) {
+      if (userInDb.company?._id && user.role !== Role.ADMIN) {
+        const activeHotCount = await this.activeJobQueryService
+          .createNonDeletedQuery()
+          .andWhere("job.company->>'_id' = :companyId", {
+            companyId: userInDb.company._id,
+          })
+          .andWhere('job.isHot = true')
+          .andWhere('job.boostExpiresAt > :now', { now })
+          .andWhere('job._id != :currentJobId', { currentJobId: id })
+          .getCount();
+
+        if (activeHotCount >= 5) {
+          throw new BadRequestException(
+            'Tài khoản HR Premium chỉ được đẩy HOT tối đa 5 tin tuyển dụng cùng lúc (hiện bạn đã có 5 tin đang HOT). Vui lòng gỡ HOT một tin hoặc chờ tin hết hạn 24h để đẩy tin khác!',
+          );
+        }
+      }
+    } else {
+      // HR Standard: 1 boost per calendar month
+      const monthKey = `hr_boost:${userInDb._id}:month:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const usedThisMonth =
+        Number(await this.redisService.getValue<number>(monthKey)) || 0;
+      if (usedThisMonth >= 1) {
+        throw new BadRequestException(
+          'Tài khoản HR Standard chỉ được đẩy HOT tối đa 1 tin tuyển dụng trong 1 tháng (bạn đã sử dụng trong tháng này). Vui lòng nâng cấp HR Premium để đẩy HOT tối đa 5 tin cùng lúc không giới hạn!',
+        );
+      }
+      await this.redisService.setValue(monthKey, usedThisMonth + 1, 32 * 24 * 3600);
     }
 
     // HOT duration = 1 day (24 hours)
@@ -730,6 +821,51 @@ export class JobsService {
     return {
       message:
         'Đã đẩy TOP tin tuyển dụng thành công (hiệu lực 24 giờ)! Tin của bạn sẽ được ưu tiên xuất hiện tại các vị trí nổi bật.',
+      job: savedJob,
+    };
+  }
+
+  async unboostJob(id: string, user: IUser) {
+    const userInDb = await this.usersService.findOneByEmail(user.email);
+    if (!userInDb) {
+      throw new NotFoundException('User not found');
+    }
+
+    const job = await this.activeJobQueryService.findNonDeletedById(id);
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+
+    if (
+      userInDb.company &&
+      user.role !== Role.ADMIN &&
+      job.company?._id?.toString() !== userInDb.company._id?.toString()
+    ) {
+      throw new BadRequestException(
+        'Bạn chỉ có thể gỡ HOT tin tuyển dụng thuộc công ty của mình.',
+      );
+    }
+
+    const isHrPrem = this.usersService.isHrPremium(userInDb);
+    if (!isHrPrem && user.role !== Role.ADMIN) {
+      throw new BadRequestException(
+        'Chỉ tài khoản HR Premium mới có quyền gỡ HOT để đổi slot sang tin tuyển dụng khác. Tài khoản HR Thường khi đẩy TOP 1 tin thì không được quyền thu hồi và mất luôn lượt đẩy của tháng đó.',
+      );
+    }
+
+    job.isHot = false;
+    job.boostExpiresAt = null;
+    job.updatedAt = new Date();
+
+    const savedJob = await this.jobRepo.save(job);
+    await this.redisService.invalidateJobsCache();
+
+    // Sync to Elasticsearch
+    void this.enqueueJobSync(job._id);
+
+    return {
+      message:
+        'Đã gỡ HOT tin tuyển dụng thành công! Đã giải phóng slot đẩy HOT cho tin khác.',
       job: savedJob,
     };
   }
@@ -861,7 +997,6 @@ export class JobsService {
     if (!list || list.length === 0) {
       const currentJob = await this.jobRepo.findOne({
         where: { _id: id, isDeleted: false },
-        relations: ['company'],
       });
       if (currentJob) {
         if (currentJob.skills && currentJob.skills.length > 0) {
@@ -891,5 +1026,254 @@ export class JobsService {
 
   async countJobs() {
     return await this.activeJobQueryService.createActiveQuery().getCount();
+  }
+
+  async getApplicantCountStatus(jobId: string, user?: IUser) {
+    const job = await this.jobRepo.findOne({
+      where: { _id: jobId, isDeleted: false },
+    });
+    if (!job) {
+      throw new NotFoundException('Không tìm thấy công việc');
+    }
+
+    const { startOfWeek, nextWeekReset } = getCurrentWeekRange();
+
+    // Guest or no user
+    if (!user || !user._id) {
+      return {
+        isUnlocked: false,
+        applicantCount: null,
+        weeklyQuotaUsed: 0,
+        weeklyQuotaRemaining: 0,
+        weeklyQuotaMax: 5,
+        nextResetDate: nextWeekReset.toISOString(),
+        isPremium: false,
+        isAdminOrHr: false,
+      };
+    }
+
+    // Admin has full access
+    if (user.role === Role.ADMIN) {
+      const applicantCount = await this.applicationRepo.count({
+        where: { jobId, isDeleted: false },
+      });
+      return {
+        isUnlocked: true,
+        applicantCount,
+        weeklyQuotaUsed: 0,
+        weeklyQuotaRemaining: 999,
+        weeklyQuotaMax: 999,
+        nextResetDate: nextWeekReset.toISOString(),
+        isPremium: true,
+        isAdminOrHr: true,
+      };
+    }
+
+    // HR of the company has full access to their own job
+    if (
+      user.role === Role.HR &&
+      user.company?._id &&
+      job.company?._id === user.company._id
+    ) {
+      const applicantCount = await this.applicationRepo.count({
+        where: { jobId, isDeleted: false },
+      });
+      return {
+        isUnlocked: true,
+        applicantCount,
+        weeklyQuotaUsed: 0,
+        weeklyQuotaRemaining: 999,
+        weeklyQuotaMax: 999,
+        nextResetDate: nextWeekReset.toISOString(),
+        isPremium: true,
+        isAdminOrHr: true,
+      };
+    }
+
+    // Fetch fresh user to ensure premium status is accurate
+    let userInDb: any = null;
+    const anyUser = user as any;
+    const targetUserId =
+      user._id ||
+      anyUser?.id ||
+      (anyUser?.sub && anyUser.sub !== 'token login' ? anyUser.sub : undefined);
+    if (targetUserId) {
+      try {
+        userInDb = await this.usersService.findOne(targetUserId);
+      } catch {
+        userInDb = null;
+      }
+    }
+    if (!userInDb && user.email) {
+      try {
+        userInDb = await this.usersService.findUserByUsername(user.email);
+      } catch {
+        userInDb = null;
+      }
+    }
+
+    const effectiveUser = userInDb || user;
+    const effectiveUserId = effectiveUser._id || targetUserId;
+    const isPremium = this.usersService.isCandidatePremium(effectiveUser);
+
+    // Calculate weekly usage
+    let weeklyViews: JobApplicantView[] = [];
+    if (effectiveUserId) {
+      weeklyViews = await this.jobApplicantViewRepo.find({
+        where: {
+          userId: effectiveUserId,
+          unlockedAt: MoreThanOrEqual(startOfWeek),
+        },
+      });
+    }
+
+    const distinctJobIds = new Set(weeklyViews.map((v) => v.jobId));
+    const isUnlocked = distinctJobIds.has(jobId);
+    const weeklyQuotaUsed = distinctJobIds.size;
+    const weeklyQuotaRemaining = Math.max(0, 5 - weeklyQuotaUsed);
+
+    let applicantCount: number | null = null;
+    if (isUnlocked) {
+      applicantCount = await this.applicationRepo.count({
+        where: { jobId, isDeleted: false },
+      });
+    }
+
+    return {
+      isUnlocked,
+      applicantCount,
+      weeklyQuotaUsed,
+      weeklyQuotaRemaining,
+      weeklyQuotaMax: 5,
+      nextResetDate: nextWeekReset.toISOString(),
+      isPremium,
+      isAdminOrHr: false,
+    };
+  }
+
+  async unlockApplicantCount(jobId: string, user: IUser) {
+    if (!user || (!user._id && !user.email)) {
+      throw new ForbiddenException('Vui lòng đăng nhập để sử dụng tính năng này.');
+    }
+
+    const job = await this.jobRepo.findOne({
+      where: { _id: jobId, isDeleted: false },
+    });
+    if (!job) {
+      throw new NotFoundException('Không tìm thấy công việc');
+    }
+
+    const { startOfWeek, nextWeekReset } = getCurrentWeekRange();
+
+    // Admin & HR of own company get it directly
+    if (
+      user.role === Role.ADMIN ||
+      (user.role === Role.HR &&
+        user.company?._id &&
+        job.company?._id === user.company._id)
+    ) {
+      const applicantCount = await this.applicationRepo.count({
+        where: { jobId, isDeleted: false },
+      });
+      return {
+        isUnlocked: true,
+        applicantCount,
+        weeklyQuotaUsed: 0,
+        weeklyQuotaRemaining: 999,
+        weeklyQuotaMax: 999,
+        nextResetDate: nextWeekReset.toISOString(),
+        isPremium: true,
+        isAdminOrHr: true,
+      };
+    }
+
+    // Check candidate premium with fresh DB lookup
+    let userInDb: any = null;
+    const anyUser = user as any;
+    const targetUserId =
+      user._id ||
+      anyUser?.id ||
+      (anyUser?.sub && anyUser.sub !== 'token login' ? anyUser.sub : undefined);
+    if (targetUserId) {
+      try {
+        userInDb = await this.usersService.findOne(targetUserId);
+      } catch {
+        userInDb = null;
+      }
+    }
+    if (!userInDb && user.email) {
+      try {
+        userInDb = await this.usersService.findUserByUsername(user.email);
+      } catch {
+        userInDb = null;
+      }
+    }
+
+    const effectiveUser = userInDb || user;
+    const effectiveUserId = effectiveUser._id || targetUserId;
+    const isPremium = this.usersService.isCandidatePremium(effectiveUser);
+    if (!isPremium) {
+      throw new ForbiddenException(
+        'Tính năng xem số người ứng tuyển chỉ dành riêng cho tài khoản Candidate Premium.',
+      );
+    }
+
+    // Check current week views
+    const weeklyViews = await this.jobApplicantViewRepo.find({
+      where: {
+        userId: effectiveUserId,
+        unlockedAt: MoreThanOrEqual(startOfWeek),
+      },
+    });
+
+    const distinctJobIds = new Set(weeklyViews.map((v) => v.jobId));
+
+    // If already unlocked for this job in the current week
+    if (distinctJobIds.has(jobId)) {
+      const applicantCount = await this.applicationRepo.count({
+        where: { jobId, isDeleted: false },
+      });
+      return {
+        isUnlocked: true,
+        applicantCount,
+        weeklyQuotaUsed: distinctJobIds.size,
+        weeklyQuotaRemaining: Math.max(0, 5 - distinctJobIds.size),
+        weeklyQuotaMax: 5,
+        nextResetDate: nextWeekReset.toISOString(),
+        isPremium: true,
+        isAdminOrHr: false,
+      };
+    }
+
+    // Check if quota exceeded (max 5 jobs per week)
+    if (distinctJobIds.size >= 5) {
+      throw new BadRequestException(
+        'Bạn đã sử dụng hết 5 lượt xem số lượng người ứng tuyển trong tuần này. Hạn mức sẽ được làm mới vào tuần tới.',
+      );
+    }
+
+    // Record the unlock
+    const newView = this.jobApplicantViewRepo.create({
+      userId: effectiveUserId,
+      jobId,
+      unlockedAt: new Date(),
+    });
+    await this.jobApplicantViewRepo.save(newView);
+
+    distinctJobIds.add(jobId);
+    const applicantCount = await this.applicationRepo.count({
+      where: { jobId, isDeleted: false },
+    });
+
+    return {
+      isUnlocked: true,
+      applicantCount,
+      weeklyQuotaUsed: distinctJobIds.size,
+      weeklyQuotaRemaining: Math.max(0, 5 - distinctJobIds.size),
+      weeklyQuotaMax: 5,
+      nextResetDate: nextWeekReset.toISOString(),
+      isPremium: true,
+      isAdminOrHr: false,
+    };
   }
 }

@@ -124,7 +124,7 @@ export class CVProcessingService {
       },
       order: { matchScore: 'DESC' },
       take: topN,
-      relations: ['userId', 'cvId', 'applicationId'],
+      relations: ['user', 'cv', 'application'],
     });
   }
 

@@ -1,19 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   CheckCircle2,
-  Clock,
-  ExternalLink,
   Flame,
   Heart,
   Loader2,
   Send,
   Sparkles,
-  Zap,
   ArrowRight,
   Briefcase,
   ChevronRight,
   ShieldCheck,
+  LogIn,
 } from 'lucide-react';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
@@ -22,7 +20,9 @@ import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
   JobItem,
-  getJobDetailApi,
+  getMySavedJobsApi,
+  removeSavedJobApi,
+  toggleSaveJobApi,
   searchJobsApi,
   formatSalary,
   formatLocation,
@@ -33,105 +33,66 @@ import { apiRequest } from '../../lib/api';
 
 export default function SavedJobsPage() {
   const { accessToken } = useAuth();
-  const { success, info } = useToast();
+  const { success, error, info } = useToast();
+  const navigate = useNavigate();
 
   const [savedJobs, setSavedJobs] = useState<JobItem[]>([]);
-  const [savedTimestamps, setSavedTimestamps] = useState<Record<string, string>>({});
   const [similarJobs, setSimilarJobs] = useState<JobItem[]>([]);
   const [appliedJobIds, setAppliedJobIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingSimilar, setLoadingSimilar] = useState(false);
   const [applyingJob, setApplyingJob] = useState<JobItem | null>(null);
 
-  // Load Saved Job IDs and Timestamps from localStorage
-  const loadSavedData = useCallback(() => {
+  // Fetch saved jobs from backend PostgreSQL DB
+  const fetchSavedJobsFromDb = async () => {
+    if (!accessToken) {
+      setLoading(false);
+      return;
+    }
+
     try {
-      const rawSaved = localStorage.getItem('talentpulse_saved_jobs');
-      const ids: string[] = rawSaved ? JSON.parse(rawSaved) : [];
+      setLoading(true);
 
-      const rawTimestamps = localStorage.getItem('talentpulse_saved_jobs_timestamps');
-      const timestamps: Record<string, string> = rawTimestamps
-        ? JSON.parse(rawTimestamps)
-        : {};
-
-      return { ids, timestamps };
-    } catch {
-      return { ids: [], timestamps: {} };
-    }
-  }, []);
-
-  // Fetch details for saved jobs & applied jobs
-  useEffect(() => {
-    let isMounted = true;
-
-    async function fetchData() {
+      // 1. Fetch user's applied jobs
       try {
-        setLoading(true);
-        const { ids, timestamps } = loadSavedData();
-        setSavedTimestamps(timestamps);
-
-        // 1. Fetch user's applied jobs if logged in
-        if (accessToken) {
-          try {
-            const appRes = await apiRequest<any[]>('/applications/my-applications', {
-              accessToken,
-            });
-            if (Array.isArray(appRes)) {
-              const appliedIds = appRes
-                .map((app) => app.job?._id || app.jobId?._id || app.jobId)
-                .filter(Boolean);
-              if (isMounted) setAppliedJobIds(appliedIds);
-            }
-          } catch {
-            // Ignore application fetch error
-          }
+        const appRes = await apiRequest<any[]>('/applications/my-applications', {
+          accessToken,
+        });
+        if (Array.isArray(appRes)) {
+          const appliedIds = appRes
+            .map((app) => app.job?._id || app.jobId?._id || app.jobId)
+            .filter(Boolean);
+          setAppliedJobIds(appliedIds);
         }
-
-        // 2. Fetch details for each saved job ID in parallel
-        if (ids.length > 0) {
-          const results = await Promise.allSettled(
-            ids.map((id) => getJobDetailApi(id, accessToken)),
-          );
-
-          const validJobs: JobItem[] = [];
-          results.forEach((res) => {
-            if (res.status === 'fulfilled' && res.value && res.value._id) {
-              validJobs.push(res.value);
-            }
-          });
-
-          if (isMounted) {
-            setSavedJobs(validJobs);
-            // Fetch similar jobs using skills of saved jobs
-            fetchSimilarJobs(validJobs, ids);
-          }
-        } else {
-          if (isMounted) {
-            setSavedJobs([]);
-            // Fetch popular recommendations
-            fetchSimilarJobs([], []);
-          }
-        }
-      } catch (err) {
-        console.error('Error loading saved jobs:', err);
-      } finally {
-        if (isMounted) setLoading(false);
+      } catch {
+        // Ignore application fetch error
       }
+
+      // 2. Fetch saved jobs
+      const res = await getMySavedJobsApi(accessToken, { current: 1, pageSize: 50 });
+      const jobs = res?.result || [];
+      setSavedJobs(jobs);
+
+      // 3. Fetch similar jobs
+      void fetchSimilarJobs(jobs);
+    } catch (err: any) {
+      console.error('Error loading saved jobs:', err);
+      error(err?.message || 'Không thể tải danh sách việc làm đã lưu');
+    } finally {
+      setLoading(false);
     }
+  };
 
-    fetchData();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [accessToken, loadSavedData]);
+  useEffect(() => {
+    void fetchSavedJobsFromDb();
+  }, [accessToken]);
 
   // Fetch similar jobs from Elasticsearch based on skills of saved jobs
-  const fetchSimilarJobs = async (jobs: JobItem[], currentSavedIds: string[]) => {
+  const fetchSimilarJobs = async (jobs: JobItem[]) => {
     try {
       setLoadingSimilar(true);
 
-      // Extract unique skills
+      const savedIds = jobs.map((j) => j._id);
       const extractedSkills = Array.from(
         new Set(
           jobs.flatMap((j) => (Array.isArray(j.skills) ? j.skills : [])).filter(Boolean),
@@ -140,7 +101,6 @@ export default function SavedJobsPage() {
 
       let res;
       if (extractedSkills.length > 0) {
-        // Query by matching skills in Elasticsearch
         res = await searchJobsApi(
           {
             skills: extractedSkills.slice(0, 6),
@@ -150,7 +110,6 @@ export default function SavedJobsPage() {
           accessToken,
         );
       } else {
-        // Fallback: Query newest hot jobs
         res = await searchJobsApi(
           {
             limit: 8,
@@ -161,8 +120,7 @@ export default function SavedJobsPage() {
       }
 
       if (res && res.result) {
-        // Exclude jobs that are already in saved list
-        const filtered = res.result.filter((j) => !currentSavedIds.includes(j._id));
+        const filtered = res.result.filter((j) => !savedIds.includes(j._id));
         setSimilarJobs(filtered.slice(0, 6));
       }
     } catch (err) {
@@ -173,238 +131,305 @@ export default function SavedJobsPage() {
   };
 
   // Remove Job from Saved List
-  const handleRemoveSavedJob = (job: JobItem) => {
-    const nextSaved = savedJobs.filter((j) => j._id !== job._id);
-    const nextIds = nextSaved.map((j) => j._id);
-    setSavedJobs(nextSaved);
+  const handleRemoveSavedJob = async (job: JobItem) => {
+    if (!accessToken) return;
 
-    localStorage.setItem('talentpulse_saved_jobs', JSON.stringify(nextIds));
-    info(`Đã xóa việc làm "${job.name}" khỏi danh sách đã lưu`);
+    try {
+      await removeSavedJobApi(job._id, accessToken);
+      setSavedJobs((prev) => prev.filter((j) => j._id !== job._id));
+      info(`Đã xóa việc làm "${job.name}" khỏi danh sách đã lưu`);
+    } catch (err: any) {
+      error(err?.message || 'Không thể xóa việc làm đã lưu');
+    }
   };
 
   // Save a job from similar recommendations
-  const handleSaveSimilarJob = (job: JobItem) => {
-    const rawSaved = localStorage.getItem('talentpulse_saved_jobs');
-    const ids: string[] = rawSaved ? JSON.parse(rawSaved) : [];
+  const handleSaveSimilarJob = async (job: JobItem) => {
+    if (!accessToken) {
+      info('Vui lòng đăng nhập để lưu việc làm');
+      navigate('/login');
+      return;
+    }
 
-    if (!ids.includes(job._id)) {
-      const nextIds = [job._id, ...ids];
-      localStorage.setItem('talentpulse_saved_jobs', JSON.stringify(nextIds));
-
-      // Update timestamps
-      const rawTimestamps = localStorage.getItem('talentpulse_saved_jobs_timestamps');
-      const timestamps: Record<string, string> = rawTimestamps
-        ? JSON.parse(rawTimestamps)
-        : {};
-      timestamps[job._id] = new Date().toISOString();
-      localStorage.setItem(
-        'talentpulse_saved_jobs_timestamps',
-        JSON.stringify(timestamps),
-      );
-      setSavedTimestamps(timestamps);
-
-      // Add to saved list and remove from similar list
-      setSavedJobs((prev) => [job, ...prev]);
+    try {
+      await toggleSaveJobApi(job._id, accessToken);
+      setSavedJobs((prev) => [{ ...job, savedAt: new Date().toISOString() }, ...prev]);
       setSimilarJobs((prev) => prev.filter((j) => j._id !== job._id));
       success(`Đã lưu việc làm "${job.name}" vào danh sách yêu thích`);
+    } catch (err: any) {
+      error(err?.message || 'Không thể lưu việc làm');
     }
   };
 
   // Format Saved Date
-  const formatSavedDate = (jobId: string) => {
-    const iso = savedTimestamps[jobId];
-    if (!iso) {
+  const formatSavedDate = (savedAt?: string | Date) => {
+    if (!savedAt) {
       const today = new Date();
       return `${today.toLocaleDateString('vi-VN')} - ${today.getHours().toString().padStart(2, '0')}:${today.getMinutes().toString().padStart(2, '0')}`;
     }
-    const d = new Date(iso);
+    const d = new Date(savedAt);
     return `${d.toLocaleDateString('vi-VN')} - ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 dark:bg-slate-950 font-sans">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100 flex flex-col justify-between selection:bg-primary/20 selection:text-primary">
       <Header />
 
-      <main className="flex-1 pt-24 pb-16">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          {/* BREADCRUMB */}
-          <nav className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-6 select-none">
+      <main className="flex-1 pb-16 pt-24 sm:pt-28">
+        <div className="container mx-auto px-4 max-w-7xl">
+          {/* Breadcrumbs */}
+          <nav className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 mb-6">
             <Link to="/" className="hover:text-primary transition-colors">
               Trang chủ
             </Link>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+            <ChevronRight className="w-3.5 h-3.5" />
             <Link to="/jobs" className="hover:text-primary transition-colors">
               Việc làm
             </Link>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
+            <ChevronRight className="w-3.5 h-3.5" />
+            <span className="text-slate-900 dark:text-white font-bold">
               Việc làm đã lưu
             </span>
           </nav>
 
-          {/* MAIN 2-COLUMN LAYOUT */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-            {/* LEFT COLUMN: SAVED JOBS & SIMILAR JOBS (~68%) */}
-            <div className="lg:col-span-8 space-y-10">
-              {/* 1. SAVED JOBS SECTION */}
-              <section>
-                <div className="flex items-center justify-between mb-5">
-                  <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-                    Danh sách{' '}
-                    <span className="text-primary dark:text-primary-light font-black">
-                      {savedJobs.length}
-                    </span>{' '}
-                    việc làm đã lưu
-                  </h1>
+          {/* Not logged in State */}
+          {!accessToken ? (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-12 text-center max-w-lg mx-auto shadow-sm my-12 space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto">
+                <Heart className="w-8 h-8 fill-primary" />
+              </div>
+              <h2 className="text-xl font-black text-slate-900 dark:text-white">
+                Vui lòng đăng nhập để xem việc làm đã lưu
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                Đăng nhập để đồng bộ và lưu giữ tất cả các cơ hội việc làm IT hấp dẫn nhất trên hệ thống TalentPulse của bạn.
+              </p>
+              <div className="pt-2">
+                <Link
+                  to="/login"
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-primary hover:bg-primary-dark text-white text-sm font-bold shadow-md shadow-primary/20 transition active:scale-95"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>Đăng nhập ngay</span>
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              {/* Left Column: List of Saved Jobs (8 Cols) */}
+              <div className="lg:col-span-8 space-y-6">
+                {/* Header Title Card */}
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2.5">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-red-50 text-red-500 dark:bg-red-500/10">
+                        <Heart className="h-5 w-5 fill-red-500" />
+                      </span>
+                      <span>Việc làm đã lưu</span>
+                    </h1>
+                    <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                      Danh sách các cơ hội nghề nghiệp bạn đã đánh dấu quan tâm và lưu lại để ứng tuyển.
+                    </p>
+                  </div>
+
+                  <div className="shrink-0 flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                      Tổng số:
+                    </span>
+                    <span className="px-3 py-1 rounded-xl bg-primary/10 text-primary font-black text-xs">
+                      {savedJobs.length} việc làm
+                    </span>
+                  </div>
                 </div>
 
+                {/* Loading State */}
                 {loading ? (
-                  // Shimmer Loading
-                  <div className="space-y-4">
-                    {[1, 2].map((i) => (
-                      <div
-                        key={i}
-                        className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200/80 dark:border-slate-800 animate-pulse flex gap-4"
-                      >
-                        <div className="w-16 h-16 bg-slate-200 dark:bg-slate-800 rounded-2xl shrink-0" />
-                        <div className="flex-1 space-y-2.5">
-                          <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-2/3" />
-                          <div className="h-3 bg-slate-200 dark:bg-slate-800 rounded w-1/3" />
-                          <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-1/4 pt-1" />
-                        </div>
-                      </div>
-                    ))}
+                  <div className="py-24 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-3" />
+                    <p className="text-xs text-slate-500">Đang tải danh sách việc làm đã lưu...</p>
                   </div>
                 ) : savedJobs.length === 0 ? (
-                  // Empty State
-                  <div className="bg-white dark:bg-slate-900 rounded-3xl p-10 sm:p-12 text-center border border-slate-200/80 dark:border-slate-800 shadow-sm">
-                    <div className="w-16 h-16 rounded-2xl bg-rose-50 dark:bg-rose-950/40 text-rose-500 flex items-center justify-center mx-auto mb-4 border border-rose-100 dark:border-rose-900/40">
-                      <Heart className="w-8 h-8 fill-rose-500/20" />
+                  /* Empty State */
+                  <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-12 text-center space-y-4 shadow-xs">
+                    <div className="w-16 h-16 rounded-3xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+                      <Heart className="w-8 h-8" />
                     </div>
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">
-                      Bạn chưa lưu công việc nào
-                    </h3>
-                    <p className="mt-2 text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                      Hãy nhấn biểu tượng Trái tim khi xem danh sách việc làm để lưu lại những vị trí bạn quan tâm và ứng tuyển sau.
-                    </p>
-                    <Link
-                      to="/jobs"
-                      className="mt-6 inline-flex items-center gap-2 px-6 py-2.5 bg-primary hover:bg-primary-dark text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-primary/25"
-                    >
-                      <Briefcase className="w-4 h-4" />
-                      <span>Khám phá việc làm ngay</span>
-                    </Link>
+                    <div>
+                      <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                        Bạn chưa lưu việc làm nào
+                      </h3>
+                      <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+                        Hãy khám phá hàng ngàn công việc IT hấp dẫn trên TalentPulse và bấm vào biểu tượng Trái tim để lưu lại xem sau.
+                      </p>
+                    </div>
+                    <div className="pt-2">
+                      <Link
+                        to="/jobs"
+                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs sm:text-sm font-bold shadow-md shadow-primary/20 transition active:scale-95"
+                      >
+                        <Briefcase className="w-4 h-4" />
+                        <span>Khám phá việc làm ngay</span>
+                      </Link>
+                    </div>
                   </div>
                 ) : (
-                  // Saved Jobs List
+                  /* List of Saved Job Cards */
                   <div className="space-y-4">
                     {savedJobs.map((job) => {
                       const isApplied = appliedJobIds.includes(job._id);
+                      const daysRem = formatDaysRemaining(job.endDate);
+                      const isExpired = daysRem === 'Hết hạn';
+
                       return (
                         <div
                           key={job._id}
-                          className="group bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/5 transition-all duration-300 relative"
+                          className="group relative bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-6 shadow-xs hover:shadow-md hover:border-primary/40 dark:hover:border-primary/40 transition-all duration-200 flex flex-col justify-between"
                         >
-                          <div className="flex flex-col sm:flex-row items-start gap-4 sm:gap-5">
-                            {/* Company Logo */}
-                            <Link
-                              to={`/jobs/${job._id}`}
-                              className="shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden border border-slate-200/90 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 flex items-center justify-center group-hover:scale-105 transition-transform duration-300 shadow-xs"
-                            >
-                              {job.company?.logo ? (
-                                <img
-                                  src={job.company.logo}
-                                  alt={job.company.name || 'Company'}
-                                  className="w-full h-full object-contain rounded-xl"
-                                  loading="lazy"
-                                />
-                              ) : (
-                                <div className="w-full h-full rounded-xl bg-gradient-to-br from-primary/10 to-blue-600/20 flex items-center justify-center text-primary font-bold text-base">
-                                  {getCompanyInitial(job.company?.name)}
-                                </div>
-                              )}
-                            </Link>
+                          <div>
+                            {/* Top Info Header */}
+                            <div className="flex items-start gap-4">
+                              {/* Company Logo */}
+                              <Link
+                                to={`/jobs/${job._id}`}
+                                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 bg-white dark:bg-slate-800 p-1 flex items-center justify-center shrink-0 overflow-hidden shadow-xs group-hover:scale-105 transition-transform"
+                              >
+                                {job.company?.logo ? (
+                                  <img
+                                    src={job.company.logo}
+                                    alt={job.company.name}
+                                    className="w-full h-full object-contain rounded-xl"
+                                    onError={(e) => {
+                                      e.currentTarget.style.display = 'none';
+                                      if (e.currentTarget.parentElement) {
+                                        e.currentTarget.parentElement.innerText =
+                                          getCompanyInitial(job.company?.name);
+                                      }
+                                    }}
+                                  />
+                                ) : (
+                                  <span className="text-base font-black text-primary">
+                                    {getCompanyInitial(job.company?.name)}
+                                  </span>
+                                )}
+                              </Link>
 
-                            {/* Job Main Info */}
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-start justify-between gap-2">
+                              {/* Title & Company */}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {job.isHot && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-500 text-[10px] font-black text-white shadow-xs">
+                                      <Flame className="w-3 h-3" /> HOT
+                                    </span>
+                                  )}
+                                  <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-0.5 rounded-md border border-emerald-200/60 dark:border-emerald-900/40">
+                                    {formatSalary(job.salary)}
+                                  </span>
+                                </div>
+
                                 <Link
                                   to={`/jobs/${job._id}`}
-                                  className="text-base sm:text-lg font-bold text-slate-800 dark:text-slate-100 group-hover:text-primary transition-colors line-clamp-2 leading-snug"
+                                  className="block mt-1 text-sm sm:text-base font-black text-slate-900 dark:text-white group-hover:text-primary transition-colors line-clamp-1"
                                 >
                                   {job.name}
                                 </Link>
 
-                                {/* Salary on Top Right */}
-                                <div className="shrink-0 text-xs sm:text-sm font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">
-                                  {formatSalary(job.salary)}
-                                </div>
+                                <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mt-0.5 truncate">
+                                  {job.company?.name || 'Doanh nghiệp tuyển dụng'}
+                                </p>
                               </div>
+                            </div>
 
-                              {/* Company Name */}
-                              <div className="mt-1 flex items-center gap-1.5 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                                <span className="truncate max-w-[320px] font-medium">
-                                  {job.company?.name || 'TalentPulse Employer'}
-                                </span>
-                                {job.company?.isActive && (
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                                )}
-                              </div>
-
-                              {/* Pills (Location, Exp) */}
-                              <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
-                                <span className="px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium">
+                            {/* Middle Details: Location, Deadline, Saved Date */}
+                            <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs text-slate-500 dark:text-slate-400">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span className="text-slate-400">Địa điểm:</span>
+                                <span className="font-semibold text-slate-700 dark:text-slate-300 truncate">
                                   {formatLocation(job.location)}
                                 </span>
-                                {job.level && (
-                                  <span className="px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium">
-                                    {job.level}
-                                  </span>
-                                )}
                               </div>
 
-                              {/* Bottom Details & Actions Row */}
-                              <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                {/* Saved Date & Post Time */}
-                                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 dark:text-slate-500">
-                                  <span>Đã lưu: {formatSavedDate(job._id)}</span>
-                                  <span className="hidden sm:inline">&bull;</span>
-                                  <span className="flex items-center gap-1">
-                                    <Clock className="w-3 h-3 text-slate-400" />
-                                    {formatDaysRemaining(job.endDate)}
-                                  </span>
-                                </div>
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span className="text-slate-400">Hạn nộp:</span>
+                                <span
+                                  className={`font-semibold ${
+                                    isExpired
+                                      ? 'text-red-500'
+                                      : 'text-slate-700 dark:text-slate-300'
+                                  }`}
+                                >
+                                  {daysRem}
+                                </span>
+                              </div>
 
-                                {/* Actions */}
-                                <div className="flex items-center gap-2.5 self-end sm:self-auto">
-                                  {isApplied ? (
-                                    <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold select-none">
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-primary" />
-                                      Đã ứng tuyển
-                                    </span>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => setApplyingJob(job)}
-                                      className="px-4 py-1.5 bg-primary hover:bg-primary-dark text-white text-xs font-bold rounded-xl shadow-sm shadow-primary/20 hover:shadow-md transition-all flex items-center gap-1 cursor-pointer"
-                                    >
-                                      <Send className="w-3.5 h-3.5" />
-                                      <span>Ứng tuyển ngay</span>
-                                    </button>
-                                  )}
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span className="text-slate-400">Đã lưu lúc:</span>
+                                <span className="font-semibold text-slate-700 dark:text-slate-300">
+                                  {formatSavedDate(job.savedAt)}
+                                </span>
+                              </div>
+                            </div>
 
-                                  {/* Remove Heart Button */}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemoveSavedJob(job)}
-                                    className="p-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-500 hover:bg-rose-100 transition-colors cursor-pointer"
-                                    title="Bỏ lưu việc làm này"
-                                    aria-label="Bỏ lưu việc làm"
+                            {/* Skills Tags */}
+                            {job.skills && job.skills.length > 0 && (
+                              <div className="mt-3 flex flex-wrap gap-1.5">
+                                {job.skills.slice(0, 5).map((skill) => (
+                                  <span
+                                    key={skill}
+                                    className="px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60"
                                   >
-                                    <Heart className="w-4 h-4 fill-rose-500 text-rose-500" />
-                                  </button>
-                                </div>
+                                    {skill}
+                                  </span>
+                                ))}
                               </div>
+                            )}
+                          </div>
+
+                          {/* Bottom Action Buttons */}
+                          <div className="mt-5 pt-3.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSavedJob(job)}
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-400 hover:text-red-500 transition cursor-pointer"
+                            >
+                              <Heart className="w-4 h-4 fill-red-500 text-red-500" />
+                              <span>Bỏ lưu</span>
+                            </button>
+
+                            <div className="flex items-center gap-2">
+                              <Link
+                                to={`/jobs/${job._id}`}
+                                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                              >
+                                Xem chi tiết
+                              </Link>
+
+                              {isApplied ? (
+                                <button
+                                  type="button"
+                                  disabled
+                                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  <span>Đã ứng tuyển</span>
+                                </button>
+                              ) : isExpired ? (
+                                <button
+                                  type="button"
+                                  disabled
+                                  className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 text-xs font-bold cursor-not-allowed"
+                                >
+                                  Hết hạn nộp
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setApplyingJob(job)}
+                                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-extrabold shadow-sm shadow-primary/20 transition active:scale-95 cursor-pointer"
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                  <span>Ứng tuyển ngay</span>
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -412,238 +437,154 @@ export default function SavedJobsPage() {
                     })}
                   </div>
                 )}
-              </section>
+              </div>
 
-              {/* 2. SIMILAR JOBS SECTION (Việc làm tương tự việc bạn đã lưu) */}
-              <section className="pt-4">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-primary" />
+              {/* Right Column: AI Job Recommendations & Matching Sidebar (4 Cols) */}
+              <div className="lg:col-span-4 space-y-6">
+                {/* Similar Jobs Recommendation Widget */}
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-6 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-500" />
                       <span>Việc làm tương tự việc bạn đã lưu</span>
-                    </h2>
-                    <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-                      Hệ thống tự động đề xuất dựa trên kỹ năng và vị trí của các công việc bạn quan tâm
-                    </p>
+                    </h3>
                   </div>
-                </div>
 
-                {loadingSimilar ? (
-                  <div className="flex items-center justify-center py-10 text-slate-400 gap-2 text-xs">
-                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                    <span>Đang tìm kiếm các việc làm tương tự...</span>
-                  </div>
-                ) : similarJobs.length === 0 ? (
-                  <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 text-center text-xs text-slate-500">
-                    Không tìm thấy việc làm tương tự phù hợp vào lúc này.
-                  </div>
-                ) : (
-                  <div className="space-y-3.5">
-                    {similarJobs.map((job) => (
-                      <div
-                        key={job._id}
-                        className="group bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200/80 dark:border-slate-800 hover:border-primary/50 hover:shadow-lg transition-all duration-200 relative"
-                      >
-                        <div className="flex items-start gap-3.5">
-                          {/* Logo */}
-                          <Link
-                            to={`/jobs/${job._id}`}
-                            className="shrink-0 w-12 h-12 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs"
-                          >
-                            {job.company?.logo ? (
-                              <img
-                                src={job.company.logo}
-                                alt={job.company.name || 'Company'}
-                                className="w-full h-full object-contain rounded-lg"
-                                loading="lazy"
-                              />
-                            ) : (
-                              <div className="w-full h-full rounded-lg bg-gradient-to-br from-primary/10 to-blue-600/20 flex items-center justify-center text-primary font-bold text-xs">
-                                {getCompanyInitial(job.company?.name)}
-                              </div>
-                            )}
-                          </Link>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Dựa trên kỹ năng và vị trí từ danh sách việc làm bạn đã quan tâm.
+                  </p>
 
-                          {/* Info */}
-                          <div className="flex-1 min-w-0">
-                            {/* Badges & Title */}
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <div className="flex flex-wrap items-center gap-1 mb-1">
-                                  {job.isFeatured && (
-                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-md text-[10px] font-bold bg-amber-500 text-white">
-                                      <Sparkles className="w-2.5 h-2.5" />
-                                      Nổi bật
-                                    </span>
-                                  )}
-                                  {job.isHot && (
-                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-md text-[10px] font-bold bg-gradient-to-r from-red-500 to-amber-500 text-white">
-                                      <Flame className="w-2.5 h-2.5" />
-                                      HOT
-                                    </span>
-                                  )}
-                                </div>
-
-                                <Link
-                                  to={`/jobs/${job._id}`}
-                                  className="text-sm sm:text-base font-bold text-slate-800 dark:text-slate-100 group-hover:text-primary transition-colors line-clamp-1"
-                                >
-                                  {job.name}
-                                </Link>
-                              </div>
-
-                              {/* Salary */}
-                              <div className="shrink-0 text-xs sm:text-sm font-bold text-rose-600 dark:text-rose-400">
-                                {formatSalary(job.salary)}
-                              </div>
-                            </div>
-
-                            {/* Company Name */}
-                            <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300">
-                                Pro
-                              </span>
-                              <span className="truncate max-w-[260px]">
-                                {job.company?.name || 'TalentPulse Employer'}
-                              </span>
-                              {job.company?.isActive && (
-                                <CheckCircle2 className="w-3 h-3 text-blue-500 shrink-0" />
+                  {loadingSimilar ? (
+                    <div className="py-8 text-center">
+                      <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto mb-2" />
+                      <span className="text-xs text-slate-400">Đang tìm việc phù hợp...</span>
+                    </div>
+                  ) : similarJobs.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-slate-400">
+                      Chưa tìm thấy thêm gợi ý tương tự phù hợp.
+                    </div>
+                  ) : (
+                    <div className="space-y-3.5">
+                      {similarJobs.map((simJob) => (
+                        <div
+                          key={simJob._id}
+                          className="group p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-800/40 hover:bg-white dark:hover:bg-slate-800 hover:border-primary/30 transition duration-200"
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="w-10 h-10 rounded-xl border border-slate-200/60 bg-white dark:bg-slate-800 p-0.5 flex items-center justify-center shrink-0 overflow-hidden">
+                              {simJob.company?.logo ? (
+                                <img
+                                  src={simJob.company.logo}
+                                  alt={simJob.company.name}
+                                  className="w-full h-full object-contain rounded-lg"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none';
+                                    if (e.currentTarget.parentElement) {
+                                      e.currentTarget.parentElement.innerText =
+                                        getCompanyInitial(simJob.company?.name);
+                                    }
+                                  }}
+                                />
+                              ) : (
+                                <span className="text-xs font-bold text-primary">
+                                  {getCompanyInitial(simJob.company?.name)}
+                                </span>
                               )}
                             </div>
 
-                            {/* Location & Exp + Actions */}
-                            <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
-                              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                                <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800">
-                                  {formatLocation(job.location)}
+                            <div className="flex-1 min-w-0">
+                              <Link
+                                to={`/jobs/${simJob._id}`}
+                                className="text-xs font-black text-slate-900 dark:text-white group-hover:text-primary transition-colors line-clamp-1"
+                              >
+                                {simJob.name}
+                              </Link>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                {simJob.company?.name}
+                              </p>
+                              <div className="mt-1 flex items-center justify-between text-[11px]">
+                                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                  {formatSalary(simJob.salary)}
                                 </span>
-                                {job.level && (
-                                  <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800">
-                                    {job.level}
-                                  </span>
-                                )}
-                                <span>&bull; {formatDaysRemaining(job.endDate)}</span>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                {/* Hover Apply Button */}
-                                <button
-                                  type="button"
-                                  onClick={() => setApplyingJob(job)}
-                                  className="opacity-0 translate-x-1 pointer-events-none group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto px-3 py-1 bg-primary hover:bg-primary-dark text-white text-xs font-semibold rounded-lg shadow-xs transition-all duration-200 flex items-center gap-1 cursor-pointer whitespace-nowrap"
-                                >
-                                  <Zap className="w-3 h-3 fill-white" />
-                                  Ứng tuyển
-                                </button>
-
-                                {/* Save Button */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleSaveSimilarJob(job)}
-                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-400 hover:text-rose-500 hover:border-rose-300 dark:hover:border-rose-700 transition-colors cursor-pointer"
-                                  title="Lưu việc làm này"
-                                >
-                                  <Heart className="w-4 h-4" />
-                                </button>
+                                <span className="text-slate-400">
+                                  {formatLocation(simJob.location)}
+                                </span>
                               </div>
                             </div>
                           </div>
+
+                          <div className="mt-2.5 pt-2 border-t border-slate-200/40 dark:border-slate-700/40 flex items-center justify-between">
+                            <button
+                              type="button"
+                              onClick={() => handleSaveSimilarJob(simJob)}
+                              className="text-[11px] font-bold text-slate-500 hover:text-red-500 flex items-center gap-1 transition cursor-pointer"
+                            >
+                              <Heart className="w-3.5 h-3.5" />
+                              <span>Lưu tin</span>
+                            </button>
+
+                            <Link
+                              to={`/jobs/${simJob._id}`}
+                              className="text-[11px] font-bold text-primary hover:underline inline-flex items-center gap-0.5"
+                            >
+                              <span>Ứng tuyển</span>
+                              <ChevronRight className="w-3 h-3" />
+                            </Link>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-            </div>
-
-            {/* RIGHT COLUMN: TALENTPULSE CV & CAREER BANNER (~32%) */}
-            <div className="lg:col-span-4 sticky top-24 space-y-6">
-              {/* CV PRO MARKETING CARD */}
-              <div className="relative rounded-3xl overflow-hidden border border-blue-200/80 dark:border-blue-900/40 bg-gradient-to-b from-blue-50/90 via-sky-50/50 to-white dark:from-slate-900 dark:via-blue-950/30 dark:to-slate-900 p-6 sm:p-7 shadow-xl shadow-blue-500/5 text-center">
-                {/* Brand Logo / Badge */}
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-light border border-primary/20 mb-4">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  TalentPulse CV Studio
-                </div>
-
-                {/* Banner Title */}
-                <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
-                  CV <span className="text-primary">"Hịn"</span> Trên Tay
-                  <br />
-                  Apply Ngay Việc Hot
-                </h3>
-                <p className="mt-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Nền tảng tạo CV online và đề xuất cơ hội việc làm chuẩn chuyên nghiệp cho Developer & IT.
-                </p>
-
-                {/* CV Graphic Card Mockup */}
-                <div className="my-6 p-4 rounded-2xl bg-white dark:bg-slate-800 shadow-md border border-slate-100 dark:border-slate-700 max-w-[260px] mx-auto text-left space-y-2.5 transform -rotate-1 hover:rotate-0 transition-transform duration-300">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-xs">
-                      CV
+                      ))}
                     </div>
-                    <div className="flex-1 space-y-1">
-                      <div className="h-2.5 bg-primary/30 rounded w-3/4" />
-                      <div className="h-2 bg-slate-200 dark:bg-slate-700 rounded w-1/2" />
-                    </div>
-                  </div>
-                  <div className="h-1.5 bg-slate-100 dark:bg-slate-700 rounded w-full" />
-                  <div className="h-1.5 bg-slate-100 dark:bg-slate-700 rounded w-5/6" />
-                  <div className="flex gap-1 pt-1">
-                    <div className="h-3.5 w-10 bg-blue-100 dark:bg-blue-900/60 rounded" />
-                    <div className="h-3.5 w-12 bg-blue-100 dark:bg-blue-900/60 rounded" />
-                  </div>
+                  )}
+
+                  <Link
+                    to="/jobs"
+                    className="block text-center py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 transition"
+                  >
+                    Xem thêm hàng ngàn việc làm khác &rarr;
+                  </Link>
                 </div>
 
-                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mb-5">
-                  Tuyển chọn hàng chục mẫu CV chuẩn theo ngành nghề IT & ATS
-                </p>
-
-                {/* Big Action CTA */}
-                <Link
-                  to="/my-cv"
-                  className="w-full py-3 px-6 bg-primary hover:bg-primary-dark active:scale-[0.98] text-white text-sm font-extrabold rounded-2xl shadow-lg shadow-primary/25 hover:shadow-primary/35 transition-all flex items-center justify-center gap-2 cursor-pointer group"
-                >
-                  <span>Xem ngay</span>
-                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                </Link>
-              </div>
-
-              {/* TIPS / AI RECRUITMENT ASSISTANT BOX */}
-              <div className="rounded-2xl p-5 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-3">
-                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                  <ShieldCheck className="w-4 h-4 text-primary" />
-                  <span>Bí quyết tìm việc nhanh</span>
+                {/* Useful career tips banner */}
+                <div className="rounded-3xl border border-blue-200/80 bg-gradient-to-br from-blue-50/80 to-indigo-50/80 p-6 dark:border-blue-900/40 dark:bg-slate-900 dark:from-blue-950/20 dark:to-indigo-950/20 space-y-3">
+                  <div className="flex items-center gap-2 text-primary font-black text-xs uppercase tracking-wider">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Mẹo ứng tuyển thành công</span>
+                  </div>
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                    Tùy chỉnh CV trước khi nộp
+                  </h4>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    Nghiên cứu kỹ mô tả công việc của các vị trí đã lưu và bổ sung những kỹ năng trọng tâm vào CV trực tuyến để đạt điểm AI Matching cao hơn!
+                  </p>
+                  <Link
+                    to="/my-cv"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-primary hover:underline pt-1"
+                  >
+                    <span>Cập nhật CV Online của bạn</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Ứng tuyển sớm trong vòng <strong>24h</strong> kể từ khi tin đăng được duyệt giúp tăng tỷ lệ HR phản hồi lên đến <strong>85%</strong>.
-                </p>
-                <Link
-                  to="/jobs"
-                  className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline"
-                >
-                  <span>Khám phá thêm việc làm HOT</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </Link>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </main>
 
-      {/* QUICK APPLY MODAL */}
-      <JobApplyModal
-        job={applyingJob}
-        isOpen={Boolean(applyingJob)}
-        onClose={() => setApplyingJob(null)}
-        onSuccess={() => {
-          if (applyingJob) {
-            setAppliedJobIds((prev) => [...prev, applyingJob._id]);
-          }
-        }}
-      />
-
       <Footer />
+
+      {/* Apply Modal */}
+      {applyingJob && (
+        <JobApplyModal
+          job={applyingJob}
+          isOpen={true}
+          onClose={() => setApplyingJob(null)}
+          onSuccess={() => {
+            setApplyingJob(null);
+            setAppliedJobIds((prev) => [...prev, applyingJob._id]);
+            success(`Ứng tuyển thành công công việc "${applyingJob.name}"!`);
+          }}
+        />
+      )}
     </div>
   );
 }

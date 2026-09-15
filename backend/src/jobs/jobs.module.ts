@@ -4,6 +4,7 @@ import { BullModule } from '@nestjs/bull';
 import { JobsService } from './jobs.service';
 import { JobsController } from './jobs.controller';
 import { Job } from './entities/job.entity';
+import { JobApplicantView } from './entities/job-applicant-view.entity';
 import { Company } from 'src/companies/entities/company.entity';
 import { Application } from 'src/applications/entities/application.entity';
 import { UserCV } from 'src/usercvs/entities/usercv.entity';
@@ -18,7 +19,14 @@ import { JwtModule } from '@nestjs/jwt';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Job, Company, Application, UserCV, OnlineCV]),
+    TypeOrmModule.forFeature([
+      Job,
+      JobApplicantView,
+      Company,
+      Application,
+      UserCV,
+      OnlineCV,
+    ]),
     BullModule.registerQueue({
       name: 'job-sync-es',
     }),

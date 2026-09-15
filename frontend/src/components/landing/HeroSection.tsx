@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion';
-import { Search, MapPin, ChevronLeft, ChevronRight, Maximize2, X } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Maximize2, X } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import LocationDropdown from '../jobs/LocationDropdown';
 
 export default function HeroSection() {
   const { t } = useTranslation();
@@ -11,7 +12,7 @@ export default function HeroSection() {
   const navigate = useNavigate();
 
   const [heroKeyword, setHeroKeyword] = useState('');
-  const [heroLocation, setHeroLocation] = useState('');
+  const [heroLocation, setHeroLocation] = useState('Tất cả địa điểm');
 
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
@@ -23,7 +24,11 @@ export default function HeroSection() {
     e.preventDefault();
     const params = new URLSearchParams();
     if (heroKeyword.trim()) params.set('query', heroKeyword.trim());
-    if (heroLocation && heroLocation !== t('hero.locationPlaceholder')) {
+    if (
+      heroLocation &&
+      heroLocation !== t('hero.locationPlaceholder') &&
+      heroLocation !== 'Tất cả địa điểm'
+    ) {
       params.set('location', heroLocation);
     }
     navigate(`/jobs?${params.toString()}`);
@@ -164,20 +169,18 @@ export default function HeroSection() {
                   className="w-full py-2.5 text-sm bg-transparent text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none font-medium"
                 />
               </div>
+
               <div className="hidden sm:block w-px bg-gray-200 dark:bg-slate-700 my-2" />
-              <div className="flex items-center gap-2 px-3 sm:w-44">
-                <MapPin className="w-5 h-5 text-slate-400 shrink-0" />
-                <select
+
+              <div className="sm:w-56">
+                <LocationDropdown
                   value={heroLocation}
-                  onChange={(e) => setHeroLocation(e.target.value)}
-                  className="w-full py-2.5 text-sm bg-transparent text-slate-700 dark:text-slate-200 outline-none appearance-none cursor-pointer font-medium"
-                >
-                  <option>{t('hero.locationPlaceholder')}</option>
-                  <option>Hà Nội</option>
-                  <option>TP. Hồ Chí Minh</option>
-                  <option>Đà Nẵng</option>
-                </select>
+                  onChange={(loc) => setHeroLocation(loc)}
+                  variant="hero"
+                  align="right"
+                />
               </div>
+
               <button
                 type="submit"
                 className="px-6 py-3 bg-primary hover:bg-primary-dark text-white text-sm font-semibold rounded-xl transition-all duration-300 active:scale-95 shadow-sm shadow-primary/25 hover:shadow-md hover:shadow-primary/30 cursor-pointer whitespace-nowrap"

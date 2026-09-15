@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Sparkles,
@@ -7,44 +8,19 @@ import {
   FileText,
   ArrowRight,
   CheckCircle2,
+  Briefcase,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
+import {
+  TopHiringCompany,
+  getTopHiringCompaniesApi,
+  getCompanyInitial,
+} from '../../lib/jobApi';
 
 interface JobSidebarWidgetsProps {
   onSelectSkill?: (skill: string) => void;
-  onSelectCompany?: (companyId: string) => void;
+  onSelectCompany?: (companyName: string) => void;
 }
-
-export const TOP_COMPANIES = [
-  {
-    _id: 'softroad',
-    name: 'CÔNG TY TNHH SOFTROAD',
-    logo: 'https://cdn-new.topcv.vn/unsafe/150x/https://static.topcv.vn/company_logos/3b55ceb292c31e9c80d859a72173cf58-656557e4e1dfa.jpg',
-    openJobs: 8,
-    location: 'Hà Nội',
-  },
-  {
-    _id: 'viettel',
-    name: 'Tổng Công ty Dịch vụ Số Viettel',
-    logo: 'https://cdn-new.topcv.vn/unsafe/150x/https://static.topcv.vn/company_logos/52c6f1a80d50711eb44ea0951bc4f63c-66f62b662d5eb.jpg',
-    openJobs: 15,
-    location: 'Toàn quốc',
-  },
-  {
-    _id: 'fpt',
-    name: 'FPT Software',
-    logo: 'https://cdn-new.topcv.vn/unsafe/150x/https://static.topcv.vn/company_logos/fpt-software-605d8f635aa94.jpg',
-    openJobs: 24,
-    location: 'Hà Nội, TP.HCM, Đà Nẵng',
-  },
-  {
-    _id: 'vng',
-    name: 'VNG Corporation',
-    logo: 'https://cdn-new.topcv.vn/unsafe/150x/https://static.topcv.vn/company_logos/vng-corporation-5c4a7e37130df.jpg',
-    openJobs: 12,
-    location: 'Hồ Chí Minh',
-  },
-];
 
 export const SKILL_CLOUD = [
   'ReactJS',
@@ -73,8 +49,44 @@ export const SKILL_CLOUD = [
 
 export default function JobSidebarWidgets({
   onSelectSkill,
+  onSelectCompany,
 }: JobSidebarWidgetsProps) {
   const { user } = useAuth();
+  const [companies, setCompanies] = useState<TopHiringCompany[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadTopCompanies() {
+      try {
+        setLoadingCompanies(true);
+        const data = await getTopHiringCompaniesApi(10);
+        if (isMounted) {
+          setCompanies(Array.isArray(data) ? data : []);
+        }
+      } catch {
+        if (isMounted) {
+          setCompanies([]);
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingCompanies(false);
+        }
+      }
+    }
+    loadTopCompanies();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleCompanyClick = (company: TopHiringCompany) => {
+    if (onSelectCompany) {
+      onSelectCompany(company.name);
+    } else if (onSelectSkill) {
+      onSelectSkill(company.name);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -128,53 +140,119 @@ export default function JobSidebarWidgets({
         </div>
       </div>
 
-      {/* WIDGET 2: TOP EMPLOYERS SPOTLIGHT */}
+      {/* WIDGET 2: TOP 10 HIRING COMPANIES SPOTLIGHT */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200/80 dark:border-slate-800 shadow-sm">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
               <Building2 className="w-4 h-4" />
             </div>
-            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
-              Công ty hàng đầu
-            </h3>
+            <div>
+              <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                Top 10 Nhà tuyển dụng hàng đầu
+              </h3>
+            </div>
           </div>
-          <span className="text-[11px] font-semibold text-primary">Nổi bật</span>
+          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60">
+            Tuyển nhiều nhất
+          </span>
         </div>
 
-        <div className="mt-3 space-y-3">
-          {TOP_COMPANIES.map((company) => (
-            <div
-              key={company._id}
-              className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors group cursor-pointer border border-transparent hover:border-slate-200/80 dark:hover:border-slate-700/80"
-              onClick={() => {
-                if (onSelectSkill) onSelectSkill(company.name);
-              }}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1 shrink-0 flex items-center justify-center">
-                  <img
-                    src={company.logo}
-                    alt={company.name}
-                    className="w-full h-full object-contain rounded-lg"
-                    loading="lazy"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                  />
+        <div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800/60">
+          {loadingCompanies ? (
+            <div className="space-y-3 py-2">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="flex items-center gap-3 p-1.5 animate-pulse">
+                  <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-800" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="w-3/4 h-3 bg-slate-200 dark:bg-slate-800 rounded" />
+                    <div className="w-1/2 h-2.5 bg-slate-200 dark:bg-slate-800 rounded" />
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate group-hover:text-primary transition-colors">
-                    {company.name}
-                  </h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {company.openJobs} việc làm đang tuyển
-                  </p>
-                </div>
-              </div>
-              <ArrowRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+              ))}
             </div>
-          ))}
+          ) : companies.length === 0 ? (
+            <div className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
+              Chưa có dữ liệu công ty tuyển dụng
+            </div>
+          ) : (
+            <div className="space-y-1 max-h-[480px] overflow-y-auto pr-1">
+              {companies.map((company, index) => {
+                const rank = index + 1;
+                const rankBadgeColor =
+                  rank === 1
+                    ? 'bg-amber-500 text-white'
+                    : rank === 2
+                    ? 'bg-slate-400 text-white'
+                    : rank === 3
+                    ? 'bg-amber-700 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400';
+
+                return (
+                  <div
+                    key={company._id}
+                    onClick={() => handleCompanyClick(company)}
+                    className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-all group cursor-pointer border border-transparent hover:border-slate-200/80 dark:hover:border-slate-700/80"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {/* Rank number badge */}
+                      <span
+                        className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0 ${rankBadgeColor}`}
+                      >
+                        {rank}
+                      </span>
+
+                      {/* Logo or Fallback Letter */}
+                      <div className="w-9 h-9 rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-800 p-0.5 shrink-0 flex items-center justify-center overflow-hidden">
+                        {company.logo ? (
+                          <img
+                            src={company.logo}
+                            alt={company.name}
+                            className="w-full h-full object-contain rounded-lg"
+                            loading="lazy"
+                            onError={(e) => {
+                              const target = e.target as HTMLElement;
+                              target.style.display = 'none';
+                              if (target.nextElementSibling) {
+                                (target.nextElementSibling as HTMLElement).style.display = 'flex';
+                              }
+                            }}
+                          />
+                        ) : null}
+                        <div
+                          style={{ display: company.logo ? 'none' : 'flex' }}
+                          className="w-full h-full rounded-lg bg-gradient-to-br from-primary/10 to-primary/20 text-primary font-bold text-xs items-center justify-center"
+                        >
+                          {getCompanyInitial(company.name)}
+                        </div>
+                      </div>
+
+                      {/* Info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1">
+                          <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate group-hover:text-primary transition-colors">
+                            {company.name}
+                          </h4>
+                          {company.isPremium && (
+                            <Crown className="w-3 h-3 text-amber-500 fill-amber-500 shrink-0" />
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                          <Briefcase className="w-3 h-3 text-primary/70 shrink-0" />
+                          <span className="font-semibold text-primary dark:text-primary-light">
+                            {company.openJobs}
+                          </span>{' '}
+                          việc làm đang tuyển
+                        </p>
+                      </div>
+                    </div>
+
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0 ml-1.5" />
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

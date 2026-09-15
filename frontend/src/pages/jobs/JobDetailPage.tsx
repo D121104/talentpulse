@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Building2,
   MapPin,
@@ -20,19 +20,26 @@ import {
   BellRing,
   Heart,
   Eye,
+  Crown,
   FileText,
   Calculator,
 } from 'lucide-react';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import JobApplyModal from '../../components/jobs/JobApplyModal';
+import ApplicantCountModal from '../../components/jobs/ApplicantCountModal';
 import JobHtmlDescription from '../../components/jobs/JobHtmlDescription';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
   JobItem,
+  JobApplicantCountStatus,
   getJobDetailApi,
   getRelatedJobsApi,
+  toggleSaveJobApi,
+  getMySavedJobIdsApi,
+  getJobApplicantCountStatusApi,
+  unlockJobApplicantCountApi,
   formatSalary,
   formatLocation,
   formatDaysRemaining,
@@ -42,8 +49,9 @@ import { apiRequest } from '../../lib/api';
 
 export default function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { accessToken } = useAuth();
-  const { success, info } = useToast();
+  const navigate = useNavigate();
+  const { accessToken, user } = useAuth();
+  const { success, error, info } = useToast();
 
   const [job, setJob] = useState<JobItem | null>(null);
   const [relatedJobs, setRelatedJobs] = useState<JobItem[]>([]);
@@ -66,12 +74,26 @@ export default function JobDetailPage() {
     }
   });
 
+  // Applicant Count Status & Modal
+  const [applicantStatus, setApplicantStatus] = useState<JobApplicantCountStatus | null>(null);
+  const [isApplicantModalOpen, setIsApplicantModalOpen] = useState(false);
+  const [unlockingApplicantCount, setUnlockingApplicantCount] = useState(false);
+
   useEffect(() => {
     if (id) {
       loadJobData(id);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [id]);
+  }, [id, accessToken]);
+
+  const loadApplicantStatus = async (jobId: string) => {
+    try {
+      const res = await getJobApplicantCountStatusApi(jobId, accessToken);
+      setApplicantStatus(res);
+    } catch {
+      setApplicantStatus(null);
+    }
+  };
 
   const loadJobData = async (jobId: string) => {
     try {
@@ -84,16 +106,23 @@ export default function JobDetailPage() {
       setJob(jobData);
       setRelatedJobs(relatedList || []);
 
-      // Check saved
-      try {
-        const saved = localStorage.getItem('talentpulse_saved_jobs');
-        if (saved) {
-          const list: string[] = JSON.parse(saved);
-          setIsSaved(list.includes(jobId));
-          setSavedJobIds(list);
+      // Load applicant count status for this job
+      loadApplicantStatus(jobId);
+
+      // Check saved status from backend DB if authenticated
+      if (accessToken) {
+        try {
+          const ids = await getMySavedJobIdsApi(accessToken);
+          if (Array.isArray(ids)) {
+            setIsSaved(ids.includes(jobId));
+            setSavedJobIds(ids);
+          }
+        } catch {
+          // Ignore
         }
-      } catch {
-        // Ignore
+      } else {
+        setIsSaved(false);
+        setSavedJobIds([]);
       }
 
       // Check if user applied to this job
@@ -126,42 +155,72 @@ export default function JobDetailPage() {
     }
   };
 
-  const handleToggleSave = () => {
-    if (!id || !job) return;
+  const handleConfirmUnlockApplicantCount = async () => {
+    if (!id) return;
+    if (!accessToken) {
+      setIsApplicantModalOpen(false);
+      navigate('/login');
+      return;
+    }
     try {
-      const saved = localStorage.getItem('talentpulse_saved_jobs');
-      let list: string[] = saved ? JSON.parse(saved) : [];
-      if (list.includes(id)) {
-        list = list.filter((item) => item !== id);
-        setIsSaved(false);
-        info('Đã bỏ lưu việc làm');
-      } else {
-        list = [id, ...list];
-        setIsSaved(true);
-        info('Đã lưu việc làm vào danh sách yêu thích');
-      }
-      setSavedJobIds(list);
-      localStorage.setItem('talentpulse_saved_jobs', JSON.stringify(list));
-    } catch {
-      // Ignore
+      setUnlockingApplicantCount(true);
+      const updated = await unlockJobApplicantCountApi(id, accessToken);
+      setApplicantStatus(updated);
+      setIsApplicantModalOpen(false);
+      success(
+        `Đã mở khóa thành công! Hiện có ${updated.applicantCount ?? 0} người đang ứng tuyển cho vị trí này.`,
+      );
+    } catch (err: any) {
+      error(err?.message || 'Không thể mở khóa số lượng ứng viên.');
+    } finally {
+      setUnlockingApplicantCount(false);
     }
   };
 
-  const handleToggleSaveRelated = (rJob: JobItem) => {
+  const handleToggleSave = async () => {
+    if (!id || !job) return;
+
+    if (!accessToken) {
+      info('Vui lòng đăng nhập để lưu việc làm');
+      navigate('/login');
+      return;
+    }
+
     try {
-      const saved = localStorage.getItem('talentpulse_saved_jobs');
-      let list: string[] = saved ? JSON.parse(saved) : [];
-      if (list.includes(rJob._id)) {
-        list = list.filter((item) => item !== rJob._id);
-        info(`Đã bỏ lưu "${rJob.name}"`);
+      const res = await toggleSaveJobApi(id, accessToken);
+      setIsSaved(res.isSaved);
+      setSavedJobIds((prev) =>
+        res.isSaved ? [...prev, id] : prev.filter((item) => item !== id),
+      );
+      if (res.isSaved) {
+        success('Đã lưu việc làm vào danh sách yêu thích');
       } else {
-        list = [rJob._id, ...list];
-        success(`Đã lưu "${rJob.name}" vào danh sách yêu thích`);
+        info('Đã bỏ lưu việc làm');
       }
-      setSavedJobIds(list);
-      localStorage.setItem('talentpulse_saved_jobs', JSON.stringify(list));
-    } catch {
-      // Ignore
+    } catch (err: any) {
+      error(err?.message || 'Không thể lưu việc làm');
+    }
+  };
+
+  const handleToggleSaveRelated = async (rJob: JobItem) => {
+    if (!accessToken) {
+      info('Vui lòng đăng nhập để lưu việc làm');
+      navigate('/login');
+      return;
+    }
+
+    try {
+      const res = await toggleSaveJobApi(rJob._id, accessToken);
+      setSavedJobIds((prev) =>
+        res.isSaved ? [...prev, rJob._id] : prev.filter((item) => item !== rJob._id),
+      );
+      if (res.isSaved) {
+        success(`Đã lưu "${rJob.name}" vào danh sách yêu thích`);
+      } else {
+        info(`Đã bỏ lưu "${rJob.name}"`);
+      }
+    } catch (err: any) {
+      error(err?.message || 'Không thể lưu việc làm');
     }
   };
 
@@ -318,15 +377,35 @@ export default function JobDetailPage() {
                   </div>
                 </div>
 
-                {/* Application Stats Pill */}
+                {/* Application Stats Button */}
                 <div className="mt-4 flex items-center gap-2">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 dark:bg-blue-950/40 text-primary dark:text-primary-light border border-blue-200/60 dark:border-blue-900/60">
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>Xem số người đã ứng tuyển</span>
-                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-500 text-white">
-                      ✨ New
-                    </span>
-                  </div>
+                  {applicantStatus?.isUnlocked ? (
+                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs sm:text-sm font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/80 shadow-xs animate-fade-in">
+                      <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <span>
+                        Số người đang ứng tuyển :{' '}
+                        <strong className="text-emerald-800 dark:text-emerald-200 text-sm font-bold">
+                          {applicantStatus.applicantCount ?? 0}
+                        </strong>
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white tracking-wide">
+                        Đã mở khóa
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsApplicantModalOpen(true)}
+                      className="group relative inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs sm:text-sm font-semibold bg-gradient-to-r from-amber-500/10 via-primary/10 to-amber-500/10 hover:from-amber-500/20 hover:via-primary/20 hover:to-amber-500/20 text-slate-800 dark:text-slate-100 border border-amber-300/60 dark:border-amber-700/60 shadow-xs hover:shadow-md transition-all cursor-pointer active:scale-95"
+                    >
+                      <Eye className="w-4 h-4 text-amber-500 group-hover:scale-110 transition-transform" />
+                      <span>Xem số người đã ứng tuyển</span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-xs">
+                        <Crown className="w-3 h-3" />
+                        Premium
+                      </span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Big Action Buttons Row */}
@@ -405,8 +484,13 @@ export default function JobDetailPage() {
                           {job.level || '2 năm kinh nghiệm chuyên môn'}
                         </span>
                         <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium">
-                          Đại Học trở lên
+                          {job.education || 'Đại Học trở lên'}
                         </span>
+                        {job.workingModel && (
+                          <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-primary dark:text-primary-light font-medium border border-blue-200/50">
+                            {job.workingModel}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -416,15 +500,17 @@ export default function JobDetailPage() {
                         Quyền lợi:
                       </span>
                       <div className="flex flex-wrap gap-1.5">
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium">
-                          Bảo hiểm xã hội
-                        </span>
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium">
-                          Du lịch hàng năm
-                        </span>
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium">
-                          Thưởng tháng 13
-                        </span>
+                        {(Array.isArray(job.benefits) && job.benefits.length > 0
+                          ? job.benefits
+                          : ['Bảo hiểm xã hội', 'Du lịch hàng năm', 'Thưởng tháng 13']
+                        ).map((benefit, bIdx) => (
+                          <span
+                            key={bIdx}
+                            className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium"
+                          >
+                            {benefit}
+                          </span>
+                        ))}
                       </div>
                     </div>
 
@@ -689,11 +775,11 @@ export default function JobDetailPage() {
                 <div className="space-y-2.5 text-xs text-slate-600 dark:text-slate-300">
                   <div className="flex items-center gap-2.5">
                     <Users className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span><strong>Quy mô:</strong> 25-99 nhân viên</span>
+                    <span><strong>Quy mô:</strong> {job.company?.scale || '25-99 nhân viên'}</span>
                   </div>
                   <div className="flex items-center gap-2.5">
                     <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span><strong>Lĩnh vực:</strong> IT - Phần mềm</span>
+                    <span><strong>Lĩnh vực:</strong> {job.company?.industry || 'IT - Phần mềm'}</span>
                   </div>
                   <div className="flex items-start gap-2.5">
                     <MapPin className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
@@ -741,7 +827,7 @@ export default function JobDetailPage() {
                     <div>
                       <span className="text-slate-400 block text-[11px]">Học vấn</span>
                       <span className="font-bold text-slate-800 dark:text-slate-200">
-                        Đại Học trở lên
+                        {job.education || 'Đại Học trở lên'}
                       </span>
                     </div>
                   </div>
@@ -767,7 +853,7 @@ export default function JobDetailPage() {
                     <div>
                       <span className="text-slate-400 block text-[11px]">Hình thức làm việc</span>
                       <span className="font-bold text-slate-800 dark:text-slate-200">
-                        Làm việc tại văn phòng / Onsite
+                        {job.workingModel || 'Làm việc tại văn phòng / Onsite'}
                       </span>
                     </div>
                   </div>
@@ -793,13 +879,16 @@ export default function JobDetailPage() {
                   Danh mục nghề liên quan
                 </h3>
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    'Công nghệ Thông tin',
-                    'Software Engineering',
-                    'Fullstack Developer',
-                    'Backend Developer',
-                    'Frontend Developer',
-                  ].map((tag, idx) => (
+                  {(Array.isArray(job.categories) && job.categories.length > 0
+                    ? job.categories
+                    : [
+                        'Công nghệ Thông tin',
+                        'Software Engineering',
+                        'Fullstack Developer',
+                        'Backend Developer',
+                        'Frontend Developer',
+                      ]
+                  ).map((tag, idx) => (
                     <Link
                       key={idx}
                       to={`/jobs?query=${encodeURIComponent(tag)}`}
@@ -886,6 +975,34 @@ export default function JobDetailPage() {
         onSuccess={() => {
           // Success
         }}
+      />
+
+      {/* APPLICANT COUNT PREMIUM MODAL */}
+      <ApplicantCountModal
+        isOpen={isApplicantModalOpen}
+        onClose={() => setIsApplicantModalOpen(false)}
+        jobName={job?.name || ''}
+        isPremium={
+          applicantStatus?.isPremium !== undefined
+            ? applicantStatus.isPremium
+            : Boolean(
+                user?.isPremium ||
+                  user?.role === 'ADMIN' ||
+                  user?.premiumPlan === 'CANDIDATE_PREMIUM',
+              )
+        }
+        quotaRemaining={
+          applicantStatus?.weeklyQuotaRemaining !== undefined
+            ? applicantStatus.weeklyQuotaRemaining
+            : user?.isPremium || user?.role === 'ADMIN'
+            ? 5
+            : 0
+        }
+        quotaMax={applicantStatus?.weeklyQuotaMax ?? 5}
+        quotaUsed={applicantStatus?.weeklyQuotaUsed ?? 0}
+        nextResetDate={applicantStatus?.nextResetDate}
+        onConfirmUnlock={handleConfirmUnlockApplicantCount}
+        loading={unlockingApplicantCount}
       />
 
       <Footer />

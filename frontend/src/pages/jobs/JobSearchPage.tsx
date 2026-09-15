@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Flame,
   Zap,
@@ -23,12 +23,15 @@ import {
   JobItem,
   SearchJobsParams,
   searchJobsApi,
+  toggleSaveJobApi,
+  getMySavedJobIdsApi,
 } from '../../lib/jobApi';
 
 export default function JobSearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { accessToken } = useAuth();
-  const { info } = useToast();
+  const { success, error, info } = useToast();
 
   // Read URL query params
   const paramQuery = searchParams.get('query') || '';
@@ -54,15 +57,22 @@ export default function JobSearchPage() {
   const [filterUrgent, setFilterUrgent] = useState(paramIsUrgent);
   const [filterFeatured, setFilterFeatured] = useState(paramIsFeatured);
 
-  // Saved Jobs tracking (localStorage)
-  const [savedJobIds, setSavedJobIds] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('talentpulse_saved_jobs');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+  // Saved Jobs tracking (from backend PostgreSQL DB)
+  const [savedJobIds, setSavedJobIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (accessToken) {
+      void getMySavedJobIdsApi(accessToken)
+        .then((ids) => {
+          if (Array.isArray(ids)) setSavedJobIds(ids);
+        })
+        .catch(() => {
+          // Ignore
+        });
+    } else {
+      setSavedJobIds([]);
     }
-  });
+  }, [accessToken]);
 
   // Apply Modal state
   const [applyingJob, setApplyingJob] = useState<JobItem | null>(null);
@@ -162,17 +172,26 @@ export default function JobSearchPage() {
   };
 
   // Toggle Save Job
-  const handleToggleSave = (job: JobItem) => {
-    let nextSaved: string[];
-    if (savedJobIds.includes(job._id)) {
-      nextSaved = savedJobIds.filter((id) => id !== job._id);
-      info('Đã bỏ lưu việc làm');
-    } else {
-      nextSaved = [...savedJobIds, job._id];
-      info('Đã lưu việc làm vào danh sách yêu thích');
+  const handleToggleSave = async (job: JobItem) => {
+    if (!accessToken) {
+      info('Vui lòng đăng nhập để lưu việc làm');
+      navigate('/login');
+      return;
     }
-    setSavedJobIds(nextSaved);
-    localStorage.setItem('talentpulse_saved_jobs', JSON.stringify(nextSaved));
+
+    try {
+      const res = await toggleSaveJobApi(job._id, accessToken);
+      setSavedJobIds((prev) =>
+        res.isSaved ? [...prev, job._id] : prev.filter((id) => id !== job._id),
+      );
+      if (res.isSaved) {
+        success(`Đã lưu "${job.name}" vào danh sách yêu thích`);
+      } else {
+        info(`Đã bỏ lưu "${job.name}"`);
+      }
+    } catch (err: any) {
+      error(err?.message || 'Không thể lưu việc làm');
+    }
   };
 
   // Reset all filters
@@ -190,7 +209,7 @@ export default function JobSearchPage() {
   const getPageHeading = () => {
     const parts: string[] = [];
     if (paramQuery) parts.push(`"${paramQuery}"`);
-    else parts.push('Full Stack, Developer & Công nghệ thông tin');
+    else parts.push('việc làm hiện có tại TalentPulse');
 
     if (paramLocation && paramLocation !== 'Tất cả địa điểm') {
       parts.push(`tại ${paramLocation}`);
@@ -473,7 +492,10 @@ export default function JobSearchPage() {
                   onToggleSave={handleToggleSave}
                 />
               ) : (
-                <JobSidebarWidgets onSelectSkill={handleSkillSelect} />
+                <JobSidebarWidgets
+                  onSelectSkill={handleSkillSelect}
+                  onSelectCompany={handleSkillSelect}
+                />
               )}
             </div>
           </div>
