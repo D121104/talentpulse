@@ -168,6 +168,9 @@ async function runSeed() {
       taxCode: '0109988776',
       scale: '100-500 nhân sự',
       address: 'Keangnam Landmark 72, Phạm Hùng, Cầu Giấy, Hà Nội',
+      lat: 21.0173,
+      lon: 105.7838,
+      website: 'https://talentpulse.vn',
       description:
         'Tập đoàn công nghệ và giải pháp tuyển dụng nhân sự ứng dụng trí tuệ nhân tạo hàng đầu Việt Nam.',
       logo: 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=200&auto=format&fit=crop&q=60',
@@ -183,6 +186,9 @@ async function runSeed() {
     company.taxCode = '0109988776';
     company.scale = '100-500 nhân sự';
     company.address = 'Keangnam Landmark 72, Phạm Hùng, Cầu Giấy, Hà Nội';
+    company.lat = 21.0173;
+    company.lon = 105.7838;
+    company.website = 'https://talentpulse.vn';
     company.description =
       'Tập đoàn công nghệ và giải pháp tuyển dụng nhân sự ứng dụng trí tuệ nhân tạo hàng đầu Việt Nam.';
     company.logo = 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=200&auto=format&fit=crop&q=60';

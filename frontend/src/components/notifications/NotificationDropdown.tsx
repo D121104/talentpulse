@@ -337,9 +337,9 @@ export function NotificationDropdown() {
       const companyId =
         item.data?.companyId || (targetType === 'company' ? item.targetId : null);
       if (companyId) {
-        navigate(`/#categories`);
+        navigate(`/companies`);
       } else {
-        navigate('/');
+        navigate('/companies');
       }
       return;
     }

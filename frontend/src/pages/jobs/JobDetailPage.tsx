@@ -791,7 +791,7 @@ export default function JobDetailPage() {
 
                 {/* Link to company page */}
                 <Link
-                  to={`/jobs?query=${encodeURIComponent(job.company?.name || '')}`}
+                  to={job.company?._id ? `/companies/${job.company._id}` : `/jobs?query=${encodeURIComponent(job.company?.name || '')}`}
                   className="w-full py-2.5 px-4 bg-blue-50 hover:bg-blue-100 text-primary dark:bg-blue-950/40 dark:text-primary-light dark:hover:bg-blue-900/50 border border-blue-200/60 dark:border-blue-800/60 text-xs font-bold rounded-xl transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <span>Xem trang công ty</span>

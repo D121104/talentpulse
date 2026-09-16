@@ -15,6 +15,9 @@ export interface CompanyInfo {
   name: string;
   description?: string;
   address?: string;
+  lat?: number | null;
+  lon?: number | null;
+  website?: string | null;
   logo?: string;
   taxCode?: string;
   scale?: string;
@@ -314,7 +317,7 @@ export const employerApi = {
   updateCompany: (id: string, data: Partial<CompanyInfo>, accessToken: string) =>
     apiRequest<CompanyInfo>(`/companies/${id}`, { method: 'PATCH', body: data, accessToken }),
 
-  createCompanyByHr: (data: { name: string; description?: string; address?: string; logo?: string; taxCode?: string; scale?: string }, accessToken: string) =>
+  createCompanyByHr: (data: Partial<CompanyInfo> & { name: string }, accessToken: string) =>
     apiRequest<CompanyInfo>('/companies/hr/create', { method: 'POST', body: data, accessToken }),
 
   requestJoinCompany: (companyId: string, accessToken: string) =>
