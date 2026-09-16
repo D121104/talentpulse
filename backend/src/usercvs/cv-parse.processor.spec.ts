@@ -3,6 +3,10 @@ import { CVParseStatus } from './cv-parse-status';
 import { aiContentVersion } from './cv-parse.processor';
 import { AiServiceClient } from 'src/ai-matching/ai-service.client';
 import { IsNull } from 'typeorm';
+import {
+  CvDownloadError,
+  downloadTrustedCv,
+} from 'src/ai-matching/cv-download';
 
 jest.mock('src/ai-matching/cv-download', () => ({
   CvDownloadError: class CvDownloadError extends Error {
@@ -108,6 +112,32 @@ describe('UserCvParseProcessor', () => {
       expect.objectContaining({
         parseStatus: CVParseStatus.FAILED,
         parseErrorCode: 'PARSE_EMPTY_CONTENT',
+      }),
+    );
+  });
+
+  it('records a trusted-download failure and does not call the AI parser', async () => {
+    const { processor, userCvRepo, aiMatchingService } = setup();
+    (
+      downloadTrustedCv as jest.MockedFunction<typeof downloadTrustedCv>
+    ).mockRejectedValueOnce(new CvDownloadError('CV_DOWNLOAD_FAILED'));
+
+    await expect(
+      processor.handleParse({ data: jobData } as any),
+    ).rejects.toMatchObject({
+      code: 'CV_DOWNLOAD_FAILED',
+    });
+
+    expect(aiMatchingService.parseCv).not.toHaveBeenCalled();
+    expect(userCvRepo.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        _id: cvId,
+        url: jobData.expectedUrl,
+        contentVersion: jobData.contentVersion,
+      }),
+      expect.objectContaining({
+        parseStatus: CVParseStatus.FAILED,
+        parseErrorCode: 'CV_DOWNLOAD_FAILED',
       }),
     );
   });

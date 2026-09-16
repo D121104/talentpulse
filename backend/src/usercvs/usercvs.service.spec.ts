@@ -66,6 +66,22 @@ describe('UserCVsService.createAiSnapshot', () => {
     ).rejects.toThrow(ConflictException);
   });
 
+  it('returns a stable readiness code for the candidate assistant boundary', async () => {
+    const { service, consentService } = setup({
+      ...readyCv,
+      parseStatus: CVParseStatus.FAILED,
+      parsedText: null,
+      contentHash: null,
+    });
+
+    await expect(
+      service.createCandidateAssistantSnapshot(userId, cvId),
+    ).rejects.toMatchObject({
+      response: { code: 'CV_NOT_READY' },
+    });
+    expect(consentService.hasValidConsent).not.toHaveBeenCalled();
+  });
+
   it('denies a ready CV without valid consent', async () => {
     const { service, consentService } = setup(readyCv, false);
 

@@ -125,6 +125,42 @@ describe('AiServiceClient', () => {
     expect(request.mock.calls[0][0].headers).toBeUndefined();
   });
 
+  it('uses the bounded extended timeout for local Ollama calls', async () => {
+    const client = new AiServiceClient(
+      config({
+        ...auth,
+        NODE_ENV: 'development',
+        AI_SERVICE_TIMEOUT_MS: '180000',
+      }),
+    );
+    request.mockResolvedValue({ status: 200, data: parseResponse });
+
+    await client.parseCv(parseRequest);
+
+    expect(request.mock.calls[0][0].timeout).toBe(180000);
+  });
+
+  it('keeps the deployment timeout cap outside local runtimes', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'demo';
+    try {
+      const client = new AiServiceClient(
+        config({
+          ...auth,
+          AI_SERVICE_TIMEOUT_MS: '180000',
+        }),
+      );
+      request.mockResolvedValue({ status: 200, data: parseResponse });
+
+      await client.parseCv(parseRequest);
+
+      expect(request.mock.calls[0][0].timeout).toBe(10000);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
   it('sanitizes FastAPI health failures and keeps the timeout bounded', async () => {
     const client = new AiServiceClient(
       config({ AI_SERVICE_URL: 'https://ai.internal' }),
@@ -500,6 +536,19 @@ describe('AiServiceClient job indexing boundary', () => {
       data: {
         ...jobIndexResponse(jobIndexUpsertRequest, 'UPSERT'),
         content_hash: 'a'.repeat(64),
+      },
+    });
+    await expect(client.upsertJob(jobIndexUpsertRequest)).rejects.toMatchObject(
+      {
+        code: 'AI_INVALID_RESPONSE',
+      },
+    );
+
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        ...jobIndexResponse(jobIndexUpsertRequest, 'UPSERT'),
+        representation_version: 'local-ollama-v1',
       },
     });
     await expect(client.upsertJob(jobIndexUpsertRequest)).rejects.toMatchObject(

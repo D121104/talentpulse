@@ -370,6 +370,23 @@ def test_indexing_upsert_uses_document_embedding_and_allowlisted_payload() -> No
     assert all("description" not in str(value).casefold() for value in payload.values())
 
 
+def test_indexing_assigns_distinct_stable_point_ids_to_distinct_jobs() -> None:
+    embedding = FakeEmbedding()
+    vector = FakeVector()
+    service = JobIndexingService(embedding, vector)
+    first_job = make_job()
+    second_job = make_job()
+
+    first = service.upsert(make_upsert(job=first_job, key="first-job"))
+    second = service.upsert(make_upsert(job=second_job, key="second-job"))
+
+    assert first.point_id != second.point_id
+    assert {point_id for point_id, _, _ in vector.upserts} == {
+        str(stable_job_point_id(first_job.job_id, "demo-v1")),
+        str(stable_job_point_id(second_job.job_id, "demo-v1")),
+    }
+
+
 def test_indexing_delete_writes_stable_point_id() -> None:
     vector = FakeVector()
     service = JobIndexingService(FakeEmbedding(), vector)
@@ -435,6 +452,73 @@ def test_cohere_document_embedding_uses_search_document_input_type() -> None:
     assert adapter.embed_document("job document") == [0.1, 0.2]
     assert client.calls[0]["input_type"] == "search_document"
     assert client.calls[0]["embedding_types"] == ["float"]
+
+
+def test_qdrant_adapter_search_filters_to_configured_index_version() -> None:
+    current_job_id = uuid4()
+    demo_job_id = uuid4()
+    stale_job_id = uuid4()
+    points = [
+        {
+            "payload": {"job_id": str(current_job_id), "index_version": "local-ollama-v1"},
+            "score": 0.8,
+        },
+        {
+            "payload": {"job_id": str(demo_job_id), "index_version": "demo-v1"},
+            "score": 0.99,
+        },
+        {
+            "payload": {"job_id": str(stale_job_id), "index_version": "local-ollama-v0"},
+            "score": 0.95,
+        },
+    ]
+
+    class SearchQdrant:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def query_points(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            query_filter = kwargs["query_filter"]
+            must = query_filter["must"]
+            version_filter = next(
+                (item for item in must if item.get("key") == "index_version"), None
+            )
+            expected_version = (
+                version_filter["match"]["value"] if version_filter is not None else None
+            )
+            filtered_points = [
+                point
+                for point in points
+                if expected_version is None or point["payload"]["index_version"] == expected_version
+            ]
+            return {"points": filtered_points}
+
+    client = SearchQdrant()
+    adapter = QdrantVectorRetriever(
+        client,
+        "jobs_collection",
+        collection_alias="jobs_current",
+        index_version="local-ollama-v1",
+        dimensions=2,
+    )
+    existing_filter = {
+        "must": [{"key": "is_active", "match": {"value": True}}],
+        "must_not": [{"key": "representation_marker", "match": {"value": "marker"}}],
+        "should": [],
+    }
+
+    results = adapter.search([0.1, 0.2], existing_filter, 3)
+
+    assert [chunk.job_id for chunk in results] == [current_job_id]
+    assert client.calls[0]["query_filter"] == {
+        "must": [
+            {"key": "is_active", "match": {"value": True}},
+            {"key": "index_version", "match": {"value": "local-ollama-v1"}},
+        ],
+        "must_not": [{"key": "representation_marker", "match": {"value": "marker"}}],
+        "should": [],
+    }
 
 
 def test_qdrant_adapter_upsert_filters_payload_and_delete_uses_alias() -> None:

@@ -8,7 +8,9 @@ import {
   GrantCandidateAssistantConsentDto,
   RevokeCandidateAssistantConsentDto,
 } from './dto/candidate-assistant-consent.dto';
+import type { CandidateAssistantConsentPolicy } from './candidate-assistant-consent.policy';
 import { CandidateAssistantConsentService } from './candidate-assistant-consent.service';
+
 @Controller('ai/candidate-assistant/consent')
 @ApiTags('Candidate Assistant Consent')
 @ApiBearerAuth()
@@ -16,19 +18,24 @@ import { CandidateAssistantConsentService } from './candidate-assistant-consent.
 @Roles(Role.USER, Role.ADMIN)
 export class CandidateAssistantConsentController {
   constructor(private readonly service: CandidateAssistantConsentService) {}
-  @Post('grant') grant(
-    @Body() dto: GrantCandidateAssistantConsentDto,
-    @User() user: IUser,
-  ) {
+
+  @Post('grant')
+  grant(@Body() dto: GrantCandidateAssistantConsentDto, @User() user: IUser) {
     return this.service.grant(user._id, dto);
   }
-  @Post('revoke') revoke(
-    @Body() dto: RevokeCandidateAssistantConsentDto,
-    @User() user: IUser,
-  ) {
+
+  @Post('revoke')
+  revoke(@Body() dto: RevokeCandidateAssistantConsentDto, @User() user: IUser) {
     return this.service.revoke(user._id, dto);
   }
-  @Get('current') current(@User() user: IUser) {
+
+  @Get('policy')
+  policy(): CandidateAssistantConsentPolicy {
+    return this.service.getActivePolicy();
+  }
+
+  @Get('current')
+  current(@User() user: IUser) {
     return this.service.getCurrent(user._id);
   }
 }

@@ -19,11 +19,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Environment files
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env*
 *.env
 !*.env.example
 
@@ -140,6 +136,7 @@ deployment-bundle/
 
 # Secret material and certificate variants
 .secrets/
+.secret/
 secrets/
 *.secret
 *.token

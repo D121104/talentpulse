@@ -17,7 +17,10 @@ import {
   CandidateAssistantConsentStatus,
 } from './entities/ai-candidate-assistant-consent.entity';
 import { AiCandidateAssistantConsentEvent } from './entities/ai-candidate-assistant-consent-event.entity';
-import { getCandidateAssistantConsentPolicy } from './candidate-assistant-consent.policy';
+import {
+  CandidateAssistantConsentPolicy,
+  getCandidateAssistantConsentPolicy,
+} from './candidate-assistant-consent.policy';
 
 @Injectable()
 export class CandidateAssistantConsentService {
@@ -32,7 +35,7 @@ export class CandidateAssistantConsentService {
   private assertUser(userId: string) {
     if (!isUUID(userId)) throw new BadRequestException('Invalid user id');
   }
-  getActivePolicy() {
+  getActivePolicy(): CandidateAssistantConsentPolicy {
     return getCandidateAssistantConsentPolicy(this.config);
   }
   private assertPolicy(version: string, hash: string) {

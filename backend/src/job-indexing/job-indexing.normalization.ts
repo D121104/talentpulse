@@ -32,6 +32,11 @@ function normalizeSkills(value: unknown): string[] {
     : [];
 }
 
+function normalizeSalary(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'number' ? value : Number(value);
+}
+
 export function buildCanonicalJobSnapshot(
   job: Job,
   company: Company,
@@ -47,7 +52,9 @@ export function buildCanonicalJobSnapshot(
     level: job.level ? normalizeJobText(job.level) : null,
     work_mode: null,
     employment_type: null,
-    salary: job.salary ?? null,
+    // PostgreSQL `numeric` columns are hydrated by TypeORM as strings. The
+    // external contract is strict and requires a JSON number.
+    salary: normalizeSalary(job.salary),
     salary_currency: null,
     start_date: job.startDate?.toISOString() ?? null,
     end_date: job.endDate?.toISOString() ?? null,
@@ -174,7 +181,10 @@ export function buildCanonicalProjection(
   };
 }
 
-export function buildJobPayload(projection: CanonicalJobProjection) {
+export function buildJobPayload(
+  projection: CanonicalJobProjection,
+  representationVersion = JOB_INDEX_VERSION,
+) {
   return {
     job_id: projection.job._id,
     company_id: projection.company._id,
@@ -186,15 +196,18 @@ export function buildJobPayload(projection: CanonicalJobProjection) {
     level: projection.job.level ?? null,
     salary: projection.job.salary ?? null,
     content_hash: projection.contentHash,
-    representation_version: JOB_INDEX_VERSION,
-    index_version: JOB_INDEX_VERSION,
+    representation_version: representationVersion,
+    index_version: representationVersion,
     source_version: projection.sourceVersion,
   };
 }
 
-export function deterministicJobPointId(jobId: string): string {
+export function deterministicJobPointId(
+  jobId: string,
+  representationVersion = JOB_INDEX_VERSION,
+): string {
   const digest = createHash('sha256')
-    .update(`talentpulse:${JOB_INDEX_VERSION}:job:${jobId}`)
+    .update(`talentpulse:${representationVersion}:job:${jobId}`)
     .digest('hex');
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(
     13,

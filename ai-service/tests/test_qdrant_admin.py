@@ -146,6 +146,25 @@ def test_missing_marker_is_created_with_inactive_payload() -> None:
     assert payload["is_deleted"] is True
 
 
+def test_ollama_marker_uses_local_embedding_metadata() -> None:
+    settings = _settings(
+        embedding_provider="ollama",
+        ollama_embedding_model="embeddinggemma:300m",
+        ollama_embedding_dimensions=768,
+    )
+    client = FakeAdminClient(
+        collection_exists=False,
+        info=_info(dimensions=768, schema={}),
+    )
+
+    QdrantAdminAdapter(client, settings).initialize_and_verify()
+
+    assert client.marker_payload is not None
+    assert client.marker_payload["embedding_provider"] == "ollama"
+    assert client.marker_payload["embedding_model"] == "embeddinggemma:300m"
+    assert client.marker_payload["embedding_dimensions"] == 768
+
+
 def test_compatible_marker_is_idempotent() -> None:
     first = FakeAdminClient(aliases=[("jobs_current_demo", "jobs_demo")])
     QdrantAdminAdapter(first, _settings()).initialize_and_verify()

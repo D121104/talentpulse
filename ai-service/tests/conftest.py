@@ -14,7 +14,17 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
-        auth_required=False, max_upload_bytes=1024, max_extracted_chars=1_000, max_pdf_pages=1
+        environment="test",
+        auth_required=False,
+        jwt_algorithms=("RS256",),
+        jwt_public_key=None,
+        jwt_secret=None,
+        jwt_issuer=None,
+        jwt_audience=None,
+        jwt_subject=None,
+        max_upload_bytes=1024,
+        max_extracted_chars=1_000,
+        max_pdf_pages=1,
     )
 
 

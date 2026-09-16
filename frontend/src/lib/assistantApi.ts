@@ -62,6 +62,7 @@ export interface AssistantCvOption {
 }
 
 export interface AssistantConsentPolicy {
+  purpose: string;
   consentVersion: string;
   policyHash: string;
 }
@@ -83,7 +84,7 @@ export interface AssistantQuota {
   timezone: string;
 }
 
-export interface AssistantConsentMutation extends AssistantConsentPolicy {
+export interface AssistantConsentMutation extends Pick<AssistantConsentPolicy, "consentVersion" | "policyHash"> {
   source: string;
   sourceMetadata?: Record<string, string>;
 }
@@ -141,6 +142,12 @@ export const assistantApi = {
       })),
     ];
   },
+
+  consentPolicy: (accessToken: string) =>
+    apiRequest<AssistantConsentPolicy>(
+      "/ai/candidate-assistant/consent/policy",
+      { accessToken }
+    ),
 
   currentConsent: (accessToken: string) =>
     apiRequest<AssistantConsent | null>(

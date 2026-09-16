@@ -100,6 +100,8 @@ export interface CreateOnlineCVDto {
 
 export interface UpdateOnlineCVDto extends Partial<CreateOnlineCVDto> {}
 
+export type UserCvParseStatus = 'PENDING' | 'PROCESSING' | 'READY' | 'FAILED';
+
 export interface UserCV {
   _id: string;
   url: string;
@@ -107,6 +109,8 @@ export interface UserCV {
   description?: string;
   onlineCvId?: string;
   fileType: string;
+  parseStatus?: UserCvParseStatus;
+  parseErrorCode?: string | null;
   parsedText?: string;
   skills?: string[];
   education?: string[];

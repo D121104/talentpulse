@@ -2,6 +2,7 @@ import { Company } from 'src/companies/entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
 import { JobIndexOutbox } from './entities/job-index-outbox.entity';
 import { JobIndexingSubscriber } from './job-indexing.subscriber';
+import { JOB_INDEX_VERSION } from './job-indexing.constants';
 
 function managerFor(job: any, company: any) {
   const insert = jest.fn().mockResolvedValue(undefined);
@@ -57,6 +58,7 @@ describe('JobIndexingSubscriber', () => {
         aggregateId: 'job-1',
         eventType: 'JOB_CHANGED',
         sourceVersion: expect.any(String),
+        representationVersion: JOB_INDEX_VERSION,
       }),
     );
   });

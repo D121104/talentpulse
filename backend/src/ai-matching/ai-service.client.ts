@@ -350,11 +350,17 @@ export class AiServiceClient implements JobIndexingClient {
     this.baseUrl =
       config.get<string>('AI_SERVICE_URL')?.trim().replace(/\/$/, '') ||
       undefined;
+    const nodeEnv = config.get<string>('NODE_ENV')?.trim().toLowerCase();
+    const maxTimeoutMs = ['local', 'development', 'test'].includes(
+      nodeEnv ?? '',
+    )
+      ? 180000
+      : 30000;
     this.timeoutMs = this.boundedNumber(
       'AI_SERVICE_TIMEOUT_MS',
       10000,
       100,
-      30000,
+      maxTimeoutMs,
     );
     this.issuer = config.get<string>('AI_SERVICE_ISSUER')?.trim() || undefined;
     this.audience =

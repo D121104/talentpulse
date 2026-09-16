@@ -5,11 +5,12 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Protocol, cast
+from urllib.request import Request, urlopen
 from uuid import UUID
 
 from qdrant_client.models import PointIdsList, PointStruct
 
-from app.domain.rag import RetrievedChunk
+from app.domain.rag import ProviderGeneration, RetrievedChunk
 
 
 class _EmbeddingClient(Protocol):
@@ -123,6 +124,102 @@ class CohereEmbeddingAdapter:
             raise ProviderFailure("embedding provider failed") from exc
 
 
+_MAX_OLLAMA_RESPONSE_BYTES = 10 * 1024 * 1024
+_MAX_OLLAMA_TIMEOUT_SECONDS = 120.0
+
+
+def _ollama_generation_schema() -> Mapping[str, object]:
+    """Use the supported subset of JSON Schema for Ollama's grammar compiler."""
+
+    def remove_max_lengths(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {
+                key: remove_max_lengths(item) for key, item in value.items() if key != "maxLength"
+            }
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return [remove_max_lengths(item) for item in value]
+        return value
+
+    schema = remove_max_lengths(ProviderGeneration.model_json_schema())
+    if not isinstance(schema, Mapping):
+        raise ValueError("generation schema is not an object")
+    return schema
+
+
+def _ollama_json_request(
+    base_url: str, path: str, payload: Mapping[str, object], timeout: float
+) -> object:
+    request = Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        body = response.read(_MAX_OLLAMA_RESPONSE_BYTES + 1)
+    if len(body) > _MAX_OLLAMA_RESPONSE_BYTES:
+        raise ValueError("provider response is too large")
+    return json.loads(body.decode("utf-8"))
+
+
+class OllamaEmbeddingAdapter:
+    """Provider boundary for Ollama's native embedding endpoint."""
+
+    def __init__(self, base_url: str, model: str, dimensions: int, timeout: float) -> None:
+        if (
+            not base_url
+            or not model
+            or not 1 <= dimensions <= 4_096
+            or not 0 < timeout <= _MAX_OLLAMA_TIMEOUT_SECONDS
+        ):
+            raise ValueError("Ollama embedding configuration is invalid")
+        self._base_url = base_url
+        self._model = model
+        self._timeout = timeout
+        self.dimensions = dimensions
+        self.provider_name = "ollama"
+        self.model_name = model
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def embed_document(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def _embed(self, text: str) -> list[float]:
+        try:
+            response = _ollama_json_request(
+                self._base_url,
+                "/api/embed",
+                {
+                    "model": self._model,
+                    "input": [text],
+                    "dimensions": self.dimensions,
+                    "truncate": True,
+                },
+                self._timeout,
+            )
+            if not isinstance(response, Mapping):
+                raise ValueError("embedding response is not an object")
+            raw = response.get("embeddings")
+            if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or len(raw) != 1:
+                raise ValueError("embedding response must contain one vector")
+            vector_raw = raw[0]
+            if not isinstance(vector_raw, Sequence) or isinstance(vector_raw, (str, bytes)):
+                raise ValueError("embedding response is not a vector")
+            vector = list(vector_raw)
+            if len(vector) != self.dimensions or not all(
+                isinstance(item, (int, float))
+                and not isinstance(item, bool)
+                and math.isfinite(float(item))
+                for item in vector
+            ):
+                raise ValueError("embedding response has invalid dimensions")
+            return [float(item) for item in vector]
+        except Exception as exc:
+            raise ProviderFailure("embedding provider failed") from exc
+
+
 def _response_body(response: object) -> object:
     if isinstance(response, Mapping):
         response = response.get("body", response)
@@ -172,6 +269,43 @@ class BedrockNovaGenerationAdapter:
             if text is None:
                 raise ValueError("generation response has no text")
             return json.loads(text)
+        except Exception as exc:
+            raise ProviderFailure("generation provider failed") from exc
+
+
+class OllamaGenerationAdapter:
+    """Provider boundary for Ollama's non-streaming structured generation endpoint."""
+
+    def __init__(self, base_url: str, model: str, timeout: float) -> None:
+        if not base_url or not model or not 0 < timeout <= _MAX_OLLAMA_TIMEOUT_SECONDS:
+            raise ValueError("Ollama generation configuration is invalid")
+        self._base_url = base_url
+        self._model = model
+        self._timeout = timeout
+
+    def generate(self, prompt: str) -> object:
+        try:
+            generation_payload: dict[str, object] = {
+                "model": self._model,
+                "prompt": prompt,
+                "stream": False,
+                "format": _ollama_generation_schema(),
+                "options": {"temperature": 0},
+            }
+            if self._model.lower().startswith("qwen3"):
+                generation_payload["think"] = False
+            response = _ollama_json_request(
+                self._base_url,
+                "/api/generate",
+                generation_payload,
+                self._timeout,
+            )
+            if not isinstance(response, Mapping) or not isinstance(response.get("response"), str):
+                raise ValueError("generation response has no JSON text")
+            generated = json.loads(response["response"])
+            if not isinstance(generated, Mapping):
+                raise ValueError("generation response is not a JSON object")
+            return generated
         except Exception as exc:
             raise ProviderFailure("generation provider failed") from exc
 
@@ -259,11 +393,23 @@ class QdrantVectorRetriever:
     ) -> list[RetrievedChunk]:
         try:
             client = cast(_QdrantClient, self._client)
+            search_filter = query_filter
+            if self.index_version is not None:
+                existing_must = query_filter.get("must", [])
+                if not isinstance(existing_must, list):
+                    raise ValueError("vector provider filter is invalid")
+                search_filter = {
+                    **query_filter,
+                    "must": [
+                        *existing_must,
+                        {"key": "index_version", "match": {"value": self.index_version}},
+                    ],
+                }
             if hasattr(client, "query_points"):
                 response = client.query_points(
                     collection_name=self.collection_alias,
                     query=vector,
-                    query_filter=query_filter,
+                    query_filter=search_filter,
                     limit=limit,
                     with_payload=True,
                 )
@@ -276,7 +422,7 @@ class QdrantVectorRetriever:
                 points = client.search(
                     collection_name=self.collection_alias,
                     query_vector=vector,
-                    query_filter=query_filter,
+                    query_filter=search_filter,
                     limit=limit,
                     with_payload=True,
                 )

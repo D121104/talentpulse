@@ -26,6 +26,7 @@
     "index:jobs": "ts-node -r tsconfig-paths/register src/commands/job-index.ts",
     "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
     "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
+    "seed:local-jobs": "ts-node -r tsconfig-paths/register src/scripts/seed-local-jobs.ts",
     "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts"
   },
   "dependencies": {

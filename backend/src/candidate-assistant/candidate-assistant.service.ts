@@ -294,7 +294,7 @@ export class CandidateAssistantService {
               blocks: null,
               citations: null,
               filterState: null,
-              errorCode: 'AI_PROVIDER_ERROR',
+              errorCode: this.failureCode(error),
             })
           : this.messageRepo.create({
               sessionId: id,
@@ -306,12 +306,21 @@ export class CandidateAssistantService {
               blocks: null,
               citations: null,
               filterState: null,
-              errorCode: 'AI_PROVIDER_ERROR',
+              errorCode: this.failureCode(error),
             }),
       );
       if (error instanceof HttpException) throw error;
       throw mapCandidateAssistantProviderError(error);
     }
+  }
+  private failureCode(error: unknown): string {
+    if (!(error instanceof HttpException)) return 'AI_PROVIDER_ERROR';
+    const response = error.getResponse();
+    if (typeof response === 'object' && response !== null) {
+      const code = (response as { code?: unknown }).code;
+      if (typeof code === 'string' && code.trim()) return code.slice(0, 64);
+    }
+    return `REQUEST_HTTP_${error.getStatus()}`;
   }
   private async loadJobs(ids?: string[]) {
     const jobs = ids?.length

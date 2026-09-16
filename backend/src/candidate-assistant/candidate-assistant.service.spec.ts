@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CandidateAssistantService } from './candidate-assistant.service';
 import { Role } from 'src/decorator/customize';
 import {
@@ -47,6 +51,9 @@ function setup(
     find: jest.fn().mockResolvedValue([]),
     createQueryBuilder: jest.fn(),
   } as any;
+  const userCVsService = {
+    createCandidateAssistantSnapshot: jest.fn(),
+  } as any;
   const service = new CandidateAssistantService(
     sessionRepo,
     messageRepo,
@@ -65,7 +72,7 @@ function setup(
         .fn()
         .mockResolvedValue({ _id: 'company-1', updatedAt: new Date() }),
     } as any,
-    { createCandidateAssistantSnapshot: jest.fn() } as any,
+    userCVsService,
     { generate: jest.fn() } as any,
   );
   return {
@@ -74,6 +81,7 @@ function setup(
     messageRepo,
     quotaService: (service as any).quotaService,
     aiClient: (service as any).aiClient,
+    userCVsService,
   };
 }
 describe('CandidateAssistantService', () => {
@@ -144,6 +152,41 @@ describe('CandidateAssistantService', () => {
       ),
     ).rejects.toThrow('requires exactly one active job');
     expect(quotaService.release).toHaveBeenCalled();
+  });
+
+  it('records CV readiness failures separately from AI provider failures', async () => {
+    const { service, messageRepo, aiClient, userCVsService } = setup({
+      _id: 'session-1',
+      userId: user._id,
+      archivedAt: null,
+      mode: AiChatSessionMode.CV_ANALYSIS,
+    });
+    userCVsService.createCandidateAssistantSnapshot.mockRejectedValue(
+      new ConflictException({
+        code: 'CV_NOT_READY',
+        message: 'CV is not ready for AI processing',
+      }),
+    );
+
+    await expect(
+      service.sendMessage(
+        'session-1',
+        {
+          content: 'review my CV',
+          clientMessageId: '33333333-3333-4333-8333-333333333333',
+          cvId: '44444444-4444-4444-8444-444444444444',
+        },
+        user,
+      ),
+    ).rejects.toThrow(ConflictException);
+
+    expect(messageRepo.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: AiChatMessageStatus.FAILED,
+        errorCode: 'CV_NOT_READY',
+      }),
+    );
+    expect(aiClient.generate).not.toHaveBeenCalled();
   });
 
   it('rejects quota access for HR users', async () => {

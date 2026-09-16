@@ -230,7 +230,10 @@ export class UserCVsService {
       typeof cv.parsedText !== 'string' ||
       !cv.parsedText.trim()
     ) {
-      throw new ConflictException('CV chưa sẵn sàng để xử lý AI');
+      throw new ConflictException({
+        code: 'CV_NOT_READY',
+        message: 'CV chưa sẵn sàng để xử lý AI',
+      });
     }
     return {
       cvId: cv._id,

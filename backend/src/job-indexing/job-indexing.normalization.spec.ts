@@ -76,6 +76,13 @@ describe('job indexing normalization', () => {
     );
   });
 
+  it('converts PostgreSQL numeric salary strings to strict contract numbers', () => {
+    const { job, company } = fixture();
+    job.salary = '38000000' as unknown as number;
+
+    expect(buildCanonicalJobSnapshot(job, company).salary).toBe(38000000);
+  });
+
   it('uses an explicit timestamp-only canonical source-version projection', () => {
     const { job, company } = fixture();
     const sourceProjection = buildCanonicalJobSourceVersionProjection(

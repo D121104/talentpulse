@@ -162,13 +162,33 @@ export function validateEnvironment(
     );
   }
 
+  const maxTimeoutMs = ['local', 'development', 'test'].includes(nodeEnv)
+    ? 180000
+    : 30000;
   const timeoutMs =
     config.AI_SERVICE_TIMEOUT_MS == null
       ? 10000
       : Number(config.AI_SERVICE_TIMEOUT_MS);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30000) {
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 100 ||
+    timeoutMs > maxTimeoutMs
+  ) {
     throw new Error(
-      'AI_SERVICE_TIMEOUT_MS must be an integer between 100 and 30000',
+      `AI_SERVICE_TIMEOUT_MS must be an integer between 100 and ${maxTimeoutMs}`,
+    );
+  }
+
+  const representationVersion = String(
+    config.AI_JOB_INDEX_REPRESENTATION_VERSION ?? 'demo-v1',
+  ).trim();
+  if (
+    !representationVersion ||
+    representationVersion.length > 128 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(representationVersion)
+  ) {
+    throw new Error(
+      'AI_JOB_INDEX_REPRESENTATION_VERSION must be a bounded version without whitespace',
     );
   }
 
@@ -183,6 +203,7 @@ export function validateEnvironment(
     AI_SERVICE_JWT_SUBJECT: serviceSubject,
     AI_SERVICE_TIMEOUT_MS: timeoutMs,
     AI_JOB_INDEX_SCOPE: jobIndexScope,
+    AI_JOB_INDEX_REPRESENTATION_VERSION: representationVersion,
     ...(consentPolicyHash
       ? { AI_CV_CONSENT_POLICY_HASH: consentPolicyHash }
       : {}),

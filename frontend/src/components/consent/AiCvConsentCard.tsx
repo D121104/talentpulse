@@ -1,35 +1,62 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
-import { assistantApi, type AssistantConsent, type AssistantConsentMutation } from '../../lib/assistantApi';
+import {
+  assistantApi,
+  type AssistantConsent,
+  type AssistantConsentMutation,
+  type AssistantConsentPolicy,
+} from '../../lib/assistantApi';
 
 export default function AiCvConsentCard() {
   const { accessToken } = useAuth();
   const [consent, setConsent] = useState<AssistantConsent | null>(null);
+  const [policy, setPolicy] = useState<AssistantConsentPolicy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const granted = consent?.status === 'GRANTED';
-  const policyConfigured = Boolean(consent && /^[a-f0-9]{64}$/.test(consent.policyHash));
+  const policyConfigured = Boolean(
+    policy &&
+      policy.consentVersion &&
+      /^[a-f0-9]{64}$/.test(policy.policyHash),
+  );
 
   useEffect(() => {
     if (!accessToken) {
+      setConsent(null);
+      setPolicy(null);
       setIsLoading(false);
       return;
     }
 
-    void assistantApi.currentConsent(accessToken).then(setConsent)
-      .catch(() => setError('Máy chủ chưa cung cấp policy metadata cho consent trợ lý AI. Tính năng cấp consent đang tạm khóa.'))
+    setIsLoading(true);
+    setError('');
+    void Promise.all([
+      assistantApi.consentPolicy(accessToken),
+      assistantApi.currentConsent(accessToken),
+    ])
+      .then(([activePolicy, currentConsent]) => {
+        setPolicy(activePolicy);
+        setConsent(currentConsent);
+      })
+      .catch(() => {
+        setPolicy(null);
+        setConsent(null);
+        setError(
+          'Máy chủ chưa cung cấp policy metadata cho consent trợ lý AI. Tính năng cấp consent đang tạm khóa.',
+        );
+      })
       .finally(() => setIsLoading(false));
   }, [accessToken]);
 
   const updateConsent = async (nextGranted: boolean) => {
-    if (!accessToken || !consent || !policyConfigured) return;
+    if (!accessToken || !policy || !policyConfigured) return;
     setIsSaving(true);
     setError('');
     const input: AssistantConsentMutation = {
-      consentVersion: consent.consentVersion,
-      policyHash: consent.policyHash,
+      consentVersion: policy.consentVersion,
+      policyHash: policy.policyHash,
       source: 'web',
       sourceMetadata: { locale: document.documentElement.lang || 'vi' },
     };

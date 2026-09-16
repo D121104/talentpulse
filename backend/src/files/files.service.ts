@@ -61,6 +61,9 @@ export class FilesService {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           resource_type: 'raw',
+          // The parser and the existing CV preview contract consume secure_url
+          // directly, so keep raw CV delivery explicitly public.
+          type: 'upload',
           folder: 'user-cvs',
           format: isPdf ? 'pdf' : isDocx ? 'docx' : undefined,
         },
@@ -107,6 +110,7 @@ export class FilesService {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           resource_type: isPdf ? 'raw' : 'image',
+          type: isPdf ? 'upload' : undefined,
           folder: 'user-cvs',
           public_id: filename.replace(/\.[^/.]+$/, ''), // Remove extension
           format: isPdf ? 'pdf' : undefined,

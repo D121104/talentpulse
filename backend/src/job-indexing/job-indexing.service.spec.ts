@@ -60,8 +60,44 @@ describe('JobIndexingService', () => {
         aggregateId: 'job-1',
         sourceVersion: getJobSourceVersion(activeJob(), company()),
         eventType: 'JOB_CHANGED',
+        representationVersion: JOB_INDEX_VERSION,
       },
     });
+    expect(outboxRepo.insert).not.toHaveBeenCalled();
+  });
+
+  it('requeues a completed current event during explicit reconciliation', async () => {
+    const existing = {
+      _id: 'outbox-1',
+      status: 'COMPLETED',
+    };
+    const outboxRepo = {
+      findOne: jest.fn().mockResolvedValue(existing),
+      insert: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const service = new JobIndexingService(
+      {} as any,
+      outboxRepo as any,
+      { findOne: jest.fn().mockResolvedValue(activeJob()) } as any,
+      { findOne: jest.fn().mockResolvedValue(company()) } as any,
+      {} as any,
+    );
+
+    await service.enqueue('job-1', true);
+
+    expect(outboxRepo.update).toHaveBeenCalledWith(
+      { _id: 'outbox-1', status: 'COMPLETED' },
+      expect.objectContaining({
+        status: 'PENDING',
+        attemptCount: 0,
+        processedAt: null,
+        leaseUntil: null,
+        leaseToken: null,
+        claimedAt: null,
+        lastError: null,
+      }),
+    );
     expect(outboxRepo.insert).not.toHaveBeenCalled();
   });
 
@@ -195,6 +231,60 @@ describe('JobIndexingService', () => {
       first.identity.operation_attempt_id,
     );
     expect(second.idempotency_key).toBe(first.idempotency_key);
+  });
+
+  it('keeps simultaneous representations isolated by request and idempotency version', async () => {
+    const upsertJob = jest.fn().mockImplementation(async (request) => ({
+      request_id: request.identity.request_id,
+      trace_id: request.identity.trace_id,
+      operation_attempt_id: request.identity.operation_attempt_id,
+      job_id: request.job.job_id,
+      operation: 'UPSERT',
+      status: 'INDEXED',
+      source_version: request.source_version,
+      representation_version: request.representation_version,
+      point_id: deterministicJobPointId(
+        request.job.job_id,
+        request.representation_version,
+      ),
+      content_hash: request.content_hash,
+      embedding_provider: 'deterministic',
+      embedding_model: 'deterministic-v1',
+      embedding_dimensions: 1024,
+      embedded: true,
+    }));
+    const service = new JobIndexingService(
+      {} as any,
+      {} as any,
+      { findOne: jest.fn().mockResolvedValue(activeJob()) } as any,
+      { findOne: jest.fn().mockResolvedValue(company()) } as any,
+      { upsertJob } as any,
+    );
+    const sourceVersion = getJobSourceVersion(activeJob(), company());
+
+    await (service as any).indexClaim({
+      _id: '00000000-0000-4000-8000-000000000012',
+      aggregateId: 'job-1',
+      sourceVersion,
+      representationVersion: 'demo-v1',
+      eventType: 'JOB_CHANGED',
+      attemptCount: 1,
+    });
+    await (service as any).indexClaim({
+      _id: '00000000-0000-4000-8000-000000000013',
+      aggregateId: 'job-1',
+      sourceVersion,
+      representationVersion: 'local-ollama-v1',
+      eventType: 'JOB_CHANGED',
+      attemptCount: 1,
+    });
+
+    expect(
+      upsertJob.mock.calls.map(([request]) => request.representation_version),
+    ).toEqual(['demo-v1', 'local-ollama-v1']);
+    expect(upsertJob.mock.calls[0][0].idempotency_key).not.toBe(
+      upsertJob.mock.calls[1][0].idempotency_key,
+    );
   });
 
   it('records bounded failure metadata and does not claim beyond max attempts', () => {

@@ -39,6 +39,13 @@ const modes: Array<{ value: AssistantMode; label: string }> = [
   { value: "ADVICE", label: "Tư vấn nghề nghiệp" },
 ];
 
+function modeAllowsCv(assistantMode: AssistantMode): boolean {
+  return (
+    assistantMode === "CV_ANALYSIS" ||
+    assistantMode === "CV_JOB_COMPARISON"
+  );
+}
+
 function makeClientMessageId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto)
     return crypto.randomUUID();
@@ -76,6 +83,7 @@ export default function CandidateAssistant() {
     [messages],
   );
   const authIdentity = `${user?._id ?? "guest"}:${accessToken ?? "none"}`;
+  const cvAllowed = modeAllowsCv(mode);
 
   useEffect(() => {
     setIsOpen(false);
@@ -155,7 +163,9 @@ export default function CandidateAssistant() {
         {
           content: text,
           clientMessageId,
-          cvId: selectedCvId || undefined,
+          ...(modeAllowsCv(mode) && selectedCvId
+            ? { cvId: selectedCvId }
+            : {}),
           jobIds: selectedJobId ? [selectedJobId] : undefined,
           filters,
         },
@@ -183,13 +193,16 @@ export default function CandidateAssistant() {
         ].slice(-MAX_HISTORY),
       );
     } catch (requestError) {
+      const errorCode = getAssistantErrorCode(requestError);
       setDegraded(isAssistantUnavailable(requestError));
       setError(
-        getAssistantErrorCode(requestError) === "AI_CONSENT_REQUIRED"
+        errorCode === "AI_CONSENT_REQUIRED"
           ? "Đồng ý trợ lý AI không còn hiệu lực. Hãy kiểm tra lại phần quản lý CV."
-          : isAssistantUnavailable(requestError)
-            ? "Trợ lý AI chưa được bật ở môi trường này."
-            : "Không thể kết nối trợ lý AI. Bạn có thể thử lại.",
+          : errorCode === "CV_NOT_READY"
+            ? "CV chưa sẵn sàng để phân tích. Hãy vào Quản lý CV, tải lại CV và chờ trạng thái xử lý hoàn tất."
+            : isAssistantUnavailable(requestError)
+              ? "Trợ lý AI chưa được bật ở môi trường này."
+              : "Không thể kết nối trợ lý AI. Bạn có thể thử lại.",
       );
     } finally {
       setIsLoading(false);
@@ -233,7 +246,9 @@ export default function CandidateAssistant() {
               <select
                 value={mode}
                 onChange={(event) => {
-                  setMode(event.target.value as AssistantMode);
+                  const nextMode = event.target.value as AssistantMode;
+                  setMode(nextMode);
+                  if (!modeAllowsCv(nextMode)) setSelectedCvId("");
                   setSession(null);
                 }}
                 className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -249,15 +264,29 @@ export default function CandidateAssistant() {
               <select
                 value={selectedCvId}
                 onChange={(event) => setSelectedCvId(event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                disabled={!cvAllowed}
+                aria-label={cvAllowed ? "Chọn CV" : "CV không áp dụng ở chế độ này"}
+                title={
+                  cvAllowed
+                    ? "Chọn CV để rà soát hoặc so sánh với việc"
+                    : "CV chỉ dùng trong chế độ Rà soát CV hoặc Hỏi về việc"
+                }
+                className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               >
-                <option value="">Không chọn CV</option>
+                <option value="">
+                  {cvAllowed ? "Không chọn CV" : "CV không áp dụng ở chế độ này"}
+                </option>
                 {cvOptions.map((cv) => (
                   <option key={cv.id} value={cv.id}>
                     {cv.title}
                   </option>
                 ))}
               </select>
+              {!cvAllowed && (
+                <p className="col-span-2 text-[11px] text-slate-500">
+                  CV chỉ dùng trong chế độ Rà soát CV hoặc Hỏi về việc.
+                </p>
+              )}
               <input
                 value={selectedJobId}
                 onChange={(event) => setSelectedJobId(event.target.value)}

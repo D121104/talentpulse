@@ -135,18 +135,20 @@ def _build_services(
     if not local and settings.generation_provider != "bedrock":
         raise RuntimeError("Production requires the Bedrock generation provider.")
 
-    cloud_bundle = None
+    provider_bundle = None
     if (
         (embedding_provider is None and settings.embedding_provider == "cohere")
+        or (embedding_provider is None and settings.embedding_provider == "ollama")
         or (vector_retriever is None and settings.vector_store_provider == "qdrant")
         or (generation_provider is None and settings.generation_provider == "bedrock")
+        or (generation_provider is None and settings.generation_provider == "ollama")
     ):
-        cloud_bundle = create_provider_bundle(settings)
+        provider_bundle = create_provider_bundle(settings)
 
     if embedding_provider is None:
-        if settings.embedding_provider == "cohere":
-            assert cloud_bundle is not None
-            embedding_provider = cloud_bundle.embedding
+        if settings.embedding_provider in {"cohere", "ollama"}:
+            assert provider_bundle is not None
+            embedding_provider = provider_bundle.embedding
         else:
             if not local:
                 raise RuntimeError(
@@ -157,8 +159,8 @@ def _build_services(
 
     if vector_retriever is None:
         if settings.vector_store_provider == "qdrant":
-            assert cloud_bundle is not None
-            vector_retriever = cloud_bundle.retriever
+            assert provider_bundle is not None
+            vector_retriever = provider_bundle.retriever
         else:
             if not local:
                 raise RuntimeError(
@@ -167,9 +169,9 @@ def _build_services(
             vector_retriever = InMemoryVectorRetriever(dimensions=settings.cohere_dimensions)
 
     if generation_provider is None:
-        if settings.generation_provider == "bedrock":
-            assert cloud_bundle is not None
-            generation_provider = cloud_bundle.generation
+        if settings.generation_provider in {"bedrock", "ollama"}:
+            assert provider_bundle is not None
+            generation_provider = provider_bundle.generation
         else:
             if not local:
                 raise RuntimeError(

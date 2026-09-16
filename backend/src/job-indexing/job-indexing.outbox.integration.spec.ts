@@ -12,6 +12,7 @@ import {
 } from 'src/ai-matching/ai-service.client';
 import { JobIndexOutbox } from './entities/job-index-outbox.entity';
 import { JobIndexOutbox20260907170000 } from 'src/database/migrations/20260907170000-JobIndexOutbox';
+import { JobIndexOutboxRepresentationVersion20260915000000 } from 'src/database/migrations/20260915000000-JobIndexOutboxRepresentationVersion';
 import {
   deterministicJobPointId,
   getJobSourceVersion,
@@ -110,7 +111,12 @@ function dataSourceOptions(
       ? [JobIndexOutbox, Job, Company]
       : [JobIndexOutbox],
     subscribers: includeCanonicalSchema ? [JobIndexingSubscriber] : [],
-    migrations: includeMigration ? [JobIndexOutbox20260907170000] : [],
+    migrations: includeMigration
+      ? [
+          JobIndexOutbox20260907170000,
+          JobIndexOutboxRepresentationVersion20260915000000,
+        ]
+      : [],
     migrationsTableName: 'job_index_integration_migrations',
     synchronize: false,
     logging: false,
@@ -344,6 +350,7 @@ integrationDescribe(
         aggregateType: 'JOB',
         eventType: 'JOB_CHANGED',
         sourceVersion: getJobSourceVersion(job, company),
+        representationVersion: 'demo-v1',
         status: 'PENDING',
         attemptCount: 0,
         availableAt: new Date(),
@@ -497,6 +504,86 @@ integrationDescribe(
           leaseToken: null,
         }),
       );
+    });
+
+    it('persists simultaneous representations for the same canonical source version', async () => {
+      const { job, company } = canonicalFixtures();
+      const sourceVersion = getJobSourceVersion(job, company);
+      const repository = setupDataSource.getRepository(JobIndexOutbox);
+
+      await repository.insert([
+        repository.create({
+          aggregateId: job._id,
+          aggregateType: 'JOB',
+          eventType: 'JOB_CHANGED',
+          sourceVersion,
+          representationVersion: 'demo-v1',
+          status: 'PENDING',
+          attemptCount: 0,
+          availableAt: new Date(),
+        }),
+        repository.create({
+          aggregateId: job._id,
+          aggregateType: 'JOB',
+          eventType: 'JOB_CHANGED',
+          sourceVersion,
+          representationVersion: 'local-ollama-v1',
+          status: 'PENDING',
+          attemptCount: 0,
+          availableAt: new Date(),
+        }),
+      ]);
+
+      const rows = await repository.find({
+        where: {
+          aggregateId: job._id,
+          sourceVersion,
+          eventType: 'JOB_CHANGED',
+        },
+      });
+      expect(rows.map((row) => row.representationVersion).sort()).toEqual([
+        'demo-v1',
+        'local-ollama-v1',
+      ]);
+    });
+
+    it('refuses migration rollback when representations would collapse', async () => {
+      const { job, company } = canonicalFixtures();
+      const sourceVersion = getJobSourceVersion(job, company);
+      const repository = setupDataSource.getRepository(JobIndexOutbox);
+      await repository.insert([
+        repository.create({
+          aggregateId: job._id,
+          aggregateType: 'JOB',
+          eventType: 'JOB_CHANGED',
+          sourceVersion,
+          representationVersion: 'demo-v1',
+          status: 'PENDING',
+          attemptCount: 0,
+          availableAt: new Date(),
+        }),
+        repository.create({
+          aggregateId: job._id,
+          aggregateType: 'JOB',
+          eventType: 'JOB_CHANGED',
+          sourceVersion,
+          representationVersion: 'local-ollama-v1',
+          status: 'PENDING',
+          attemptCount: 0,
+          availableAt: new Date(),
+        }),
+      ]);
+      const queryRunner = setupDataSource.createQueryRunner();
+      await queryRunner.connect();
+      try {
+        await expect(
+          new JobIndexOutboxRepresentationVersion20260915000000().down(
+            queryRunner,
+          ),
+        ).rejects.toThrow('Cannot safely restore');
+      } finally {
+        await queryRunner.release();
+      }
     });
 
     it('reclaims expired leases and fences stale successful completion', async () => {

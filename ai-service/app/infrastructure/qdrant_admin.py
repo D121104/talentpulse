@@ -54,8 +54,13 @@ class QdrantAdminAdapter:
         self._collection = _required(settings.qdrant_collection, "collection")
         self._alias = _required(settings.qdrant_alias, "alias")
         self._index_version = _required(settings.qdrant_index_version, "index version")
-        self._embedding_model = _required(settings.cohere_model, "embedding model")
-        self._dimensions = settings.cohere_dimensions
+        self._embedding_provider = "ollama" if settings.embedding_provider == "ollama" else "cohere"
+        if self._embedding_provider == "ollama":
+            self._embedding_model = _required(settings.ollama_embedding_model, "embedding model")
+            self._dimensions = settings.ollama_embedding_dimensions
+        else:
+            self._embedding_model = _required(settings.cohere_model, "embedding model")
+            self._dimensions = settings.cohere_dimensions
 
     def initialize_and_verify(self) -> dict[str, object]:
         """Create/verify the demo index without deleting or repointing state."""
@@ -134,6 +139,7 @@ class QdrantAdminAdapter:
                 collection=self._collection,
                 alias=self._alias,
                 index_version=self._index_version,
+                embedding_provider=self._embedding_provider,
                 embedding_model=self._embedding_model,
                 dimensions=self._dimensions,
             )
@@ -169,6 +175,7 @@ class QdrantAdminAdapter:
             collection=self._collection,
             alias=self._alias,
             index_version=self._index_version,
+            embedding_provider=self._embedding_provider,
             embedding_model=self._embedding_model,
             dimensions=self._dimensions,
         )
@@ -234,6 +241,7 @@ def _representation_marker_payload(
     index_version: str,
     embedding_model: str,
     dimensions: int,
+    embedding_provider: str = "cohere",
 ) -> dict[str, object]:
     return {
         REPRESENTATION_MARKER_FIELD: REPRESENTATION_MARKER_VALUE,
@@ -242,7 +250,7 @@ def _representation_marker_payload(
         "alias": alias,
         "index_version": index_version,
         "representation_version": index_version,
-        "embedding_provider": "cohere",
+        "embedding_provider": embedding_provider,
         "embedding_model": embedding_model,
         "embedding_dimensions": dimensions,
         "vector_distance": Distance.COSINE.value,

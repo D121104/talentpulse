@@ -22,6 +22,8 @@ from app.infrastructure.rag_providers import (
     CohereEmbeddingAdapter,
     DeterministicEmbeddingProvider,
     InMemoryVectorRetriever,
+    OllamaEmbeddingAdapter,
+    OllamaGenerationAdapter,
     ProviderFailure,
     QdrantVectorRetriever,
 )
@@ -64,12 +66,14 @@ def generate_request(
     cv: AuthorizedCvSnapshot | None = None,
     consent_version: str | None = None,
     matching_evidence: dict[str, object] | None = None,
+    message: str = "find a suitable role",
+    locale: str = "en",
 ) -> RagGenerateRequest:
     return RagGenerateRequest(
         identity=identity(),
-        normalized_user_message="find a suitable role",
+        normalized_user_message=message,
         intent=intent,  # type: ignore[arg-type]
-        locale="en",
+        locale=locale,
         recent_history=[],
         filter_state=StructuredFilterState(),
         authorized_cv_snapshot=cv,
@@ -130,6 +134,38 @@ def test_health_endpoints_keep_compatibility_and_are_local_only() -> None:
         assert client.get("/health/live").status_code == 200
         assert client.get("/health").json() == {"status": "ok"}
         assert client.get("/health/ready").json() == {"status": "ok"}
+
+
+def test_local_ollama_startup_uses_factory_bundle_without_provider_calls(monkeypatch) -> None:
+    settings = Settings(
+        environment="local",
+        auth_required=False,
+        embedding_provider="ollama",
+        vector_store_provider="qdrant",
+        generation_provider="ollama",
+        ollama_embedding_dimensions=2,
+        ollama_timeout_seconds=2.0,
+        qdrant_collection="jobs_local",
+        qdrant_alias="jobs_current_local",
+        qdrant_index_version="local-v1",
+    )
+    embedding = OllamaEmbeddingAdapter("http://ollama", "embed-test", 2, 2.0)
+    vector = QdrantVectorRetriever(
+        object(),
+        "jobs_local",
+        collection_alias="jobs_current_local",
+        index_version="local-v1",
+        dimensions=2,
+    )
+    generation = OllamaGenerationAdapter("http://ollama", "generate-test", 2.0)
+    bundle = ProviderBundle(embedding=embedding, retriever=vector, generation=generation)
+    monkeypatch.setattr("app.main.create_provider_bundle", lambda settings: bundle)
+
+    application = create_app(settings)
+
+    assert application.state.embedding_provider is embedding
+    assert application.state.vector_provider is vector
+    assert application.state.generation_provider is generation
 
 
 def test_readiness_failure_is_sanitized_and_returns_503() -> None:
@@ -432,8 +468,81 @@ def test_generation_rejects_unknown_citations_and_makes_one_repair_attempt() -> 
     )
 
     assert response.answer_status == "DEGRADED"
-    assert response.citation_keys == ["job-1"] or response.citation_keys == []
+    assert response.citation_keys == ["job-1"]
+    assert response.referenced_job_ids == [job_data["job_id"]]
     assert provider.calls == 2
+
+
+@pytest.mark.parametrize(
+    ("message", "provider_block"),
+    [
+        (
+            "tìm các công việc phù hợp với kỹ năng của tôi",
+            {"kind": "REFUSAL", "text": "No evidence provided."},
+        ),
+        (
+            "liệt kê các công việc đang tuyển người",
+            {"kind": "ADVICE", "text": "Consider defining a target role."},
+        ),
+    ],
+)
+def test_vietnamese_job_search_falls_back_to_grounded_retrieved_jobs(
+    message: str, provider_block: dict[str, str]
+) -> None:
+    first_job = job()
+    second_job = job(uuid4())
+    second_job["title"] = "Data Platform Engineer"
+    evidence = [
+        {
+            "job_id": first_job["job_id"],
+            "rank": 1,
+            "score": 0.9,
+            "citation_key": "job-1",
+        },
+        {
+            "job_id": second_job["job_id"],
+            "rank": 2,
+            "score": 0.8,
+            "citation_key": "job-2",
+        },
+    ]
+    provider = SequenceProvider(
+        [
+            {
+                "answer_blocks": [provider_block],
+                "claims": [],
+                "citation_keys": [],
+                "referenced_job_ids": [],
+            }
+        ]
+    )
+
+    response = GenerationService(provider).generate(
+        generate_request(
+            evidence=evidence,
+            jobs=[first_job, second_job],
+            message=message,
+            locale="vi",
+        )
+    )
+
+    rendered = "\n".join(block.text for block in response.answer_blocks)
+    assert response.answer_status == "DEGRADED"
+    assert response.degraded is True
+    assert provider.calls == 1
+    assert response.citation_keys == ["job-1", "job-2"]
+    assert response.referenced_job_ids == [first_job["job_id"], second_job["job_id"]]
+    assert all(str(value) in rendered for value in (first_job["job_id"], second_job["job_id"]))
+    assert "Python Engineer" in rendered
+    assert "Data Platform Engineer" in rendered
+    assert "job-1" in rendered
+    assert "job-2" in rendered
+    assert [claim.type for claim in response.claims] == ["JOB_TITLE", "JOB_TITLE"]
+    assert [claim.subject_id for claim in response.claims] == [
+        first_job["job_id"],
+        second_job["job_id"],
+    ]
+    assert [claim.citation_keys for claim in response.claims] == [["job-1"], ["job-2"]]
 
 
 def test_generation_accepts_only_retrieval_citations() -> None:
@@ -527,6 +636,40 @@ def test_generation_no_evidence_is_explicit_for_job_search() -> None:
     assert response.degraded is True
 
 
+def test_cv_analysis_refusal_is_replaced_by_grounded_structured_cv_fallback() -> None:
+    cv = AuthorizedCvSnapshot(
+        cv_id=uuid4(),
+        content_hash="a" * 64,
+        skills=["Python", "SQL", "FastAPI"],
+        sanitized_text="Python SQL FastAPI",
+        consent_version="v1",
+    )
+    provider = SequenceProvider(
+        [
+            {
+                "answer_blocks": [{"kind": "REFUSAL", "text": "No evidence."}],
+                "claims": [],
+                "citation_keys": [],
+                "referenced_job_ids": [],
+            },
+            {
+                "answer_blocks": [{"kind": "REFUSAL", "text": "No evidence."}],
+                "claims": [],
+                "citation_keys": [],
+                "referenced_job_ids": [],
+            },
+        ]
+    )
+
+    response = GenerationService(provider).generate(
+        generate_request("CV_ANALYSIS", cv=cv, consent_version="v1")
+    )
+
+    assert response.answer_status == "DEGRADED"
+    assert "Python, SQL, FastAPI" in response.answer_blocks[0].text
+    assert provider.calls == 2
+
+
 def test_cv_modes_require_matching_consent_and_use_bounded_fallback() -> None:
     cv = AuthorizedCvSnapshot(
         cv_id=uuid4(),
@@ -542,7 +685,7 @@ def test_cv_modes_require_matching_consent_and_use_bounded_fallback() -> None:
     )
 
     assert response.answer_status == "DEGRADED"
-    assert "1 skill" in response.answer_blocks[0].text
+    assert "Python" in response.answer_blocks[0].text
 
 
 def test_cohere_adapter_is_bounded_and_normalizes_vector() -> None:

@@ -10,6 +10,7 @@ import { Company } from 'src/companies/entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
 import { JobIndexOutbox } from './entities/job-index-outbox.entity';
 import { getJobSourceVersion } from './job-indexing.normalization';
+import { resolveJobIndexRepresentationVersion } from './job-indexing.constants';
 
 export class JobIndexingSubscriber implements EntitySubscriberInterface {
   private isTarget(
@@ -39,12 +40,16 @@ export class JobIndexingSubscriber implements EntitySubscriberInterface {
     if (!canonicalCompany) return;
 
     const sourceVersion = getJobSourceVersion(job, canonicalCompany);
+    const representationVersion = resolveJobIndexRepresentationVersion(
+      process.env.AI_JOB_INDEX_REPRESENTATION_VERSION,
+    );
     const outboxRepo = manager.getRepository(JobIndexOutbox);
     const existing = await outboxRepo.findOne({
       where: {
         aggregateId: job._id,
         sourceVersion,
         eventType: 'JOB_CHANGED',
+        representationVersion,
       },
     });
     if (existing) return;
@@ -55,6 +60,7 @@ export class JobIndexingSubscriber implements EntitySubscriberInterface {
         aggregateType: 'JOB',
         eventType: 'JOB_CHANGED',
         sourceVersion,
+        representationVersion,
         status: 'PENDING',
         attemptCount: 0,
         availableAt: new Date(),

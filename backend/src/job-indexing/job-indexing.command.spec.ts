@@ -36,6 +36,22 @@ describe('JobIndexingService backfill', () => {
     });
   });
 
+  it('forces completed events through explicit reconciliation', async () => {
+    const jobs = [{ _id: 'job-1' }];
+    const indexing = service({ find: jest.fn().mockResolvedValue(jobs) });
+    const enqueue = jest.spyOn(indexing, 'enqueue').mockResolvedValue();
+    jest.spyOn(indexing, 'drain').mockResolvedValue({
+      claimed: 0,
+      completed: 0,
+      failed: 0,
+      leaseLost: 0,
+    });
+
+    await indexing.backfill(1, true);
+
+    expect(enqueue).toHaveBeenCalledWith('job-1', true);
+  });
+
   it('rejects an unbounded or invalid operation limit', async () => {
     const indexing = service({ find: jest.fn() });
     await expect(indexing.backfill(0)).rejects.toThrow('maxOperations');

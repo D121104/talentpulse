@@ -20,6 +20,43 @@ is never run during application startup or readiness checks:
 AI_QDRANT_ADMIN_ENABLED=true uv run qdrant-admin initialize
 ```
 
+### Optional local PDF OCR
+
+OCR is a host-local, development-only opt-in. It is disabled by default and does
+not apply to the cloud/demo runtime or add a Compose service. From the repository
+root, start either local profile with:
+
+```bash
+./scripts/start-local.sh --cv-ocr --ai-profile=deterministic
+./scripts/start-local.sh --cv-ocr --ai-profile=ollama
+```
+
+The startup script checks, but never installs, these Debian/Ubuntu prerequisites:
+
+```bash
+sudo apt-get update && sudo apt-get install --no-install-recommends \
+  poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-vie
+```
+
+`pdftoppm` and `tesseract` must be on `PATH`, and Tesseract must report both
+`eng` and `vie`. OCR is attempted only after native PDF extraction for eligible
+low-structure PDFs; DOCX parsing is unchanged. Limits are native text threshold
+250 characters, 5 pages, 200 DPI, 10,000,000 render pixels per page, 10 seconds
+per render, 15 seconds per recognition, 60 seconds total, and 1,000,000 maximum OCR
+output bytes. The language setting
+uses the Pydantic Settings-compatible JSON list `["eng","vie"]`.
+
+PDF bytes, temporary rendered images, and OCR text remain local to the FastAPI
+process and are not printed or sent to an external provider. OCR is bounded and
+fails back to native parsing when possible. Do not enable this local flag as a
+cloud/demo deployment setting. Local Ollama keeps its existing 120-second FastAPI
+provider bound and 180-second NestJS AI request timeout; deterministic mode keeps
+its 10-second NestJS timeout.
+
+The local application ports are FastAPI HTTPS `8001`, NestJS `8000`, Vite `5173`,
+PostgreSQL `5432`, Redis `6379`, Qdrant `6333`, and Ollama `11435` (the latter two
+only with the Ollama profile).
+
 ## Authentication and scopes
 
 Internal routes require a bearer JWT with the endpoint-specific scope:

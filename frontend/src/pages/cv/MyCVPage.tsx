@@ -40,6 +40,36 @@ import { authApi } from "../../lib/api";
 import type { OnlineCV, UserCV } from "../../lib/cvTypes";
 import AiCvConsentCard from "../../components/consent/AiCvConsentCard";
 
+function getUploadedCvParseStatus(status: UserCV['parseStatus']) {
+  switch (status) {
+    case 'READY':
+      return {
+        label: 'Sẵn sàng phân tích AI',
+        className:
+          'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-900',
+      };
+    case 'FAILED':
+      return {
+        label: 'Phân tích CV thất bại — hãy tải lại file',
+        className:
+          'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300 dark:border-red-900',
+      };
+    case 'PROCESSING':
+      return {
+        label: 'Đang phân tích CV — chờ trạng thái READY',
+        className:
+          'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300 dark:border-blue-900',
+      };
+    case 'PENDING':
+    default:
+      return {
+        label: 'Đã tải lên — đang chờ phân tích CV',
+        className:
+          'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-900',
+      };
+  }
+}
+
 function ToggleSwitch({
   checked,
   onChange,
@@ -678,7 +708,7 @@ export default function MyCVPage() {
         void fetchUploadedCvs();
         toast.success(
           "Tải CV lên thành công!",
-          `File "${file.name}" đã được tải lên và sẵn sàng ứng tuyển.`,
+          `File "${file.name}" đã được tải lên. Hệ thống đang phân tích CV; chỉ dùng AI khi trạng thái là READY.`,
         );
       }
     } catch (err: any) {
@@ -1271,6 +1301,18 @@ export default function MyCVPage() {
                                 {t("cv.uploadedOnDate", "Tải lên ngày")}{" "}
                                 {formatDate(item.createdAt)}
                               </p>
+                              {(() => {
+                                const parseState = getUploadedCvParseStatus(
+                                  item.parseStatus,
+                                );
+                                return (
+                                  <span
+                                    className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold ${parseState.className}`}
+                                  >
+                                    {parseState.label}
+                                  </span>
+                                );
+                              })()}
                             </div>
                           </div>
 

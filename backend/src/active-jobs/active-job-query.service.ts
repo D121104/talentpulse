@@ -62,14 +62,14 @@ export class ActiveJobQueryService {
       .innerJoin(
         Company,
         'canonicalCompany',
-        `canonicalCompany."_id"::text = job.company->>'_id'`,
+        `"canonicalCompany"."_id"::text = job.company->>'_id'`,
       )
       .andWhere('job."isActive" = true')
       .andWhere('job."isDeleted" = false')
       .andWhere('job."deletedAt" IS NULL')
-      .andWhere('canonicalCompany."isActive" = true')
-      .andWhere('canonicalCompany."isDeleted" = false')
-      .andWhere('canonicalCompany."deletedAt" IS NULL')
+      .andWhere('"canonicalCompany"."isActive" = true')
+      .andWhere('"canonicalCompany"."isDeleted" = false')
+      .andWhere('"canonicalCompany"."deletedAt" IS NULL')
       .andWhere('job."startDate" IS NOT NULL')
       .andWhere('job."endDate" IS NOT NULL')
       .andWhere('job."startDate" <= :activeJobNow')

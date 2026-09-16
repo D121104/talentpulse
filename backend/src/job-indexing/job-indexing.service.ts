@@ -9,7 +9,7 @@ import {
   JOB_INDEX_MAX_ATTEMPTS,
   JOB_INDEX_LEASE_SECONDS,
   JOB_INDEX_MAX_BACKFILL_OPERATIONS,
-  JOB_INDEX_VERSION,
+  resolveJobIndexRepresentationVersion,
 } from './job-indexing.constants';
 import {
   buildCanonicalJobSnapshot,
@@ -61,7 +61,7 @@ export class JobIndexingService {
         withDeleted: true,
         take: maxOperations,
       });
-      for (const job of jobs) await this.enqueue(job._id);
+      for (const job of jobs) await this.enqueue(job._id, true);
     } else {
       const jobs = await this.jobRepo.find({
         where: { isDeleted: false },
@@ -72,7 +72,7 @@ export class JobIndexingService {
     return this.drain(maxOperations);
   }
 
-  async enqueue(jobId: string): Promise<void> {
+  async enqueue(jobId: string, requeueCompleted = false): Promise<void> {
     const job = await this.jobRepo.findOne({
       where: { _id: jobId },
       withDeleted: true,
@@ -84,11 +84,15 @@ export class JobIndexingService {
     });
     if (!company) return;
     const sourceVersion = getJobSourceVersion(job, company);
+    const representationVersion = resolveJobIndexRepresentationVersion(
+      process.env.AI_JOB_INDEX_REPRESENTATION_VERSION,
+    );
     const event = {
       aggregateId: job._id,
       aggregateType: 'JOB' as const,
       eventType: 'JOB_CHANGED' as const,
       sourceVersion,
+      representationVersion,
       status: 'PENDING' as const,
       attemptCount: 0,
       availableAt: new Date(),
@@ -102,9 +106,29 @@ export class JobIndexingService {
         aggregateId: event.aggregateId,
         sourceVersion: event.sourceVersion,
         eventType: event.eventType,
+        representationVersion: event.representationVersion,
       },
     });
-    if (existing) return;
+    if (existing) {
+      if (requeueCompleted && existing.status === 'COMPLETED') {
+        // Reconciliation repairs a false completion without creating a second
+        // idempotency key or bypassing the unique outbox event constraint.
+        await this.outboxRepo.update(
+          { _id: existing._id, status: 'COMPLETED' },
+          {
+            status: 'PENDING',
+            attemptCount: 0,
+            availableAt: new Date(),
+            leaseUntil: null,
+            leaseToken: null,
+            claimedAt: null,
+            processedAt: null,
+            lastError: null,
+          },
+        );
+      }
+      return;
+    }
 
     try {
       await this.outboxRepo.insert(event);
@@ -220,6 +244,9 @@ export class JobIndexingService {
   private async indexClaim(
     outbox: JobIndexOutbox,
   ): Promise<'completed' | 'lease_lost'> {
+    const representationVersion = resolveJobIndexRepresentationVersion(
+      outbox.representationVersion,
+    );
     const projection = await this.loadProjection(outbox.aggregateId);
     const currentSourceVersion = projection
       ? getJobSourceVersion(projection.job, projection.company)
@@ -239,7 +266,7 @@ export class JobIndexingService {
         job_id: outbox.aggregateId,
         idempotency_key: idempotencyKey,
         source_version: outbox.sourceVersion,
-        representation_version: JOB_INDEX_VERSION,
+        representation_version: representationVersion,
       });
       assertSuccessfulJobIndexResponse(response, 'DELETE', outbox, identity);
       return 'completed';
@@ -250,7 +277,7 @@ export class JobIndexingService {
       job: buildCanonicalJobSnapshot(projection.job, projection.company),
       idempotency_key: idempotencyKey,
       source_version: outbox.sourceVersion,
-      representation_version: JOB_INDEX_VERSION,
+      representation_version: representationVersion,
       content_hash: projection.contentHash,
     });
     assertSuccessfulJobIndexResponse(response, 'UPSERT', outbox, identity);
@@ -302,8 +329,11 @@ function deterministicJobIndexOperationId(
 }
 
 function deterministicJobIndexIdempotencyKey(outbox: JobIndexOutbox): string {
+  const representationVersion = resolveJobIndexRepresentationVersion(
+    outbox.representationVersion,
+  );
   const versionFingerprint = createHash('sha256')
-    .update(`${outbox.sourceVersion}:${JOB_INDEX_VERSION}`)
+    .update(`${outbox.sourceVersion}:${representationVersion}`)
     .digest('hex');
   return `job-index:${outbox.eventType}:${outbox.aggregateId}:${versionFingerprint}`;
 }
@@ -344,7 +374,8 @@ function assertSuccessfulJobIndexResponse(
     !validStatus ||
     response.job_id !== outbox.aggregateId ||
     response.source_version !== outbox.sourceVersion ||
-    response.representation_version !== JOB_INDEX_VERSION ||
+    response.representation_version !==
+      resolveJobIndexRepresentationVersion(outbox.representationVersion) ||
     response.request_id !== identity.request_id ||
     response.trace_id !== identity.trace_id ||
     response.operation_attempt_id !== identity.operation_attempt_id

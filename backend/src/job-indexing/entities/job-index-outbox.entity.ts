@@ -14,7 +14,7 @@ import {
 @Entity('job_index_outbox')
 @Index(
   'UQ_job_index_outbox_event',
-  ['aggregateId', 'sourceVersion', 'eventType'],
+  ['aggregateId', 'sourceVersion', 'eventType', 'representationVersion'],
   { unique: true },
 )
 @Index('IDX_job_index_outbox_claim', ['status', 'availableAt', 'leaseUntil'])
@@ -24,6 +24,8 @@ export class JobIndexOutbox {
   @Column({ type: 'varchar', length: 40 }) aggregateType: 'JOB';
   @Column({ type: 'varchar', length: 40 }) eventType: JobIndexOutboxEventType;
   @Column({ type: 'varchar', length: 128 }) sourceVersion: string;
+  @Column({ type: 'varchar', length: 128, default: 'demo-v1' })
+  representationVersion: string;
   @Column({ type: 'varchar', length: 16, default: 'PENDING' })
   status: JobIndexOutboxStatus;
   @Column({ type: 'int', default: 0 }) attemptCount: number;

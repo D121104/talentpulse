@@ -1,8 +1,10 @@
 import {
+  ActiveJobQueryService,
   ActiveJobState,
   CanonicalCompanyState,
   isCanonicalActiveJob,
 } from './active-job-query.service';
+import { Company } from 'src/companies/entities/company.entity';
 
 describe('isCanonicalActiveJob', () => {
   const now = new Date('2026-01-01T12:00:00.000Z');
@@ -67,5 +69,71 @@ describe('isCanonicalActiveJob', () => {
     expect(
       isCanonicalActiveJob(validJob, { ...company, ...companyState }, now),
     ).toBe(false);
+  });
+});
+
+describe('ActiveJobQueryService.applyActivePredicate', () => {
+  it('quotes the mixed-case canonical company alias in generated predicates', () => {
+    const queryBuilder = {
+      innerJoin: jest.fn(),
+      andWhere: jest.fn(),
+      setParameter: jest.fn(),
+    } as any;
+    queryBuilder.innerJoin.mockReturnValue(queryBuilder);
+    queryBuilder.andWhere.mockReturnValue(queryBuilder);
+    queryBuilder.setParameter.mockReturnValue(queryBuilder);
+
+    new ActiveJobQueryService({} as any, {} as any).applyActivePredicate(
+      queryBuilder,
+      new Date('2026-01-01T12:00:00.000Z'),
+    );
+
+    const quote = String.fromCharCode(34);
+    const apostrophe = String.fromCharCode(39);
+    expect(queryBuilder.innerJoin).toHaveBeenCalledWith(
+      Company,
+      'canonicalCompany',
+      quote +
+        'canonicalCompany' +
+        quote +
+        '.' +
+        quote +
+        '_id' +
+        quote +
+        '::text = job.company->>' +
+        apostrophe +
+        '_id' +
+        apostrophe,
+    );
+    expect(
+      queryBuilder.andWhere.mock.calls
+        .map(([predicate]: [string]) => predicate)
+        .filter((predicate) => predicate.includes('canonicalCompany')),
+    ).toEqual([
+      quote +
+        'canonicalCompany' +
+        quote +
+        '.' +
+        quote +
+        'isActive' +
+        quote +
+        ' = true',
+      quote +
+        'canonicalCompany' +
+        quote +
+        '.' +
+        quote +
+        'isDeleted' +
+        quote +
+        ' = false',
+      quote +
+        'canonicalCompany' +
+        quote +
+        '.' +
+        quote +
+        'deletedAt' +
+        quote +
+        ' IS NULL',
+    ]);
   });
 });

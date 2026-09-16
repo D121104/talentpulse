@@ -70,6 +70,43 @@ describe('validateEnvironment', () => {
     ).toThrow('AI_JOB_INDEX_SCOPE');
   });
 
+  it('defaults and validates the dedicated job indexing representation version', () => {
+    expect(validateEnvironment({}).AI_JOB_INDEX_REPRESENTATION_VERSION).toBe(
+      'demo-v1',
+    );
+    expect(
+      validateEnvironment({
+        AI_JOB_INDEX_REPRESENTATION_VERSION: 'local-ollama-v1',
+      }).AI_JOB_INDEX_REPRESENTATION_VERSION,
+    ).toBe('local-ollama-v1');
+    expect(() =>
+      validateEnvironment({ AI_JOB_INDEX_REPRESENTATION_VERSION: 'local v1' }),
+    ).toThrow('AI_JOB_INDEX_REPRESENTATION_VERSION');
+    expect(() =>
+      validateEnvironment({
+        AI_JOB_INDEX_REPRESENTATION_VERSION: 'a'.repeat(129),
+      }),
+    ).toThrow('AI_JOB_INDEX_REPRESENTATION_VERSION');
+  });
+
+  it('allows the extended AI timeout only for local runtimes', () => {
+    expect(
+      validateEnvironment({
+        NODE_ENV: 'development',
+        AI_SERVICE_TIMEOUT_MS: '180000',
+      }).AI_SERVICE_TIMEOUT_MS,
+    ).toBe(180000);
+    expect(() =>
+      validateEnvironment({
+        NODE_ENV: 'demo',
+        JWT_SECRET: 'access-secret',
+        JWT_REFRESH_SECRET: 'refresh-secret',
+        DB_SSL_CA_FILE: '/run/secrets/db-ca',
+        AI_SERVICE_TIMEOUT_MS: '180000',
+      }),
+    ).toThrow('between 100 and 30000');
+  });
+
   it('keeps production synchronization disabled by default', () => {
     expect(
       validateEnvironment({
