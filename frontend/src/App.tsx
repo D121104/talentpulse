@@ -23,6 +23,8 @@ import JobSearchPage from './pages/jobs/JobSearchPage';
 import JobDetailPage from './pages/jobs/JobDetailPage';
 import SavedJobsPage from './pages/jobs/SavedJobsPage';
 import AppliedJobsPage from './pages/candidate/AppliedJobsPage';
+import CompanyListPage from './pages/companies/CompanyListPage';
+import CompanyDetailPage from './pages/companies/CompanyDetailPage';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
@@ -37,6 +39,8 @@ function App() {
             <Route path="/" element={<LandingPage />} />
             <Route path="/jobs" element={<JobSearchPage />} />
             <Route path="/jobs/:id" element={<JobDetailPage />} />
+            <Route path="/companies" element={<CompanyListPage />} />
+            <Route path="/companies/:id" element={<CompanyDetailPage />} />
             <Route path="/saved-jobs" element={<SavedJobsPage />} />
             <Route path="/jobs/saved" element={<Navigate to="/saved-jobs" replace />} />
             <Route path="/verify-account" element={<VerifyAccountPage />} />

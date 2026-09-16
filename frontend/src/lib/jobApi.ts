@@ -346,3 +346,117 @@ export async function getTopHiringCompaniesApi(
   return apiRequest<TopHiringCompany[]>(`/companies/top-hiring?limit=${limit}`);
 }
 
+export interface CompanyJobMini {
+  _id: string;
+  name: string;
+  salary?: number | null;
+  level?: string | null;
+  location?: string | null;
+  workingModel?: string | null;
+  createdAt?: string;
+}
+
+export interface CompanyListItem {
+  _id: string;
+  name: string;
+  description?: string | null;
+  address?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  website?: string | null;
+  logo?: string | null;
+  scale?: string | null;
+  taxCode?: string | null;
+  isPremium?: boolean;
+  premiumExpiresAt?: string | null;
+  usersFollow?: string[];
+  isFollowed?: boolean;
+  jobCount?: number;
+  topJobs?: CompanyJobMini[];
+  createdAt?: string;
+}
+
+export interface CompanyDetail extends CompanyListItem {
+  updatedAt?: string;
+  hrs?: any[];
+  hr?: any;
+}
+
+export interface CompanyListResponse {
+  meta: {
+    current: number;
+    pageSize: number;
+    pages: number;
+    total: number;
+  };
+  result: CompanyListItem[];
+}
+
+export async function getCompaniesDirectoryApi(params: {
+  current?: number;
+  pageSize?: number;
+  search?: string;
+  scale?: string;
+  userId?: string;
+  accessToken?: string;
+}): Promise<CompanyListResponse> {
+  const query = new URLSearchParams();
+  if (params.current) query.set('current', String(params.current));
+  if (params.pageSize) query.set('pageSize', String(params.pageSize));
+  if (params.search?.trim()) query.set('search', params.search.trim());
+  if (params.scale?.trim()) query.set('scale', params.scale.trim());
+  if (params.userId) query.set('userId', params.userId);
+
+  return apiRequest<CompanyListResponse>(`/companies?${query.toString()}`, {
+    accessToken: params.accessToken,
+  });
+}
+
+export async function getCompanyDetailApi(
+  companyId: string,
+  accessToken?: string,
+): Promise<CompanyDetail> {
+  return apiRequest<CompanyDetail>(`/companies/${companyId}`, {
+    accessToken,
+  });
+}
+
+export async function getCompanyJobsApi(params: {
+  companyId: string;
+  current?: number;
+  pageSize?: number;
+  name?: string;
+  location?: string;
+  level?: string;
+  accessToken?: string;
+}): Promise<SearchJobsResponse> {
+  const query = new URLSearchParams();
+  query.set('companyId', params.companyId);
+  if (params.current) query.set('current', String(params.current));
+  if (params.pageSize) query.set('pageSize', String(params.pageSize));
+  if (params.name?.trim()) query.set('name', params.name.trim());
+  if (params.location?.trim()) query.set('location', params.location.trim());
+  if (params.level?.trim()) query.set('level', params.level.trim());
+
+  return apiRequest<SearchJobsResponse>(`/jobs?${query.toString()}`, {
+    accessToken: params.accessToken,
+  });
+}
+
+export async function followCompanyApi(companyId: string, accessToken: string): Promise<any> {
+  return apiRequest('/companies/follow', {
+    method: 'POST',
+    body: { companyId },
+    accessToken,
+  });
+}
+
+export async function unfollowCompanyApi(companyId: string, accessToken: string): Promise<any> {
+  return apiRequest('/companies/unfollow', {
+    method: 'POST',
+    body: { companyId },
+    accessToken,
+  });
+}
+
+

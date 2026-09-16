@@ -26,6 +26,8 @@ import {
 } from 'src/notifications/entities/notification.entity';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
 
+import { User, PremiumPlan } from 'src/users/entities/user.entity';
+
 @Injectable()
 export class CompaniesService {
   constructor(
@@ -34,6 +36,9 @@ export class CompaniesService {
 
     @InjectRepository(Job)
     private readonly jobRepo: Repository<Job>,
+
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
 
     @InjectRepository(Application)
     private readonly applicationRepo: Repository<Application>,
@@ -132,29 +137,85 @@ export class CompaniesService {
     delete filter.pageSize;
     delete filter.isActive;
 
-    const cacheKey = 'companies-' + JSON.stringify(qs);
-    const cacheData = await this.redisService.getValue<string>(cacheKey);
+    const limit = qs.pageSize ? parseInt(qs.pageSize, 10) : 9;
+    const current = qs.current ? parseInt(qs.current, 10) : 1;
+    const skip = Math.max(0, (current - 1) * limit);
 
     // Extract userId for checking follow status
-    const userId = filter.userId;
+    const userId = filter.userId || qs.userId;
     delete filter.userId;
 
-    const limit = qs.pageSize ? parseInt(qs.pageSize) : 10;
-    const current = qs.current ? parseInt(qs.current) : 1;
-    const skip = (current - 1) * limit;
+    const searchTerm = (qs.search || qs.q || qs.name || filter.name || '').trim();
 
     const queryBuilder = this.companyRepo
       .createQueryBuilder('company')
       .where('company.isActive = :isActive', { isActive: true })
       .andWhere('company.isDeleted = :isDeleted', { isDeleted: false });
 
-    if (filter.name) {
-      queryBuilder.andWhere('company.name ILIKE :name', {
-        name: `%${filter.name}%`,
-      });
+    // Search by both Name and Address / Location / Description
+    if (searchTerm) {
+      queryBuilder.andWhere(
+        '(company.name ILIKE :search OR company.address ILIKE :search OR company.description ILIKE :search)',
+        { search: `%${searchTerm}%` },
+      );
     }
 
-    if (sort) {
+    const rawScale = (filter.scale || qs.scale) as string | undefined;
+    if (rawScale && typeof rawScale === 'string' && rawScale.trim()) {
+      const scaleStr = rawScale.trim().toLowerCase();
+      if (scaleStr.includes('10-50') || scaleStr.includes('10 - 50')) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
+          { s1: '%10-50%', s2: '%10 - 50%', s3: '%dưới 50%' },
+        );
+      } else if (scaleStr.includes('50-100') || scaleStr.includes('50 - 100')) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
+          { s1: '%50-100%', s2: '%50 - 100%', s3: '%50-200%' },
+        );
+      } else if (scaleStr.includes('100-500') || scaleStr.includes('100 - 500')) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
+          { s1: '%100-500%', s2: '%100 - 500%', s3: '%50-200%' },
+        );
+      } else if (
+        scaleStr.includes('500+') ||
+        scaleStr.includes('500-1000') ||
+        scaleStr.includes('trên 500') ||
+        scaleStr.includes('tren 500') ||
+        scaleStr === '500+' ||
+        scaleStr === '500'
+      ) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3 OR company.scale ILIKE :s4 OR company.scale ILIKE :s5)',
+          {
+            s1: '%500+%',
+            s2: '%500-1000%',
+            s3: '%1000+%',
+            s4: '%trên 500%',
+            s5: '%500%',
+          },
+        );
+      } else {
+        const clean = scaleStr.replace(/nhân viên|nhân sự|người/gi, '').trim();
+        if (clean) {
+          queryBuilder.andWhere(
+            '(company.scale ILIKE :cleanPattern OR company.scale = :rawScale)',
+            { cleanPattern: `%${clean}%`, rawScale: rawScale.trim() },
+          );
+        } else {
+          queryBuilder.andWhere('company.scale = :rawScale', { rawScale: rawScale.trim() });
+        }
+      }
+    }
+
+    // Priority Ordering: Companies with active HR Premium come first, then createdAt DESC
+    queryBuilder.addOrderBy(
+      `CASE WHEN (company.isPremium = true AND (company.premiumExpiresAt IS NULL OR company.premiumExpiresAt > NOW())) THEN 1 ELSE 0 END`,
+      'DESC',
+    );
+
+    if (sort && Object.keys(sort).length > 0) {
       for (const [key, value] of Object.entries(sort)) {
         queryBuilder.addOrderBy(
           `company.${key}`,
@@ -162,7 +223,7 @@ export class CompaniesService {
         );
       }
     } else {
-      queryBuilder.orderBy('company.createdAt', 'DESC');
+      queryBuilder.addOrderBy('company.createdAt', 'DESC');
     }
 
     const [companies, totalRecord] = await queryBuilder
@@ -172,8 +233,8 @@ export class CompaniesService {
 
     const totalPage = Math.ceil(totalRecord / limit);
 
-    // Add isFollowed & jobCount field for each company
-    const companiesWithJobCount = await Promise.all(
+    // Fetch top 2 most recent active jobs (createdAt DESC) & jobCount & isFollowed & isPremium for each company
+    const companiesWithDetails = await Promise.all(
       companies.map(async (company) => {
         const isFollowed = userId
           ? (company.usersFollow || []).some(
@@ -181,33 +242,56 @@ export class CompaniesService {
             )
           : false;
 
-        const jobCount = await this.jobRepo
-          .createQueryBuilder('job')
-          .where("job.company->>'_id' = :companyId", { companyId: company._id })
-          .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-          .getCount();
+        const isPremium = Boolean(
+          company.isPremium &&
+            (!company.premiumExpiresAt || new Date(company.premiumExpiresAt) > new Date()),
+        );
+
+        const [topJobs, jobCount] = await Promise.all([
+          this.jobRepo
+            .createQueryBuilder('job')
+            .select([
+              'job._id',
+              'job.name',
+              'job.salary',
+              'job.level',
+              'job.location',
+              'job.workingModel',
+              'job.createdAt',
+            ])
+            .where("job.company->>'_id' = :companyId", { companyId: company._id })
+            .andWhere('job.isActive = :isActive', { isActive: true })
+            .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+            .orderBy('job.createdAt', 'DESC')
+            .take(2)
+            .getMany(),
+          this.jobRepo
+            .createQueryBuilder('job')
+            .where("job.company->>'_id' = :companyId", { companyId: company._id })
+            .andWhere('job.isActive = :isActive', { isActive: true })
+            .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+            .getCount(),
+        ]);
 
         return {
           ...company,
+          isPremium,
           isFollowed,
           jobCount,
+          topJobs,
         };
       }),
     );
 
-    const response = {
+    return {
       meta: {
         current: current,
         pageSize: limit,
         pages: totalPage,
         total: totalRecord,
       },
-      result: companiesWithJobCount,
+      result: companiesWithDetails,
     };
-
-    await this.redisService.setValue(cacheKey, JSON.stringify(response), 60);
-
-    return response;
   }
 
   // User follows a company. Adds userId to usersFollow array.
@@ -402,13 +486,27 @@ export class CompaniesService {
       );
     }
 
-    const result = await this.companyRepo.update(id, {
+    const updatePayload: any = {
       ...updateCompanyDto,
       updatedBy: {
         _id: user._id,
         email: user.email,
       },
-    });
+    };
+
+    if (
+      updateCompanyDto.lat != null &&
+      updateCompanyDto.lon != null &&
+      !isNaN(Number(updateCompanyDto.lat)) &&
+      !isNaN(Number(updateCompanyDto.lon))
+    ) {
+      updatePayload.location = {
+        type: 'Point',
+        coordinates: [Number(updateCompanyDto.lon), Number(updateCompanyDto.lat)],
+      };
+    }
+
+    const result = await this.companyRepo.update(id, updatePayload);
 
     await this.redisService.invalidateCompaniesCache();
     return result;
