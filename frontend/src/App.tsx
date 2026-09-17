@@ -31,6 +31,7 @@ import CompanyDetailPage from './pages/companies/CompanyDetailPage';
 import MessagesPage from './pages/messages/MessagesPage';
 import ProfileSettingsPage from './pages/settings/ProfileSettingsPage';
 import ChangePasswordPage from './pages/settings/ChangePasswordPage';
+import JobAlertSettingsPage from './pages/settings/JobAlertSettingsPage';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
@@ -64,6 +65,9 @@ function App() {
                 <Route path="/connect" element={<Navigate to="/messages" replace />} />
                 <Route path="/settings/profile" element={<ProfileSettingsPage />} />
                 <Route path="/settings/password" element={<ChangePasswordPage />} />
+                <Route path="/settings/notifications" element={<JobAlertSettingsPage />} />
+                <Route path="/settings/job-alerts" element={<Navigate to="/settings/notifications" replace />} />
+                <Route path="/job-alerts" element={<Navigate to="/settings/notifications" replace />} />
                 <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
                 <Route path="/premium" element={<PremiumPage />} />
                 <Route path="/pricing" element={<Navigate to="/premium" replace />} />
