@@ -218,28 +218,51 @@ export class UsersService {
   updatePassword = async (id: string, updateUserDto: UpdateUserPasswordDto) => {
     const user = await this.userRepo.findOne({ where: { _id: id } });
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException('Người dùng không tồn tại');
     }
 
-    if (!this.checkPassword(updateUserDto.oldPassword, user.password)) {
-      throw new BadRequestException('Current password is incorrect');
+    const oldPass = updateUserDto.oldPassword || updateUserDto.currentPassword;
+    if (!oldPass) {
+      throw new BadRequestException('Mật khẩu hiện tại không được để trống');
     }
 
-    return await this.userRepo.update(id, {
+    if (!this.checkPassword(oldPass, user.password)) {
+      throw new BadRequestException('Mật khẩu hiện tại không chính xác');
+    }
+
+    if (!updateUserDto.newPassword || updateUserDto.newPassword.length < 6) {
+      throw new BadRequestException('Mật khẩu mới phải có ít nhất 6 ký tự');
+    }
+
+    await this.userRepo.update(id, {
       password: this.hashPassword(updateUserDto.newPassword),
     });
+
+    return { message: 'Đổi mật khẩu thành công' };
   };
+
+  async requestForgotPasswordOtp(email: string) {
+    return await this.otpService.create({ email });
+  }
 
   async forgotPassword(token: string) {
     const otpUser = await this.otpService.checkToken(token);
 
-    if (!otpUser) {
-      throw new BadRequestException('Token not found!');
+    if (!otpUser || !otpUser.email) {
+      throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
     }
 
     await this.otpService.remove(token);
 
-    return await this.userRepo.findOne({ where: { email: otpUser.email } });
+    const user = await this.userRepo.findOne({
+      where: { email: otpUser.email, isDeleted: false },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Không tìm thấy tài khoản người dùng');
+    }
+
+    return user;
   }
 
   async countUser() {

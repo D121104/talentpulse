@@ -12,6 +12,8 @@ import RegisterPage from './pages/auth/RegisterPage';
 import GoogleCallbackPage from './pages/auth/GoogleCallbackPage';
 import PendingApprovalPage from './pages/auth/PendingApprovalPage';
 import VerifyAccountPage from './pages/auth/VerifyAccountPage';
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import MyCVPage from './pages/cv/MyCVPage';
 import { ProfileViewersPage } from './pages/candidate/ProfileViewersPage';
 import CVTemplatePage from './pages/cv/CVTemplatePage';
@@ -27,6 +29,8 @@ import AppliedJobsPage from './pages/candidate/AppliedJobsPage';
 import CompanyListPage from './pages/companies/CompanyListPage';
 import CompanyDetailPage from './pages/companies/CompanyDetailPage';
 import MessagesPage from './pages/messages/MessagesPage';
+import ProfileSettingsPage from './pages/settings/ProfileSettingsPage';
+import ChangePasswordPage from './pages/settings/ChangePasswordPage';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
@@ -50,12 +54,17 @@ function App() {
               <Route element={<GuestRoute />}>
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
               </Route>
               <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
               <Route path="/pending-approval" element={<PendingApprovalPage />} />
               <Route element={<ProtectedRoute />}>
                 <Route path="/messages" element={<MessagesPage />} />
                 <Route path="/connect" element={<Navigate to="/messages" replace />} />
+                <Route path="/settings/profile" element={<ProfileSettingsPage />} />
+                <Route path="/settings/password" element={<ChangePasswordPage />} />
+                <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
                 <Route path="/premium" element={<PremiumPage />} />
                 <Route path="/pricing" element={<Navigate to="/premium" replace />} />
                 <Route path="/payment-history" element={<PaymentHistoryPage />} />

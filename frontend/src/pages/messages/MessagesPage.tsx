@@ -888,7 +888,7 @@ export default function MessagesPage() {
               onClick={() => {
                 if (activeConversation?._id) void markConversationAsRead(activeConversation._id);
               }}
-              className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gradient-to-b from-slate-50/60 to-white dark:from-slate-950/40 dark:to-slate-900"
+              className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-4 bg-gradient-to-b from-slate-50/60 to-white dark:from-slate-950/40 dark:to-slate-900 min-w-0"
             >
               {/* Welcoming Top Card (Image 2 style) */}
               <div className="flex flex-col items-center justify-center p-6 text-center border-b border-dashed border-slate-200 dark:border-slate-800 mb-6">
@@ -932,7 +932,7 @@ export default function MessagesPage() {
                   return (
                     <div
                       key={msg._id}
-                      className={`flex items-end gap-2 group ${
+                      className={`flex items-end gap-2 group w-full min-w-0 ${
                         isMe ? 'justify-end' : 'justify-start'
                       }`}
                     >
@@ -959,19 +959,19 @@ export default function MessagesPage() {
 
                       {/* Message Bubble Container */}
                       <div
-                        className={`flex flex-col max-w-[78%] sm:max-w-[65%] space-y-1 ${
+                        className={`flex flex-col min-w-0 max-w-[85%] sm:max-w-[75%] md:max-w-[65%] lg:max-w-[480px] space-y-1 ${
                           isMe ? 'items-end' : 'items-start'
                         }`}
                       >
                         {/* Bubble */}
-                        <div className="relative group/bubble">
+                        <div className="relative group/bubble max-w-full min-w-0">
                           {msg.messageType === 'IMAGE' ? (
-                            <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer">
+                            <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer max-w-full">
                               <img
                                 src={msg.content}
                                 alt="Đính kèm"
                                 onClick={() => setPreviewImageUrl(msg.content)}
-                                className="max-h-72 w-auto object-cover hover:opacity-95 transition"
+                                className="max-h-72 max-w-full w-auto object-cover hover:opacity-95 transition rounded-2xl"
                               />
                             </div>
                           ) : msg.messageType === 'FILE' ? (
@@ -980,14 +980,14 @@ export default function MessagesPage() {
                               target="_blank"
                               rel="noreferrer"
                               download={msg.fileName || 'tai-ve'}
-                              className={`flex items-center gap-3 p-3 rounded-2xl transition shadow-xs ${
+                              className={`flex items-center gap-3 p-3 rounded-2xl transition shadow-xs max-w-full min-w-0 ${
                                 isMe
                                   ? 'bg-primary text-white hover:bg-primary-dark'
                                   : 'bg-slate-100 hover:bg-slate-200 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-white'
                               }`}
                             >
                               <div
-                                className={`p-2 rounded-xl ${
+                                className={`p-2 rounded-xl shrink-0 ${
                                   isMe
                                     ? 'bg-white/20 text-white'
                                     : 'bg-primary/10 text-primary'
@@ -995,7 +995,7 @@ export default function MessagesPage() {
                               >
                                 <FileText className="h-5 w-5" />
                               </div>
-                              <div className="min-w-0 pr-2">
+                              <div className="min-w-0 flex-1 pr-2">
                                 <p className="truncate text-xs font-bold">{msg.fileName || 'Tệp đính kèm'}</p>
                                 {msg.fileSize && (
                                   <span className="text-[10px] opacity-80">
@@ -1007,7 +1007,7 @@ export default function MessagesPage() {
                             </a>
                           ) : (
                             <div
-                              className={`rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-xs break-words ${
+                              className={`rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-xs whitespace-pre-wrap break-words break-all [overflow-wrap:anywhere] select-text max-w-full ${
                                 isMe
                                   ? 'bg-primary text-white rounded-br-xs'
                                   : 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 rounded-bl-xs border border-slate-200/60 dark:border-slate-700/60'

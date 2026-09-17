@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -33,13 +33,14 @@ export function UserDropdownMenu() {
   const { user, logout } = useAuth();
   const { unreadCount: chatUnreadCount } = useChat();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [isOpen, setIsOpen] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     jobs: true,
     cv: true,
     notifications: false,
-    security: false,
+    security: location.pathname.startsWith('/settings'),
     upgrade: false,
   });
 
@@ -366,17 +367,25 @@ export function UserDropdownMenu() {
                       <Link
                         to="/settings/profile"
                         onClick={() => setIsOpen(false)}
-                        className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
+                        className={`flex items-center gap-2.5 py-2 transition-colors ${
+                          location.pathname === '/settings/profile'
+                            ? 'text-primary font-bold dark:text-primary-light'
+                            : 'text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light'
+                        }`}
                       >
-                        <UserCog className="h-4 w-4 text-slate-400" />
+                        <UserCog className={`h-4 w-4 ${location.pathname === '/settings/profile' ? 'text-primary dark:text-primary-light' : 'text-slate-400'}`} />
                         <span>{t('userMenu.updateProfile')}</span>
                       </Link>
                       <Link
                         to="/settings/password"
                         onClick={() => setIsOpen(false)}
-                        className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
+                        className={`flex items-center gap-2.5 py-2 transition-colors ${
+                          location.pathname === '/settings/password'
+                            ? 'text-primary font-bold dark:text-primary-light'
+                            : 'text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light'
+                        }`}
                       >
-                        <KeyRound className="h-4 w-4 text-slate-400" />
+                        <KeyRound className={`h-4 w-4 ${location.pathname === '/settings/password' ? 'text-primary dark:text-primary-light' : 'text-slate-400'}`} />
                         <span>{t('userMenu.changePassword')}</span>
                       </Link>
                     </div>
