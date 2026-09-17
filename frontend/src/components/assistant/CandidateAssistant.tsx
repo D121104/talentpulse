@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   Bot,
@@ -13,6 +15,7 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import {
   assistantApi,
+  assistantLocaleForUi,
   getAssistantErrorCode,
   isAssistantUnavailable,
   type AssistantFilterInput,
@@ -46,6 +49,79 @@ function modeAllowsCv(assistantMode: AssistantMode): boolean {
   );
 }
 
+const JOB_METADATA_PATTERN =
+  /\s*\(\s*job_id:\s*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*;\s*citation:\s*\[[^\]]+\]\s*\)/gi;
+const METADATA_ONLY_PATTERN =
+  /^\s*(?:[-*]\s*)?job_id:\s*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*$/i;
+const INLINE_MARKDOWN_PATTERN = /(\*\*[^*\n]+\*\*|`[^`\n]+`)/g;
+
+type AssistantContentBlock =
+  | { kind: "text"; text: string }
+  | { kind: "heading"; text: string }
+  | { kind: "list"; ordered: boolean; items: string[] };
+
+function assistantContentBlocks(content: string): AssistantContentBlock[] {
+  const blocks: AssistantContentBlock[] = [];
+  let list: Extract<AssistantContentBlock, { kind: "list" }> | null = null;
+  const flushList = () => {
+    if (list) blocks.push(list);
+    list = null;
+  };
+  for (const rawLine of content.split("\n")) {
+    const line = rawLine.replace(JOB_METADATA_PATTERN, "").trim();
+    if (!line || METADATA_ONLY_PATTERN.test(line)) {
+      flushList();
+      continue;
+    }
+    const heading = line.match(/^#{1,3}\s+(.+)$/);
+    const item = line.match(/^([-*]|\d+[.)])\s+(.+)$/);
+    if (heading) {
+      flushList();
+      blocks.push({ kind: "heading", text: heading[1] });
+    } else if (item) {
+      const ordered = /^\d/.test(item[1]);
+      if (!list || list.ordered !== ordered) {
+        flushList();
+        list = { kind: "list", ordered, items: [] };
+      }
+      list.items.push(item[2]);
+    } else {
+      flushList();
+      blocks.push({ kind: "text", text: line });
+    }
+  }
+  flushList();
+  return blocks;
+}
+
+function renderAssistantInline(text: string): ReactNode {
+  return text.split(INLINE_MARKDOWN_PATTERN).map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**"))
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("`") && part.endsWith("`"))
+      return <code key={index} className="rounded bg-slate-100 px-1 dark:bg-slate-700">{part.slice(1, -1)}</code>;
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function AssistantMessageContent({ content }: { content: string }) {
+  return (
+    <div className="min-w-0 space-y-2 break-words [overflow-wrap:anywhere]">
+      {assistantContentBlocks(content).map((block, index) => {
+        if (block.kind === "heading")
+          return <h3 key={index} className="font-bold text-slate-900 dark:text-white">{renderAssistantInline(block.text)}</h3>;
+        if (block.kind === "list") {
+          const List = block.ordered ? "ol" : "ul";
+          return <List key={index} className={`${block.ordered ? "list-decimal" : "list-disc"} space-y-1 pl-5`}>
+            {block.items.map((item, itemIndex) => <li key={itemIndex}>{renderAssistantInline(item)}</li>)}
+          </List>;
+        }
+        return <p key={index} className="whitespace-pre-wrap">{renderAssistantInline(block.text)}</p>;
+      })}
+    </div>
+  );
+}
+
 function makeClientMessageId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto)
     return crypto.randomUUID();
@@ -54,6 +130,7 @@ function makeClientMessageId() {
 
 export default function CandidateAssistant() {
   const { user, accessToken } = useAuth();
+  const { i18n } = useTranslation();
   const location = useLocation();
   const isHrOnlyRoute =
     location.pathname === "/dashboard" ||
@@ -84,6 +161,9 @@ export default function CandidateAssistant() {
   );
   const authIdentity = `${user?._id ?? "guest"}:${accessToken ?? "none"}`;
   const cvAllowed = modeAllowsCv(mode);
+  const assistantLocale = assistantLocaleForUi(
+    i18n.resolvedLanguage || i18n.language,
+  );
 
   useEffect(() => {
     setIsOpen(false);
@@ -168,6 +248,7 @@ export default function CandidateAssistant() {
             : {}),
           jobIds: selectedJobId ? [selectedJobId] : undefined,
           filters,
+          locale: assistantLocale,
         },
         accessToken,
       );
@@ -392,7 +473,13 @@ export default function CandidateAssistant() {
                 key={item.id}
                 className={`max-w-[92%] rounded-2xl px-3 py-2 text-sm ${item.role === "USER" ? "ml-auto bg-primary text-white" : "bg-white text-slate-700 shadow-sm dark:bg-slate-800 dark:text-slate-200"}`}
               >
-                <p className="whitespace-pre-wrap">{item.content}</p>
+                {item.role === "ASSISTANT" ? (
+                  <AssistantMessageContent content={item.content} />
+                ) : (
+                  <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                    {item.content}
+                  </p>
+                )}
                 {item.state === "NO_EVIDENCE" && (
                   <p className="mt-2 text-[11px] font-bold text-amber-600">
                     NO_EVIDENCE · Chưa đủ dữ liệu để kết luận.

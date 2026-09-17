@@ -8,6 +8,39 @@ export type AssistantMode =
   | "ADVICE";
 export type AssistantState = "READY" | "DEGRADED" | "NO_EVIDENCE";
 
+export const SUPPORTED_ASSISTANT_LOCALES = [
+  "vi",
+  "vi-VN",
+  "en",
+  "en-US",
+] as const;
+export type AssistantLocale = (typeof SUPPORTED_ASSISTANT_LOCALES)[number];
+export const DEFAULT_ASSISTANT_LOCALE = "vi" as const;
+
+/** Validate locale tags accepted by both the UI and assistant API. */
+export function normalizeAssistantLocale(
+  locale?: string,
+): AssistantLocale | undefined {
+  if (locale === undefined) return undefined;
+  const normalized = locale.trim().toLowerCase();
+  const supported = SUPPORTED_ASSISTANT_LOCALES.find(
+    (candidate) => candidate.toLowerCase() === normalized,
+  );
+  if (!supported) throw new Error(`Unsupported assistant locale: ${locale}`);
+  return supported;
+}
+
+/** Resolve i18next's selected language to the API's canonical base locale. */
+export function assistantLocaleForUi(language?: string): "vi" | "en" {
+  if (!language) return DEFAULT_ASSISTANT_LOCALE;
+  const normalized = language.trim().toLowerCase();
+  const supported = SUPPORTED_ASSISTANT_LOCALES.some(
+    (candidate) => candidate.toLowerCase() === normalized,
+  );
+  if (!supported) return DEFAULT_ASSISTANT_LOCALE;
+  return normalized.startsWith("en") ? "en" : "vi";
+}
+
 export interface AssistantFilterInput {
   location?: string;
   workMode?: "onsite" | "hybrid" | "remote";
@@ -105,19 +138,23 @@ export const assistantApi = {
       jobIds?: string[];
       cvId?: string;
       filters?: AssistantFilterInput;
+      /** Optional for backwards compatibility; UI callers send an explicit locale. */
+      locale?: string;
     },
     accessToken: string
-  ) =>
-    apiRequest<AssistantSessionResponse>(
+  ) => {
+    const locale = normalizeAssistantLocale(input.locale);
+    return apiRequest<AssistantSessionResponse>(
       `/ai/candidate-assistant/sessions/${encodeURIComponent(
         sessionId
       )}/messages`,
       {
         method: "POST",
-        body: input,
+        body: locale ? { ...input, locale } : input,
         accessToken,
-      }
-    ),
+      },
+    );
+  },
 
   quota: (accessToken: string) =>
     apiRequest<AssistantQuota>("/ai/candidate-assistant/quota", {

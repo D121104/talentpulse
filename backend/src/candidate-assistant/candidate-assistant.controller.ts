@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -56,7 +57,8 @@ export class CandidateAssistantController {
     @Param('id') id: string,
     @Body() dto: SendAiChatMessageDto,
     @User() user: IUser,
+    @Headers('accept-language') acceptLanguage?: string,
   ) {
-    return this.service.sendMessage(id, dto, user);
+    return this.service.sendMessage(id, dto, user, acceptLanguage);
   }
 }

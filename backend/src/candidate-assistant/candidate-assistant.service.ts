@@ -27,6 +27,8 @@ import {
 import { CandidateAssistantConsentService } from './candidate-assistant-consent.service';
 import { CandidateAssistantQuotaService } from './candidate-assistant-quota.service';
 import {
+  AI_LOCALE_PATTERN,
+  DEFAULT_AI_LOCALE,
   AiChatMessageRole,
   AiChatMessageStatus,
   AiChatSessionMode,
@@ -42,6 +44,9 @@ const MAX_BLOCKS = 24;
 const MAX_CITATIONS = 32;
 const MAX_BLOCK_TEXT = 4000;
 const MAX_FILTER_KEYS = 24;
+const MAX_HISTORY_ENTRIES = 8;
+const MAX_HISTORY_ENTRY_CHARS = 4000;
+const MAX_HISTORY_TOTAL_CHARS = 6000;
 @Injectable()
 export class CandidateAssistantService {
   constructor(
@@ -133,8 +138,14 @@ export class CandidateAssistantService {
     };
   }
 
-  async sendMessage(id: string, dto: SendAiChatMessageDto, user: IUser) {
+  async sendMessage(
+    id: string,
+    dto: SendAiChatMessageDto,
+    user: IUser,
+    acceptLanguage?: string,
+  ) {
     const session = await this.getOwnedSession(id, user);
+    const locale = this.resolveLocale(dto.locale, acceptLanguage);
     if (session.archivedAt)
       throw new ConflictException('Chat session is archived');
     if (
@@ -242,11 +253,9 @@ export class CandidateAssistantService {
           userId: user._id,
           sessionId: session._id,
           mode: session.mode,
+          locale,
           message: userMessage.content,
-          history: history
-            .reverse()
-            .filter((m) => m.content)
-            .map((m) => ({ role: m.role, content: m.content })),
+          history: this.normalizeHistory(history),
           jobs,
           cv,
           filters: this.boundFilters(dto.filters),
@@ -312,6 +321,47 @@ export class CandidateAssistantService {
       if (error instanceof HttpException) throw error;
       throw mapCandidateAssistantProviderError(error);
     }
+  }
+  /** Keep persisted messages inside FastAPI's recent_history contract. */
+  private normalizeHistory(
+    messages: AiChatMessage[],
+  ): Array<{ role: AiChatMessageRole; content: string }> {
+    let remaining = MAX_HISTORY_TOTAL_CHARS;
+    const normalized: Array<{
+      role: AiChatMessageRole;
+      content: string;
+    }> = [];
+
+    // The repository query is newest-first; retain the most recent bounded turns.
+    for (const message of messages.slice(0, MAX_HISTORY_ENTRIES)) {
+      if (
+        !Object.values(AiChatMessageRole).includes(
+          message.role as AiChatMessageRole,
+        ) ||
+        typeof message.content !== 'string' ||
+        !message.content
+      ) {
+        continue;
+      }
+      const content = message.content.slice(0, MAX_HISTORY_ENTRY_CHARS);
+      const boundedContent = content.slice(0, remaining);
+      if (!boundedContent) break;
+      normalized.push({ role: message.role, content: boundedContent });
+      remaining -= boundedContent.length;
+    }
+
+    return normalized.reverse();
+  }
+  private resolveLocale(
+    explicitLocale?: string,
+    acceptLanguage?: string,
+  ): string {
+    if (explicitLocale) return explicitLocale;
+    const candidates = (acceptLanguage || '')
+      .split(',')
+      .map((value) => value.trim().split(';', 1)[0])
+      .filter((value) => AI_LOCALE_PATTERN.test(value));
+    return candidates[0] || DEFAULT_AI_LOCALE;
   }
   private failureCode(error: unknown): string {
     if (!(error instanceof HttpException)) return 'AI_PROVIDER_ERROR';

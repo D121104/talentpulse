@@ -5,6 +5,8 @@ import {
   AiServiceError,
 } from 'src/ai-matching/ai-service.client';
 import {
+  AI_LOCALE_PATTERN,
+  DEFAULT_AI_LOCALE,
   CandidateAssistantAiClient,
   CandidateAssistantAiRequest,
   CandidateAssistantCitation,
@@ -183,6 +185,8 @@ export class CandidateAssistantAiServiceClient
     request: CandidateAssistantAiRequest,
   ): Promise<CandidateAssistantResponse> {
     if (!RAG_INTENTS.has(request.mode)) invalidResponse();
+    const locale = request.locale || DEFAULT_AI_LOCALE;
+    if (!AI_LOCALE_PATTERN.test(locale)) invalidResponse();
     const identity = {
       request_id: request.requestId,
       trace_id: request.traceId,
@@ -213,7 +217,7 @@ export class CandidateAssistantAiServiceClient
         await this.aiServiceClient.retrieveRag({
           identity,
           normalized_user_message: request.message,
-          locale: 'en',
+          locale,
           recent_history: history,
           filter_state: filterState,
           explicit_filters: explicitFilters,
@@ -261,6 +265,15 @@ export class CandidateAssistantAiServiceClient
           citation_key: `job:${selectedJob.id}`,
         });
       }
+
+      const citationJobIds = new Map<string, string>();
+      for (const evidence of retrievalEvidence) {
+        if (!allowedJobIds.has(evidence.job_id)) invalidResponse();
+        const previousJobId = citationJobIds.get(evidence.citation_key);
+        if (previousJobId && previousJobId !== evidence.job_id)
+          invalidResponse();
+        citationJobIds.set(evidence.citation_key, evidence.job_id);
+      }
       const requiresCv =
         request.mode === AiChatSessionMode.CV_ANALYSIS ||
         request.mode === AiChatSessionMode.CV_JOB_COMPARISON;
@@ -273,11 +286,16 @@ export class CandidateAssistantAiServiceClient
       let matchingEvidence: GenerationMatchingEvidence | null = null;
       if (selectedJob && request.cv) {
         const comparison = await this.aiServiceClient.matchCv(
-          this.toMatchRequest(request.cv, selectedJob, {
-            request_id: request.requestId,
-            trace_id: request.traceId,
-            operation_attempt_id: request.operationAttemptId,
-          }),
+          this.toMatchRequest(
+            request.cv,
+            selectedJob,
+            {
+              request_id: request.requestId,
+              trace_id: request.traceId,
+              operation_attempt_id: request.operationAttemptId,
+            },
+            locale,
+          ),
         );
         if (
           !comparison ||
@@ -294,7 +312,7 @@ export class CandidateAssistantAiServiceClient
         identity,
         normalized_user_message: request.message,
         intent: request.mode,
-        locale: 'en',
+        locale,
         recent_history: history,
         filter_state: filterState,
         authorized_cv_snapshot: request.cv
@@ -334,7 +352,7 @@ export class CandidateAssistantAiServiceClient
       const response = this.toResponse(
         generated,
         request,
-        retrievalEvidence.map((item) => item.citation_key),
+        citationJobIds,
         allowedJobIds,
         identity,
         filterState,
@@ -403,7 +421,7 @@ export class CandidateAssistantAiServiceClient
   private toResponse(
     value: unknown,
     request: CandidateAssistantAiRequest,
-    allowedCitationKeys: string[],
+    citationJobIds: ReadonlyMap<string, string>,
     allowedJobIds: Set<string>,
     identity: {
       request_id: string;
@@ -457,10 +475,7 @@ export class CandidateAssistantAiServiceClient
     const declaredCitations = new Set<string>();
     assertStringArray(value.citation_keys, 50, 64);
     for (const key of value.citation_keys) {
-      if (
-        !allowedCitationKeys.includes(key) ||
-        !/^job:[0-9a-f-]{36}$/i.test(key)
-      )
+      if (!citationJobIds.has(key) || !/^job:[0-9a-f-]{36}$/i.test(key))
         invalidResponse();
       declaredCitations.add(key);
     }
@@ -469,6 +484,18 @@ export class CandidateAssistantAiServiceClient
       value.referenced_job_ids.some(
         (id) => !isUuid(id) || !allowedJobIds.has(id),
       )
+    )
+      invalidResponse();
+    const citedJobIds = new Set<string>();
+    for (const key of declaredCitations) {
+      const jobId = citationJobIds.get(key);
+      if (!jobId || !allowedJobIds.has(jobId)) invalidResponse();
+      citedJobIds.add(jobId);
+    }
+    const referencedJobIds = new Set(value.referenced_job_ids);
+    if (
+      citedJobIds.size !== referencedJobIds.size ||
+      [...citedJobIds].some((jobId) => !referencedJobIds.has(jobId))
     )
       invalidResponse();
     for (const claim of value.claims) {
@@ -505,6 +532,19 @@ export class CandidateAssistantAiServiceClient
       for (const key of claim.citation_keys) {
         if (!declaredCitations.has(key)) invalidResponse();
       }
+      if (
+        typeof claim.subject_id === 'string' &&
+        allowedJobIds.has(claim.subject_id)
+      ) {
+        const claimJobIds = new Set<string>();
+        for (const key of claim.citation_keys) {
+          const jobId = citationJobIds.get(key);
+          if (!jobId) invalidResponse();
+          claimJobIds.add(jobId);
+        }
+        if (claimJobIds.size !== 1 || !claimJobIds.has(claim.subject_id))
+          invalidResponse();
+      }
     }
     const responseFilterState = validateFilterState(value.filters);
     if (
@@ -514,7 +554,8 @@ export class CandidateAssistantAiServiceClient
       invalidResponse();
     const citations: CandidateAssistantCitation[] = [...declaredCitations].map(
       (key) => {
-        const sourceId = key.slice('job:'.length);
+        const sourceId = citationJobIds.get(key);
+        if (!sourceId) invalidResponse();
         const job = request.jobs.find((item) => item.id === sourceId);
         return {
           sourceId,
@@ -610,6 +651,7 @@ export class CandidateAssistantAiServiceClient
       trace_id: string;
       operation_attempt_id: string;
     },
+    locale: string,
   ) {
     const idempotencyFingerprint = createHash('sha256')
       .update(`${cv.cvId}:${cv.contentVersion}:${job.jobSourceVersion}`, 'utf8')
@@ -622,7 +664,7 @@ export class CandidateAssistantAiServiceClient
       content_version: cv.contentVersion,
       job_source_version: job.jobSourceVersion,
       idempotency_key: `cv-match:${cv.cvId}:${idempotencyFingerprint}`,
-      locale: 'en',
+      locale,
       candidate: {
         skills: cv.skills.slice(0, 200),
         years_experience: null,

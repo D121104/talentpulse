@@ -1,3 +1,6 @@
+export const DEFAULT_AI_LOCALE = 'en';
+export const AI_LOCALE_PATTERN = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})?$/;
+
 export enum AiChatSessionMode {
   JOB_SEARCH = 'JOB_SEARCH',
   CV_ANALYSIS = 'CV_ANALYSIS',
@@ -56,6 +59,8 @@ export interface CandidateAssistantAiRequest {
   userId: string;
   sessionId: string;
   mode: AiChatSessionMode;
+  /** Locale requested by the client; omitted by legacy callers. */
+  locale?: string;
   message: string;
   history: Array<{ role: AiChatMessageRole; content: string }>;
   jobs: CandidateAssistantJobContext[];

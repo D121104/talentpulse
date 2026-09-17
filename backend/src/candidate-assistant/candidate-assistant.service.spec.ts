@@ -134,6 +134,79 @@ describe('CandidateAssistantService', () => {
     );
   });
 
+  it('derives locale from Accept-Language when the body omits it', async () => {
+    const { service, aiClient } = setup();
+    (aiClient.generate as jest.Mock).mockResolvedValue({
+      blocks: [{ type: 'ADVICE', text: 'ok' }],
+      citations: [],
+      filterState: null,
+    });
+
+    await service.sendMessage(
+      'session-1',
+      {
+        content: 'find jobs',
+        clientMessageId: '33333333-3333-4333-8333-333333333333',
+      },
+      user,
+      'vi-VN,vi;q=0.9,en;q=0.8',
+    );
+
+    expect(aiClient.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: 'vi-VN' }),
+    );
+  });
+
+  it('bounds persisted history entries and preserves chronological roles', async () => {
+    const { service, messageRepo, aiClient } = setup();
+    const newestAssistant = {
+      role: AiChatMessageRole.ASSISTANT,
+      content: 'assistant '.repeat(500),
+    };
+    const olderUser = {
+      role: AiChatMessageRole.USER,
+      content: 'user '.repeat(1000),
+    };
+    messageRepo.find.mockResolvedValue([
+      newestAssistant,
+      olderUser,
+      { role: AiChatMessageRole.ASSISTANT, content: 'not retained' },
+    ]);
+    aiClient.generate.mockResolvedValue({
+      blocks: [{ type: 'ADVICE', text: 'bounded response' }],
+      citations: [],
+      filterState: null,
+    });
+
+    await service.sendMessage(
+      'session-1',
+      {
+        content: 'next turn',
+        clientMessageId: '33333333-3333-4333-8333-333333333333',
+      },
+      user,
+    );
+
+    const request = (aiClient.generate as jest.Mock).mock.calls[0][0];
+    expect(request.history).toEqual([
+      {
+        role: AiChatMessageRole.USER,
+        content: olderUser.content.slice(0, 2000),
+      },
+      {
+        role: AiChatMessageRole.ASSISTANT,
+        content: newestAssistant.content.slice(0, 4000),
+      },
+    ]);
+    expect(request.history).toHaveLength(2);
+    expect(
+      Math.max(...request.history.map((item) => item.content.length)),
+    ).toBeLessThanOrEqual(4000);
+    expect(
+      request.history.reduce((total, item) => total + item.content.length, 0),
+    ).toBeLessThanOrEqual(6000);
+  });
+
   it('requires one selected active job and an owned CV for comparison', async () => {
     const { service, quotaService } = setup({
       _id: 'session-1',
