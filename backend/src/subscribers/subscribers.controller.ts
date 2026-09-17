@@ -45,7 +45,14 @@ export class SubscribersController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async getMySubscription(@User() user: IUser) {
-    return this.subscribersService.getSubscriberByUserId(user._id);
+    return this.subscribersService.getSubscriberByUserId(user._id, user.email);
+  }
+
+  // Toggle current user's subscription active/inactive
+  @Patch('me/toggle')
+  @UseGuards(JwtAuthGuard)
+  async toggleMyActive(@User() user: IUser) {
+    return this.subscribersService.toggleMyActive(user);
   }
 
   @Get('email')

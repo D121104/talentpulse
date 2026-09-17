@@ -33,12 +33,18 @@ export class MailService {
 
   // Send password reset email with token link
   async sendForgotPassword(email: string, token: string) {
+    const frontendUrl = (process.env.URL_FRONTEND || 'http://localhost:5173').replace(/\/$/, '');
+    const resetLink = `${frontendUrl}/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+
     await this.mailerService.sendMail({
       to: email,
-      subject: 'Đặt lại mật khẩu',
+      subject: '🔐 [TalentPulse] Yêu cầu đặt lại mật khẩu của bạn',
       template: 'forgot-password',
       context: {
-        link: `${process.env.URL_FRONTEND}/reset-password?token=${token}`,
+        otp: token,
+        link: resetLink,
+        email,
+        currentYear: new Date().getFullYear(),
       },
     });
   }

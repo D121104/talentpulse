@@ -16,7 +16,7 @@ export class SubscribersService {
     private readonly skillRepo: Repository<Skill>,
   ) {}
 
-  // Create new skills from user-suggested names
+  // Create or retrieve skills from user-suggested names (case-insensitive)
   private async createNewSkills(
     skillNames: string[],
     user: IUser,
@@ -24,58 +24,107 @@ export class SubscribersService {
     const skills: Skill[] = [];
 
     for (const name of skillNames) {
-      const normalizedName = name.trim().toUpperCase();
-      if (!normalizedName) continue;
+      const trimmed = name.trim();
+      if (!trimmed) continue;
+      const normalizedName = trimmed.toUpperCase();
 
-      let existingSkill = await this.skillRepo.findOne({
-        where: { name: normalizedName },
-      });
+      let existingSkill = await this.skillRepo
+        .createQueryBuilder('skill')
+        .where('LOWER(skill.name) = LOWER(:name)', { name: trimmed })
+        .andWhere('skill.isDeleted = false')
+        .getOne();
 
       if (!existingSkill) {
-        const newSkill = this.skillRepo.create({
-          name: normalizedName,
-          createdBy: {
-            _id: user._id,
-            email: user.email,
-          },
-        });
-        existingSkill = await this.skillRepo.save(newSkill);
+        try {
+          const newSkill = this.skillRepo.create({
+            name: normalizedName,
+            createdBy: {
+              _id: user._id,
+              email: user.email,
+            },
+          });
+          existingSkill = await this.skillRepo.save(newSkill);
+        } catch {
+          // If concurrent insert occurred, load existing skill
+          existingSkill = await this.skillRepo
+            .createQueryBuilder('skill')
+            .where('LOWER(skill.name) = LOWER(:name)', { name: trimmed })
+            .andWhere('skill.isDeleted = false')
+            .getOne();
+        }
       }
-      skills.push(existingSkill);
+      if (existingSkill && !skills.some((s) => s._id === existingSkill._id)) {
+        skills.push(existingSkill);
+      }
     }
 
     return skills;
   }
 
-  // Create or update a subscription. Handles both existing and new skill IDs.
+  // Create or update a subscription. Handles both existing and new skill IDs/names.
   async createOrUpdate(createSubscriberDto: CreateSubscriberDto, user: IUser) {
     let skillEntities: Skill[] = [];
 
-    if (createSubscriberDto.skills && createSubscriberDto.skills.length > 0) {
-      skillEntities = await this.skillRepo.find({
-        where: { _id: In(createSubscriberDto.skills) },
-      });
-    }
-
-    if (
-      createSubscriberDto.newSkillNames &&
-      createSubscriberDto.newSkillNames.length > 0
-    ) {
-      const newSkills = await this.createNewSkills(
-        createSubscriberDto.newSkillNames,
-        user,
+    const isUuid = (val: string) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        val,
       );
-      skillEntities = [...skillEntities, ...newSkills];
+
+    const uuidSkillIds: string[] = [];
+    const nameSkillStrings: string[] = [];
+
+    if (createSubscriberDto.skills && createSubscriberDto.skills.length > 0) {
+      for (const item of createSubscriberDto.skills) {
+        if (isUuid(item)) {
+          uuidSkillIds.push(item);
+        } else if (typeof item === 'string' && item.trim()) {
+          nameSkillStrings.push(item.trim());
+        }
+      }
     }
 
-    const existingSubscription = await this.subscriberRepo.findOne({
+    if (uuidSkillIds.length > 0) {
+      const foundSkills = await this.skillRepo.find({
+        where: { _id: In(uuidSkillIds), isDeleted: false },
+      });
+      skillEntities.push(...foundSkills);
+    }
+
+    const allNewSkillNames = [
+      ...nameSkillStrings,
+      ...(createSubscriberDto.newSkillNames || []),
+    ];
+
+    if (allNewSkillNames.length > 0) {
+      const newSkills = await this.createNewSkills(allNewSkillNames, user);
+      for (const s of newSkills) {
+        if (!skillEntities.some((existing) => existing._id === s._id)) {
+          skillEntities.push(s);
+        }
+      }
+    }
+
+    const targetEmail = (createSubscriberDto.email || user.email)
+      .trim()
+      .toLowerCase();
+
+    // Find existing by userId OR by email
+    let existingSubscription = await this.subscriberRepo.findOne({
       where: { userId: user._id, isDeleted: false },
       relations: ['skills'],
     });
 
+    if (!existingSubscription && targetEmail) {
+      existingSubscription = await this.subscriberRepo.findOne({
+        where: { email: targetEmail, isDeleted: false },
+        relations: ['skills'],
+      });
+    }
+
     if (existingSubscription) {
+      existingSubscription.userId = user._id;
       existingSubscription.skills = skillEntities;
-      existingSubscription.email = createSubscriberDto.email || user.email;
+      existingSubscription.email = targetEmail;
       if (createSubscriberDto.isActive !== undefined) {
         existingSubscription.isActive = createSubscriberDto.isActive;
       }
@@ -85,12 +134,12 @@ export class SubscribersService {
       };
 
       await this.subscriberRepo.save(existingSubscription);
-      return await this.getSubscriberByUserId(user._id);
+      return await this.getSubscriberByUserId(user._id, targetEmail);
     }
 
     const newSubscriber = this.subscriberRepo.create({
       userId: user._id,
-      email: createSubscriberDto.email || user.email,
+      email: targetEmail,
       skills: skillEntities,
       isActive: createSubscriberDto.isActive ?? true,
       createdBy: {
@@ -99,7 +148,8 @@ export class SubscribersService {
       },
     });
 
-    return await this.subscriberRepo.save(newSubscriber);
+    await this.subscriberRepo.save(newSubscriber);
+    return await this.getSubscriberByUserId(user._id, targetEmail);
   }
 
   async create(createSubscriberDto: CreateSubscriberDto) {
@@ -218,11 +268,49 @@ export class SubscribersService {
     });
   }
 
-  async getSubscriberByUserId(userId: string) {
-    return await this.subscriberRepo.findOne({
+  async getSubscriberByUserId(userId: string, email?: string) {
+    let sub = await this.subscriberRepo.findOne({
       where: { userId, isDeleted: false },
       relations: ['skills'],
     });
+
+    if (!sub && email) {
+      sub = await this.subscriberRepo.findOne({
+        where: { email: email.trim().toLowerCase(), isDeleted: false },
+        relations: ['skills'],
+      });
+      if (sub && !sub.userId) {
+        sub.userId = userId;
+        await this.subscriberRepo.save(sub);
+      }
+    }
+
+    return sub;
+  }
+
+  async toggleMyActive(user: IUser) {
+    let sub = await this.getSubscriberByUserId(user._id, user.email);
+    if (!sub) {
+      sub = this.subscriberRepo.create({
+        userId: user._id,
+        email: user.email.trim().toLowerCase(),
+        skills: [],
+        isActive: true,
+        createdBy: {
+          _id: user._id,
+          email: user.email,
+        },
+      });
+      return await this.subscriberRepo.save(sub);
+    }
+
+    sub.isActive = !sub.isActive;
+    sub.updatedBy = {
+      _id: user._id,
+      email: user.email,
+    };
+
+    return await this.subscriberRepo.save(sub);
   }
 
   async remove(id: string, user: IUser) {
