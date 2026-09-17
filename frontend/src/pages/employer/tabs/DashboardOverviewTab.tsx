@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import {
@@ -17,8 +18,10 @@ import {
   ShieldCheck,
   Zap,
   Crown,
+  MessageSquare,
 } from 'lucide-react';
 import type { HrDashboardStats } from '../../../lib/employerApi';
+import { useChat } from '../../../context/ChatContext';
 
 import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 
@@ -36,6 +39,8 @@ export function DashboardOverviewTab({
   onOpenCreateJob,
 }: DashboardOverviewTabProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { unreadCount: chatUnreadCount } = useChat();
   const [hoveredDayIndex, setHoveredDayIndex] = useState<number | null>(null);
 
   if (isLoading) {
@@ -387,6 +392,25 @@ export function DashboardOverviewTab({
                   <span>{t('employer.jobsTab.postJobBtn')}</span>
                 </div>
                 <ArrowUpRight className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => navigate('/messages')}
+                className="w-full flex items-center justify-between rounded-xl border border-blue-200/80 bg-blue-50/60 px-4 py-2.5 text-sm font-bold text-blue-700 transition hover:border-primary hover:bg-blue-100/70 hover:text-primary dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:border-primary-light cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <MessageSquare className="h-4.5 w-4.5 text-blue-600 dark:text-blue-400" />
+                  <span>Trò chuyện với ứng viên</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {chatUnreadCount > 0 && (
+                    <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-black text-white">
+                      {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+                    </span>
+                  )}
+                  <ChevronRight className="h-4 w-4 text-blue-500" />
+                </div>
               </button>
 
               <button

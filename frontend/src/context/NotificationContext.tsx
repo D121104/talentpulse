@@ -8,6 +8,7 @@ import {
   useRef,
   type ReactNode,
 } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useToast } from './ToastContext';
 import { getNotificationSocket } from '../lib/socket';
@@ -39,6 +40,8 @@ const NotificationContext = createContext<NotificationContextType | undefined>(
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const { user, accessToken } = useAuth();
   const { info } = useToast();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -162,8 +165,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
       const notifId = notif._id || `${Date.now()}-${Math.random()}`;
 
-      // Strictly check if this notification was already processed to avoid double increments
+      // Strictly check if this notification was already processed (Rate-limited update of existing unread notification)
       if (processedNotifIdsRef.current.has(notifId)) {
+        setNotifications((prev) =>
+          prev.map((item) =>
+            item._id === notifId
+              ? {
+                  ...item,
+                  title: notif.title || item.title,
+                  content: notif.content || item.content,
+                  data: notif.data || item.data,
+                  createdAt: notif.updatedAt || notif.createdAt || item.createdAt,
+                }
+              : item,
+          ),
+        );
         return;
       }
       processedNotifIdsRef.current.add(notifId);
@@ -190,19 +206,53 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         ...prev.filter((item) => item._id !== notifId),
       ]);
 
-      // 3. Trigger immediate Toast in top-right corner
+      // 3. Trigger immediate Toast in top-right corner (ONLY if NOT on /messages page for chat notifications)
       if (notif?.title) {
+        const isChatMessage =
+          notif.data?.type === 'CHAT_MESSAGE' ||
+          notif.data?.conversationId ||
+          (notif.title && notif.title.toLowerCase().includes('tin nhắn'));
+
+        const isOnMessagesPage =
+          location.pathname.startsWith('/messages') ||
+          window.location.pathname.startsWith('/messages');
+
+        // Khi người dùng đang ở trang nhắn tin (/messages), hoàn toàn không hiện toast thông báo tin nhắn nữa
+        if (isChatMessage && isOnMessagesPage) {
+          return;
+        }
+
+        const convId = notif.data?.conversationId || notif.targetId;
+        const onClick = isChatMessage
+          ? () => {
+              if (convId) {
+                navigate(`/messages?conversationId=${convId}`);
+              } else {
+                navigate('/messages');
+              }
+            }
+          : undefined;
+
         info(
           notif.title,
           notif.content || 'Bạn có một thông báo mới từ hệ thống.',
+          onClick,
         );
       }
     };
 
+    const handleUnreadCount = (data: any) => {
+      if (typeof data?.count === 'number') {
+        setUnreadCount(data.count);
+      }
+    };
+
     socket.on('notification', handleNewNotification);
+    socket.on('notification_unread_count', handleUnreadCount);
 
     return () => {
       socket.off('notification', handleNewNotification);
+      socket.off('notification_unread_count', handleUnreadCount);
     };
   }, [user?._id, info]);
 

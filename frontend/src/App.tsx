@@ -1,6 +1,7 @@
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
 import { NotificationProvider } from './context/NotificationContext';
+import { ChatProvider } from './context/ChatContext';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './auth/AuthContext';
 import { GuestRoute } from './auth/GuestRoute';
@@ -25,39 +26,43 @@ import SavedJobsPage from './pages/jobs/SavedJobsPage';
 import AppliedJobsPage from './pages/candidate/AppliedJobsPage';
 import CompanyListPage from './pages/companies/CompanyListPage';
 import CompanyDetailPage from './pages/companies/CompanyDetailPage';
+import MessagesPage from './pages/messages/MessagesPage';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
   return (
     <ThemeProvider>
-      <ToastProvider>
-        <AuthProvider>
-          <NotificationProvider>
-            <BrowserRouter>
-              <ScrollToTop />
-              <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/jobs" element={<JobSearchPage />} />
-            <Route path="/jobs/:id" element={<JobDetailPage />} />
-            <Route path="/companies" element={<CompanyListPage />} />
-            <Route path="/companies/:id" element={<CompanyDetailPage />} />
-            <Route path="/saved-jobs" element={<SavedJobsPage />} />
-            <Route path="/jobs/saved" element={<Navigate to="/saved-jobs" replace />} />
-            <Route path="/verify-account" element={<VerifyAccountPage />} />
-            <Route element={<GuestRoute />}>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-            </Route>
-            <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
-            <Route path="/pending-approval" element={<PendingApprovalPage />} />
-            <Route element={<ProtectedRoute />}>
-              <Route path="/premium" element={<PremiumPage />} />
-              <Route path="/pricing" element={<Navigate to="/premium" replace />} />
-              <Route path="/payment-history" element={<PaymentHistoryPage />} />
-              <Route path="/payment/history" element={<Navigate to="/payment-history" replace />} />
-              <Route path="/payment/verify/:orderCode" element={<PaymentVerifyPage />} />
-              <Route path="/payment/verify" element={<PaymentVerifyPage />} />
-            </Route>
+      <BrowserRouter>
+        <ToastProvider>
+          <AuthProvider>
+            <NotificationProvider>
+              <ChatProvider>
+                <ScrollToTop />
+                <Routes>
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/jobs" element={<JobSearchPage />} />
+              <Route path="/jobs/:id" element={<JobDetailPage />} />
+              <Route path="/companies" element={<CompanyListPage />} />
+              <Route path="/companies/:id" element={<CompanyDetailPage />} />
+              <Route path="/saved-jobs" element={<SavedJobsPage />} />
+              <Route path="/jobs/saved" element={<Navigate to="/saved-jobs" replace />} />
+              <Route path="/verify-account" element={<VerifyAccountPage />} />
+              <Route element={<GuestRoute />}>
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+              </Route>
+              <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
+              <Route path="/pending-approval" element={<PendingApprovalPage />} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/messages" element={<MessagesPage />} />
+                <Route path="/connect" element={<Navigate to="/messages" replace />} />
+                <Route path="/premium" element={<PremiumPage />} />
+                <Route path="/pricing" element={<Navigate to="/premium" replace />} />
+                <Route path="/payment-history" element={<PaymentHistoryPage />} />
+                <Route path="/payment/history" element={<Navigate to="/payment-history" replace />} />
+                <Route path="/payment/verify/:orderCode" element={<PaymentVerifyPage />} />
+                <Route path="/payment/verify" element={<PaymentVerifyPage />} />
+              </Route>
             <Route element={<ProtectedRoute allowedRoles={['HR', 'ADMIN']} />}>
               <Route path="/dashboard" element={<EmployerDashboardPage />} />
               <Route path="/hr/dashboard" element={<Navigate to="/dashboard" replace />} />
@@ -85,11 +90,12 @@ function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
 
           </Routes>
-        </BrowserRouter>
-      </NotificationProvider>
-    </AuthProvider>
-  </ToastProvider>
-</ThemeProvider>
+              </ChatProvider>
+            </NotificationProvider>
+          </AuthProvider>
+        </ToastProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
 
