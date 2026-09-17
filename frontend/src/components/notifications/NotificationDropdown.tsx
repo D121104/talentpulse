@@ -15,6 +15,7 @@ import {
   Inbox,
   ArrowRight,
   Loader2,
+  MessageSquare,
 } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 import { useAuth } from '../../auth/AuthContext';
@@ -229,7 +230,9 @@ export function NotificationDropdown() {
           targetTypeUpper === 'COMPANY' ||
           titleLower.includes('xem hồ sơ') ||
           titleLower.includes('kết nối') ||
-          titleLower.includes('doanh nghiệp')
+          titleLower.includes('doanh nghiệp') ||
+          item.data?.type === 'CHAT_MESSAGE' ||
+          titleLower.includes('tin nhắn')
         );
       }
 
@@ -273,6 +276,21 @@ export function NotificationDropdown() {
     const typeUpper = (item.type || '').toUpperCase();
     const targetType = (item.targetType || '').toLowerCase();
     const titleLower = (item.title || '').toLowerCase();
+
+    // 0. Chat / Direct Message Notification
+    if (
+      item.data?.type === 'CHAT_MESSAGE' ||
+      item.data?.conversationId ||
+      titleLower.includes('tin nhắn')
+    ) {
+      const convId = item.data?.conversationId || item.targetId;
+      if (convId) {
+        navigate(`/messages?conversationId=${convId}`);
+        return;
+      }
+      navigate('/messages');
+      return;
+    }
 
     // 1. Recruiter viewed candidate profile -> profile viewers page
     if (
@@ -369,11 +387,17 @@ export function NotificationDropdown() {
     const titleLower = (item.title || '').toLowerCase();
     const status = item.data?.status || '';
 
-    // Check if company logo or image is present
+    // Check if company logo or sender avatar is present
     const logoUrl =
-      item.data?.companyLogo || item.data?.logo || item.data?.company?.logo;
+      item.data?.companyLogo ||
+      item.data?.logo ||
+      item.data?.company?.logo ||
+      item.data?.senderAvatar;
     const companyName =
-      item.data?.companyName || item.data?.company?.name || '';
+      item.data?.companyName ||
+      item.data?.company?.name ||
+      item.data?.senderName ||
+      '';
     const initial = companyName ? companyName.charAt(0).toUpperCase() : 'TP';
 
     // Sub-badge icon + color
@@ -381,9 +405,17 @@ export function NotificationDropdown() {
     let subBadgeIcon = <Sparkles className="h-2.5 w-2.5" />;
 
     if (
+      item.data?.type === 'CHAT_MESSAGE' ||
+      typeUpper === 'MESSAGE' ||
+      titleLower.includes('tin nhắn')
+    ) {
+      // Chat message notification -> Blue message bubble badge
+      subBadgeBg = 'bg-blue-600 text-white';
+      subBadgeIcon = <MessageSquare className="h-2.5 w-2.5" />;
+    } else if (
       typeUpper === 'JOB' ||
       item.targetType === 'job' ||
-      item.data?.jobId && typeUpper !== 'RESUME'
+      (item.data?.jobId && typeUpper !== 'RESUME')
     ) {
       // Job notification -> Orange/Amber briefcase badge (matching mockup)
       subBadgeBg = 'bg-amber-500 text-white';

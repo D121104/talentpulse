@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
-import { Menu, X, Sun, Moon, LogOut, Briefcase, FileText, Sparkles, CheckCircle2, UploadCloud, LayoutTemplate, Eye, Send } from 'lucide-react';
+import { Menu, X, Sun, Moon, LogOut, Briefcase, FileText, Sparkles, CheckCircle2, UploadCloud, LayoutTemplate, Eye, Send, MessageSquare } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { useChat } from '../../context/ChatContext';
 import { LanguageSwitcher } from '../common/LanguageSwitcher';
 import { UserAvatar } from '../common/UserAvatar';
 import { UserDropdownMenu } from './UserDropdownMenu';
@@ -14,6 +15,7 @@ export default function Header() {
   const { t } = useTranslation();
   const { theme, toggleTheme } = useTheme();
   const { user, status, logout } = useAuth();
+  const { unreadCount: chatUnreadCount } = useChat();
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -115,10 +117,22 @@ export default function Header() {
               )}
             </div>
 
-            {/* Mobile Notification Dropdown when Authenticated */}
+            {/* Mobile Notification Dropdown & Messages when Authenticated */}
             {status === 'authenticated' && user && (
-              <div className="lg:hidden flex items-center">
+              <div className="lg:hidden flex items-center gap-1">
                 <NotificationDropdown />
+                <Link
+                  to="/messages"
+                  className="relative p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100/60 dark:hover:bg-slate-800/60 rounded-xl transition"
+                  aria-label="Tin nhắn"
+                >
+                  <MessageSquare className="w-5 h-5" />
+                  {chatUnreadCount > 0 && (
+                    <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-black text-white animate-pulse">
+                      {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                    </span>
+                  )}
+                </Link>
               </div>
             )}
 

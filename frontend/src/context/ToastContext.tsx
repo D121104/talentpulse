@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, X, ArrowRight } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'info';
 
@@ -10,13 +10,14 @@ export interface ToastItem {
   message: string;
   description?: string;
   duration?: number;
+  onClick?: () => void;
 }
 
 interface ToastContextType {
   showToast: (toast: Omit<ToastItem, 'id'>) => void;
-  success: (message: string, description?: string) => void;
-  error: (message: string, description?: string) => void;
-  info: (message: string, description?: string) => void;
+  success: (message: string, description?: string, onClick?: () => void) => void;
+  error: (message: string, description?: string, onClick?: () => void) => void;
+  info: (message: string, description?: string, onClick?: () => void) => void;
   removeToast: (id: string) => void;
 }
 
@@ -30,9 +31,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const showToast = useCallback(
-    ({ type, message, description, duration = 3500 }: Omit<ToastItem, 'id'>) => {
+    ({ type, message, description, duration = 3500, onClick }: Omit<ToastItem, 'id'>) => {
       const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const newToast: ToastItem = { id, type, message, description, duration };
+      const newToast: ToastItem = { id, type, message, description, duration, onClick };
 
       setToasts((prev) => {
         // Prevent duplicate messages if already showing identical message
@@ -53,22 +54,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 
   const success = useCallback(
-    (message: string, description?: string) => {
-      showToast({ type: 'success', message, description });
+    (message: string, description?: string, onClick?: () => void) => {
+      showToast({ type: 'success', message, description, onClick });
     },
     [showToast],
   );
 
   const error = useCallback(
-    (message: string, description?: string) => {
-      showToast({ type: 'error', message, description });
+    (message: string, description?: string, onClick?: () => void) => {
+      showToast({ type: 'error', message, description, onClick });
     },
     [showToast],
   );
 
   const info = useCallback(
-    (message: string, description?: string) => {
-      showToast({ type: 'info', message, description });
+    (message: string, description?: string, onClick?: () => void) => {
+      showToast({ type: 'info', message, description, onClick });
     },
     [showToast],
   );
@@ -88,6 +89,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           {toasts.map((t) => {
             const isSuccess = t.type === 'success';
             const isError = t.type === 'error';
+            const isClickable = Boolean(t.onClick);
 
             return (
               <motion.div
@@ -97,7 +99,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -16, scale: 0.92 }}
                 transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                onClick={() => {
+                  if (t.onClick) {
+                    t.onClick();
+                    removeToast(t.id);
+                  }
+                }}
                 className={`pointer-events-auto relative overflow-hidden rounded-2xl border p-4 shadow-2xl backdrop-blur-2xl transition-all ${
+                  isClickable
+                    ? 'cursor-pointer hover:scale-[1.02] active:scale-[0.99] hover:border-primary/70 hover:shadow-primary/20'
+                    : ''
+                } ${
                   isSuccess
                     ? 'border-emerald-200/90 bg-white/95 text-slate-900 shadow-emerald-950/10 dark:border-emerald-800/80 dark:bg-slate-900/95 dark:text-white'
                     : isError
@@ -127,16 +139,25 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                       {t.message}
                     </h4>
                     {t.description && (
-                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-2">
                         {t.description}
                       </p>
+                    )}
+                    {isClickable && (
+                      <span className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-bold text-primary dark:text-primary-light hover:underline">
+                        <span>Bấm để mở tin nhắn</span>
+                        <ArrowRight className="h-3 w-3" />
+                      </span>
                     )}
                   </div>
 
                   {/* Close button */}
                   <button
                     type="button"
-                    onClick={() => removeToast(t.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeToast(t.id);
+                    }}
                     className="shrink-0 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
                     aria-label="Close notification"
                   >

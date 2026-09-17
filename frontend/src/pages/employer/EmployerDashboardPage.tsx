@@ -19,12 +19,14 @@ import {
   Loader2,
   Crown,
   Receipt,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { LanguageSwitcher } from '../../components/common/LanguageSwitcher';
 import { useToast } from '../../context/ToastContext';
 import { useNotification } from '../../context/NotificationContext';
+import { useChat } from '../../context/ChatContext';
 import {
   employerApi,
   type HrDashboardStats,
@@ -59,6 +61,7 @@ export default function EmployerDashboardPage() {
   const { user, accessToken, logout } = useAuth();
   const { info, success, error } = useToast();
   const { unreadCount: unreadNotificationsCount, fetchUnreadCount: fetchUnreadNotifications } = useNotification();
+  const { unreadCount: chatUnreadCount } = useChat();
   const navigate = useNavigate();
   const location = useLocation();
   const { id: routeJobId } = useParams<{ id?: string }>();
@@ -163,6 +166,11 @@ export default function EmployerDashboardPage() {
   }, [refreshAll, fetchUnreadNotifications]);
 
   const handleNavigateTab = (tab: string, extraData?: any) => {
+    if (tab === 'messages') {
+      navigate('/messages');
+      setIsMobileSidebarOpen(false);
+      return;
+    }
     if (isJobEditorRoute) {
       navigate(`/dashboard?tab=${tab}`);
     } else {
@@ -305,6 +313,13 @@ export default function EmployerDashboardPage() {
       label: t('employer.sidebar.menuCandidates', 'Quản lý CV & Ứng viên'),
       icon: Users,
       badge: statsData?.stats?.pendingApplications ? `${statsData.stats.pendingApplications}` : null,
+    },
+    {
+      id: 'messages',
+      label: 'Tin nhắn trực tiếp',
+      icon: MessageSquare,
+      badge: chatUnreadCount > 0 ? (chatUnreadCount > 99 ? '99+' : `${chatUnreadCount}`) : null,
+      badgeColor: 'bg-blue-600 text-white font-black',
     },
     {
       id: 'search-cv',
@@ -561,6 +576,21 @@ export default function EmployerDashboardPage() {
                   <span>{t('employer.jobsTab.postJobBtn', 'Đăng tin mới')}</span>
                 </button>
               )}
+
+              {/* Direct Messages Quick Action Button */}
+              <Link
+                to="/messages"
+                className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200/80 bg-white/80 text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-white backdrop-blur-md transition-colors duration-200 cursor-pointer shadow-xs"
+                title="Tin nhắn trực tiếp"
+                aria-label="Tin nhắn trực tiếp"
+              >
+                <MessageSquare className="h-4 w-4" />
+                {chatUnreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full bg-blue-600 text-[9px] font-black text-white ring-2 ring-white dark:ring-slate-900 shadow-sm animate-in fade-in zoom-in-75">
+                    {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+                  </span>
+                )}
+              </Link>
 
               {/* Notifications Icon Button */}
               <button

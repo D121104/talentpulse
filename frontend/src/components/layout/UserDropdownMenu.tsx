@@ -26,10 +26,12 @@ import { formatDate, parseDate } from '../../lib/dateUtils';
 import { useAuth } from '../../auth/AuthContext';
 import { UserAvatar } from '../common/UserAvatar';
 import { NotificationDropdown } from '../notifications/NotificationDropdown';
+import { useChat } from '../../context/ChatContext';
 
 export function UserDropdownMenu() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
+  const { unreadCount: chatUnreadCount } = useChat();
   const navigate = useNavigate();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -92,14 +94,19 @@ export function UserDropdownMenu() {
       <NotificationDropdown />
 
       {/* Quick Action: Messages Icon */}
-      <button
-        type="button"
+      <Link
+        to="/messages"
         className="relative flex h-10 w-10 items-center justify-center rounded-full bg-slate-100/80 text-slate-600 transition hover:bg-primary/10 hover:text-primary dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-primary/20 dark:hover:text-primary-light cursor-pointer"
-        aria-label={t('userMenu.messages')}
-        title={t('userMenu.messages')}
+        aria-label={t('userMenu.messages', 'Tin nhắn')}
+        title={t('userMenu.messages', 'Tin nhắn')}
       >
         <MessageSquare className="h-5 w-5" />
-      </button>
+        {chatUnreadCount > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-black text-white shadow-sm ring-2 ring-white dark:ring-slate-900 animate-pulse">
+            {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+          </span>
+        )}
+      </Link>
 
       {/* Avatar Dropdown Wrapper */}
       <div

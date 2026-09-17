@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   Bell,
@@ -6,6 +7,7 @@ import {
   Briefcase,
   Users,
   Loader2,
+  MessageSquare,
 } from 'lucide-react';
 import { employerApi, type NotificationItem } from '../../../lib/employerApi';
 import { useToast } from '../../../context/ToastContext';
@@ -18,6 +20,7 @@ interface NotificationsTabProps {
 
 export function NotificationsTab({ accessToken, onRefreshStats }: NotificationsTabProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { success, error } = useToast();
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -63,6 +66,33 @@ export function NotificationsTab({ accessToken, onRefreshStats }: NotificationsT
       await onRefreshStats();
     } catch (err: any) {
       error(err.message || 'Thao tác thất bại');
+    }
+  };
+
+  const handleItemClick = (item: NotificationItem) => {
+    if (!item.isRead) {
+      void handleMarkAsRead(item._id);
+    }
+    const isChatMessage =
+      item.data?.type === 'CHAT_MESSAGE' ||
+      item.data?.conversationId ||
+      item.title.toLowerCase().includes('tin nhắn');
+
+    if (isChatMessage) {
+      const convId = item.data?.conversationId || item.targetId;
+      if (convId) {
+        navigate(`/messages?conversationId=${convId}`);
+        return;
+      }
+      navigate('/messages');
+      return;
+    }
+
+    if (item.data?.jobId) {
+      const rawJobId = typeof item.data.jobId === 'object' ? item.data.jobId._id : item.data.jobId;
+      if (rawJobId) {
+        navigate(`/dashboard?tab=candidates&jobId=${rawJobId}`);
+      }
     }
   };
 
@@ -130,67 +160,78 @@ export function NotificationsTab({ accessToken, onRefreshStats }: NotificationsT
         </div>
       ) : filtered.length > 0 ? (
         <div className="rounded-3xl border border-slate-200/90 bg-white overflow-hidden shadow-sm dark:border-slate-800 dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800">
-          {filtered.map((item) => (
-            <div
-              key={item._id}
-              onClick={() => !item.isRead && handleMarkAsRead(item._id)}
-              className={`flex items-start justify-between gap-4 p-5 transition cursor-pointer ${
-                !item.isRead
-                  ? 'bg-blue-50/40 hover:bg-blue-50/80 dark:bg-blue-950/20 dark:hover:bg-blue-950/40'
-                  : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-              }`}
-            >
-              <div className="flex items-start gap-3.5">
-                <span
-                  className={`mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl shrink-0 ${
-                    item.type === 'RESUME'
-                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                      : item.type === 'JOB'
-                      ? 'bg-blue-100 text-primary dark:bg-blue-950 dark:text-blue-300'
-                      : 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
-                  }`}
-                >
-                  {item.type === 'RESUME' ? (
-                    <Users className="h-4.5 w-4.5" />
-                  ) : item.type === 'JOB' ? (
-                    <Briefcase className="h-4.5 w-4.5" />
-                  ) : (
-                    <Bell className="h-4.5 w-4.5" />
-                  )}
-                </span>
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                      {item.title}
-                    </h4>
-                    {!item.isRead && (
-                      <span className="h-2 w-2 rounded-full bg-primary" />
-                    )}
-                  </div>
-                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                    {item.content}
-                  </p>
-                  <span className="text-[11px] text-slate-400 block pt-1">
-                    {formatDateTime(item.createdAt)}
-                  </span>
-                </div>
-              </div>
+          {filtered.map((item) => {
+            const isChatMessage =
+              item.data?.type === 'CHAT_MESSAGE' ||
+              item.data?.conversationId ||
+              item.title.toLowerCase().includes('tin nhắn');
 
-              {!item.isRead && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleMarkAsRead(item._id);
-                  }}
-                  className="rounded-lg p-1.5 text-xs text-slate-400 hover:bg-white hover:text-primary transition dark:hover:bg-slate-800 shrink-0 cursor-pointer"
-                  title={t('employer.notificationsTab.markReadBtn')}
-                >
-                  <CheckCheck className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          ))}
+            return (
+              <div
+                key={item._id}
+                onClick={() => handleItemClick(item)}
+                className={`flex items-start justify-between gap-4 p-5 transition cursor-pointer ${
+                  !item.isRead
+                    ? 'bg-blue-50/40 hover:bg-blue-50/80 dark:bg-blue-950/20 dark:hover:bg-blue-950/40'
+                    : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                }`}
+              >
+                <div className="flex items-start gap-3.5">
+                  <span
+                    className={`mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl shrink-0 ${
+                      isChatMessage
+                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                        : item.type === 'RESUME'
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                        : item.type === 'JOB'
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                        : 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                    }`}
+                  >
+                    {isChatMessage ? (
+                      <MessageSquare className="h-4.5 w-4.5" />
+                    ) : item.type === 'RESUME' ? (
+                      <Users className="h-4.5 w-4.5" />
+                    ) : item.type === 'JOB' ? (
+                      <Briefcase className="h-4.5 w-4.5" />
+                    ) : (
+                      <Bell className="h-4.5 w-4.5" />
+                    )}
+                  </span>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                        {item.title}
+                      </h4>
+                      {!item.isRead && (
+                        <span className="h-2 w-2 rounded-full bg-primary" />
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                      {item.content}
+                    </p>
+                    <span className="text-[11px] text-slate-400 block pt-1">
+                      {formatDateTime(item.createdAt)}
+                    </span>
+                  </div>
+                </div>
+
+                {!item.isRead && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleMarkAsRead(item._id);
+                    }}
+                    className="rounded-lg p-1.5 text-xs text-slate-400 hover:bg-white hover:text-primary transition dark:hover:bg-slate-800 shrink-0 cursor-pointer"
+                    title={t('employer.notificationsTab.markReadBtn')}
+                  >
+                    <CheckCheck className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center dark:border-slate-800 dark:bg-slate-900">
