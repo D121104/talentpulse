@@ -73,6 +73,8 @@ export interface CanonicalJobSnapshot {
   salary_currency: string | null;
   start_date: string | null;
   end_date: string | null;
+  start_date_epoch_ms: number | null;
+  end_date_epoch_ms: number | null;
   is_active: boolean;
   is_deleted: boolean;
   company_is_active: boolean;
@@ -109,7 +111,8 @@ export type JobIndexStatus =
   | 'INDEXED'
   | 'DELETED'
   | 'ALREADY_DELETED'
-  | 'STALE_IGNORED';
+  | 'STALE_IGNORED'
+  | 'SKIPPED_INACTIVE';
 
 export interface JobIndexResponse {
   request_id: string;
@@ -227,8 +230,21 @@ function isOptionalText(value: unknown, maxLength: number): boolean {
 }
 function isOptionalIsoDate(value: unknown): value is string | null {
   return (
-    value === null || (isString(value) && !Number.isNaN(Date.parse(value)))
+    value === null ||
+    (isString(value) &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value) &&
+      !Number.isNaN(Date.parse(value)))
   );
+}
+
+function isOptionalEpochMs(value: unknown): value is number | null {
+  return (
+    value === null || (typeof value === 'number' && Number.isSafeInteger(value))
+  );
+}
+
+function datesMatchEpoch(date: string | null, epochMs: number | null): boolean {
+  return date === null ? epochMs === null : epochMs === Date.parse(date);
 }
 
 function isUuid(value: unknown): value is string {
@@ -653,6 +669,8 @@ export class AiServiceClient implements JobIndexingClient {
       'salary_currency',
       'start_date',
       'end_date',
+      'start_date_epoch_ms',
+      'end_date_epoch_ms',
       'is_active',
       'is_deleted',
       'company_is_active',
@@ -708,6 +726,14 @@ export class AiServiceClient implements JobIndexingClient {
           !job.salary_currency.trim())) ||
       !isOptionalIsoDate(job.start_date) ||
       !isOptionalIsoDate(job.end_date) ||
+      !isOptionalEpochMs(job.start_date_epoch_ms) ||
+      !isOptionalEpochMs(job.end_date_epoch_ms) ||
+      (job.start_date === null) !== (job.end_date === null) ||
+      (job.start_date === null
+        ? job.start_date_epoch_ms !== null || job.end_date_epoch_ms !== null
+        : job.start_date_epoch_ms === null || job.end_date_epoch_ms === null) ||
+      !datesMatchEpoch(job.start_date, job.start_date_epoch_ms) ||
+      !datesMatchEpoch(job.end_date, job.end_date_epoch_ms) ||
       typeof job.is_active !== 'boolean' ||
       typeof job.is_deleted !== 'boolean' ||
       typeof job.company_is_active !== 'boolean' ||
@@ -798,8 +824,10 @@ export class AiServiceClient implements JobIndexingClient {
       'job_id' in request ? request.job_id : request.job.job_id;
     const validStatus =
       operation === 'UPSERT'
-        ? value.status === 'INDEXED'
-        : value.status === 'DELETED' || value.status === 'ALREADY_DELETED';
+        ? value.status === 'INDEXED' || value.status === 'SKIPPED_INACTIVE'
+        : value.status === 'DELETED' ||
+          value.status === 'ALREADY_DELETED' ||
+          value.status === 'SKIPPED_INACTIVE';
     if (
       value.request_id !== request.identity.request_id ||
       value.trace_id !== request.identity.trace_id ||
@@ -830,11 +858,14 @@ export class AiServiceClient implements JobIndexingClient {
         'Invalid job index response',
       );
     }
+    const skippedInactive = value.status === 'SKIPPED_INACTIVE';
     if (
       (operation === 'UPSERT' &&
-        (value.content_hash !==
-          (request as JobIndexUpsertRequest).content_hash ||
-          value.embedded !== true)) ||
+        (skippedInactive
+          ? value.content_hash !== null || value.embedded !== false
+          : value.content_hash !==
+              (request as JobIndexUpsertRequest).content_hash ||
+            value.embedded !== true)) ||
       (operation === 'DELETE' &&
         (value.content_hash !== null || value.embedded !== false))
     ) {

@@ -15,7 +15,7 @@ import { JobIndexOutbox20260907170000 } from 'src/database/migrations/2026090717
 import { JobIndexOutboxRepresentationVersion20260915000000 } from 'src/database/migrations/20260915000000-JobIndexOutboxRepresentationVersion';
 import {
   deterministicJobPointId,
-  getJobSourceVersion,
+  getJobIndexSourceVersion,
 } from './job-indexing.normalization';
 import { JOB_EMBEDDING_DIMENSIONS } from './job-indexing.constants';
 import { JobIndexingService } from './job-indexing.service';
@@ -349,7 +349,7 @@ integrationDescribe(
         aggregateId: job._id,
         aggregateType: 'JOB',
         eventType: 'JOB_CHANGED',
-        sourceVersion: getJobSourceVersion(job, company),
+        sourceVersion: getJobIndexSourceVersion(job, company),
         representationVersion: 'demo-v1',
         status: 'PENDING',
         attemptCount: 0,
@@ -508,7 +508,7 @@ integrationDescribe(
 
     it('persists simultaneous representations for the same canonical source version', async () => {
       const { job, company } = canonicalFixtures();
-      const sourceVersion = getJobSourceVersion(job, company);
+      const sourceVersion = getJobIndexSourceVersion(job, company);
       const repository = setupDataSource.getRepository(JobIndexOutbox);
 
       await repository.insert([
@@ -549,7 +549,7 @@ integrationDescribe(
 
     it('refuses migration rollback when representations would collapse', async () => {
       const { job, company } = canonicalFixtures();
-      const sourceVersion = getJobSourceVersion(job, company);
+      const sourceVersion = getJobIndexSourceVersion(job, company);
       const repository = setupDataSource.getRepository(JobIndexOutbox);
       await repository.insert([
         repository.create({
@@ -746,7 +746,7 @@ integrationDescribe(
         withDeleted: true,
       });
       if (!persistedJob) throw new Error('Job fixture was not persisted');
-      const initialVersion = getJobSourceVersion(persistedJob, company);
+      const initialVersion = getJobIndexSourceVersion(persistedJob, company);
       const initialOutbox = await waitFor(
         () =>
           outboxRepo.findOneBy({
@@ -779,7 +779,7 @@ integrationDescribe(
 
       persistedJob.description = 'Build APIs v2';
       persistedJob = await jobRepo.save(persistedJob);
-      const staleVersion = getJobSourceVersion(persistedJob, company);
+      const staleVersion = getJobIndexSourceVersion(persistedJob, company);
       await waitFor(
         () =>
           outboxRepo.findOneBy({
@@ -792,7 +792,7 @@ integrationDescribe(
 
       persistedJob.description = 'Build APIs v3';
       persistedJob = await jobRepo.save(persistedJob);
-      const currentVersion = getJobSourceVersion(persistedJob, company);
+      const currentVersion = getJobIndexSourceVersion(persistedJob, company);
       await waitFor(
         () =>
           outboxRepo.findOneBy({
@@ -836,7 +836,7 @@ integrationDescribe(
 
       persistedJob.isDeleted = true;
       const removedJob = await jobRepo.softRemove(persistedJob);
-      const deleteVersion = getJobSourceVersion(removedJob, company);
+      const deleteVersion = getJobIndexSourceVersion(removedJob, company);
       await waitFor(
         () =>
           outboxRepo.findOneBy({

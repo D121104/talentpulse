@@ -357,6 +357,8 @@ class QdrantVectorRetriever:
             "skills",
             "start_date",
             "end_date",
+            "start_date_epoch_ms",
+            "end_date_epoch_ms",
             "is_active",
             "is_deleted",
             "company_is_active",

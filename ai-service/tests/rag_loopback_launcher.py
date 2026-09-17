@@ -41,6 +41,8 @@ def build_application():
                     "is_deleted": "false",
                     "company_is_active": "true",
                     "company_is_deleted": "false",
+                    "start_date_epoch_ms": "1735689600000",
+                    "end_date_epoch_ms": "1830297600000",
                 },
             )
         ],

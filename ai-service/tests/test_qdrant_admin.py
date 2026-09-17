@@ -325,3 +325,15 @@ def test_marker_provider_failure_is_sanitized() -> None:
         ).initialize_and_verify()
 
     assert "private-marker-token" not in str(failure.value)
+
+
+def test_date_epoch_payload_indexes_are_integer() -> None:
+    assert FILTERABLE_PAYLOAD_SCHEMA["start_date_epoch_ms"] == "integer"
+    assert FILTERABLE_PAYLOAD_SCHEMA["end_date_epoch_ms"] == "integer"
+    client = FakeAdminClient(info=_info(schema={}), aliases=[("jobs_current_demo", "jobs_demo")])
+
+    QdrantAdminAdapter(client, _settings()).initialize_and_verify()
+
+    created = {call["field_name"]: call["field_schema"].value for call in client.created_indexes}
+    assert created["start_date_epoch_ms"] == "integer"
+    assert created["end_date_epoch_ms"] == "integer"

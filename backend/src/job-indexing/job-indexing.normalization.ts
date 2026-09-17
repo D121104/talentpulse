@@ -2,11 +2,11 @@ import { createHash } from 'crypto';
 import { decodeHTML } from 'entities';
 import { Job } from 'src/jobs/entities/job.entity';
 import { Company } from 'src/companies/entities/company.entity';
-import { isCanonicalActiveJob } from 'src/active-jobs/active-job-query.service';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
 import {
   CanonicalJobProjection,
   CanonicalJobSourceVersionProjection,
+  JobIndexPhase,
 } from './job-indexing.types';
 
 function decodeHtmlEntities(value: string): string {
@@ -37,6 +37,41 @@ function normalizeSalary(value: unknown): number | null {
   return typeof value === 'number' ? value : Number(value);
 }
 
+export function getJobIndexPhase(
+  job: Job,
+  company: Company | null | undefined,
+  now: Date,
+): JobIndexPhase {
+  if (job.isDeleted || job.deletedAt) return 'DELETED';
+  if (
+    !company ||
+    !company.isActive ||
+    company.isDeleted ||
+    company.deletedAt ||
+    job.company?._id !== company._id
+  ) {
+    return 'COMPANY_INACTIVE';
+  }
+  if (!job.isActive) return 'INACTIVE';
+  if (!job.startDate || !job.endDate || job.startDate >= job.endDate) {
+    return 'INACTIVE';
+  }
+  if (now < job.startDate) return 'SCHEDULED';
+  if (now >= job.endDate) return 'EXPIRED';
+  return 'ACTIVE';
+}
+
+export function getJobIndexSourceVersion(
+  job: Job,
+  company: Company | null | undefined,
+  now = new Date(),
+): string {
+  const canonical = getJobSourceVersion(job, company as Company);
+  return createHash('sha256')
+    .update(`${canonical}|${getJobIndexPhase(job, company, now)}`, 'utf8')
+    .digest('hex');
+}
+
 export function buildCanonicalJobSnapshot(
   job: Job,
   company: Company,
@@ -58,6 +93,8 @@ export function buildCanonicalJobSnapshot(
     salary_currency: null,
     start_date: job.startDate?.toISOString() ?? null,
     end_date: job.endDate?.toISOString() ?? null,
+    start_date_epoch_ms: job.startDate?.getTime() ?? null,
+    end_date_epoch_ms: job.endDate?.getTime() ?? null,
     is_active: Boolean(job.isActive),
     is_deleted: Boolean(job.isDeleted),
     company_is_active: Boolean(company.isActive),
@@ -170,13 +207,15 @@ export function buildCanonicalProjection(
   company: Company,
   now = new Date(),
 ): CanonicalJobProjection {
-  const active = isCanonicalActiveJob(job, company, now);
+  const phase = getJobIndexPhase(job, company, now);
+  const active = phase === 'ACTIVE';
   return {
     job,
     company,
     active,
+    phase,
     contentHash: computeJobContentHash(job, company),
-    sourceVersion: getJobSourceVersion(job, company),
+    sourceVersion: getJobIndexSourceVersion(job, company, now),
     text: buildJobRepresentation(job, company),
   };
 }

@@ -6,7 +6,7 @@ import { Job } from '../jobs/entities/job.entity';
 import { Company } from '../companies/entities/company.entity';
 import { JobIndexOutbox } from '../job-indexing/entities/job-index-outbox.entity';
 import { JobIndexingService } from '../job-indexing/job-indexing.service';
-import { getJobSourceVersion } from '../job-indexing/job-indexing.normalization';
+import { getJobIndexSourceVersion } from '../job-indexing/job-indexing.normalization';
 import {
   JOB_EMBEDDING_DIMENSIONS,
   JOB_INDEX_ALIAS,
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
       );
     }
     for (const job of jobs) {
-      const sourceVersion = getJobSourceVersion(job, company);
+      const sourceVersion = getJobIndexSourceVersion(job, company);
       const outbox = await outboxRepo.findOne({
         where: {
           aggregateId: job._id,

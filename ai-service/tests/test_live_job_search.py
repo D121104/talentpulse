@@ -82,6 +82,14 @@ class FakeQdrant:
         assert isinstance(name, str)
         return {"count": len(self.collections.get(name, {}).get("points", {}))}
 
+    def delete(self, **kwargs: object) -> None:
+        name = kwargs["collection_name"]
+        selector = kwargs["points_selector"]
+        assert isinstance(name, str)
+        assert name in self.collections
+        for point_id in selector.points:
+            self.collections[name]["points"].pop(str(point_id), None)
+
     def query_points(self, **kwargs: object) -> dict[str, list[dict[str, object]]]:
         name = kwargs["collection_name"]
         self.query_filters.append(kwargs["query_filter"])
@@ -178,16 +186,16 @@ def test_cleanup_runs_after_success_and_report_contains_all_pipelines() -> None:
     assert report["status"] == "completed"
     assert report["dataset"]["job_count"] == 60
     assert report["dataset"]["query_count"] == 40
-    assert report["index"]["point_count"] == 60
+    assert report["index"]["point_count"] == 48
     assert set(report["pipelines"]) == {
         "lexical_overlap",
         "lexical_hard_filters",
         "dense_qwen",
         "dense_qwen_hard_filters",
     }
-    assert embedding.document_calls == 60
+    assert embedding.document_calls == 48
     assert embedding.query_calls == 81  # warmup plus two dense passes over 40 queries
-    assert len(client.indexes) == 11  # every production filterable payload field
+    assert len(client.indexes) == 13  # every production filterable payload field
     assert len(client.query_filters) == 80
     no_business_filter = client.query_filters[0]
     assert isinstance(no_business_filter, dict)

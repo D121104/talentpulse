@@ -277,12 +277,16 @@ def test_retrieval_excludes_representation_marker_even_if_provider_returns_it() 
                 "is_deleted": "false",
                 "company_is_active": "true",
                 "company_is_deleted": "false",
+                "start_date_epoch_ms": "0",
+                "end_date_epoch_ms": "9007199254740991",
             },
         ),
     ]
 
     result = RetrievalService(
-        DeterministicEmbeddingProvider(), InMemoryVectorRetriever(chunks)
+        DeterministicEmbeddingProvider(),
+        InMemoryVectorRetriever(chunks),
+        clock=lambda: 1_735_689_600_000,
     ).retrieve(retrieve_request())
 
     assert result.job_ids == [active_id]
@@ -301,6 +305,8 @@ def test_retrieval_deduplicates_chunks_limits_to_twenty_and_allowlists_metadata(
                 "is_deleted": "false",
                 "company_is_active": "true",
                 "company_is_deleted": "false",
+                "start_date_epoch_ms": "0",
+                "end_date_epoch_ms": "9007199254740991",
             },
         )
     ]
@@ -315,12 +321,16 @@ def test_retrieval_deduplicates_chunks_limits_to_twenty_and_allowlists_metadata(
                 "is_deleted": "false",
                 "company_is_active": "true",
                 "company_is_deleted": "false",
+                "start_date_epoch_ms": "0",
+                "end_date_epoch_ms": "9007199254740991",
             },
         )
         for index in range(25)
     )
     store = InMemoryVectorRetriever(chunks)
-    result = RetrievalService(DeterministicEmbeddingProvider(), store).retrieve(retrieve_request())
+    result = RetrievalService(
+        DeterministicEmbeddingProvider(), store, clock=lambda: 1_735_689_600_000
+    ).retrieve(retrieve_request())
 
     assert len(result.results) <= 20
     assert len(result.results) == 19
@@ -331,6 +341,8 @@ def test_retrieval_deduplicates_chunks_limits_to_twenty_and_allowlists_metadata(
         "is_deleted": "false",
         "company_is_active": "true",
         "company_is_deleted": "false",
+        "start_date_epoch_ms": "0",
+        "end_date_epoch_ms": "9007199254740991",
     }
     assert store.last_limit == 20
 
@@ -722,3 +734,71 @@ class SequenceProvider:
         value = self.values[min(self.calls, len(self.values) - 1)]
         self.calls += 1
         return value
+
+
+def test_translate_filters_enforces_inclusive_start_and_exclusive_end() -> None:
+    translated = translate_filters(
+        StructuredFilterState(), ExplicitFilters(), now_ms=1_735_689_600_000
+    )
+    ranges = {item["key"]: item["range"] for item in translated["must"] if "range" in item}
+    assert ranges == {
+        "start_date_epoch_ms": {"lte": 1_735_689_600_000},
+        "end_date_epoch_ms": {"gt": 1_735_689_600_000},
+    }
+
+
+def test_retrieval_post_filter_rejects_missing_malformed_and_inactive_windows() -> None:
+    now_ms = 1_735_689_600_000
+    lifecycle = {
+        "is_active": "true",
+        "is_deleted": "false",
+        "company_is_active": "true",
+        "company_is_deleted": "false",
+    }
+    chunks = [
+        RetrievedChunk(uuid4(), 1.0, lifecycle),
+        RetrievedChunk(
+            uuid4(),
+            0.9,
+            {
+                **lifecycle,
+                "start_date_epoch_ms": "not-an-int",
+                "end_date_epoch_ms": str(now_ms + 1),
+            },
+        ),
+        RetrievedChunk(
+            uuid4(),
+            0.8,
+            {
+                **lifecycle,
+                "start_date_epoch_ms": str(now_ms + 1),
+                "end_date_epoch_ms": str(now_ms + 2),
+            },
+        ),
+        RetrievedChunk(
+            uuid4(),
+            0.7,
+            {**lifecycle, "start_date_epoch_ms": str(now_ms - 2), "end_date_epoch_ms": str(now_ms)},
+        ),
+        RetrievedChunk(
+            uuid4(),
+            0.6,
+            {**lifecycle, "start_date_epoch_ms": str(now_ms), "end_date_epoch_ms": str(now_ms + 1)},
+        ),
+    ]
+
+    store = InMemoryVectorRetriever(chunks)
+    result = RetrievalService(
+        DeterministicEmbeddingProvider(), store, clock=lambda: now_ms
+    ).retrieve(retrieve_request())
+
+    assert result.job_ids == [chunks[-1].job_id]
+    assert store.last_filter is not None
+    assert {item["key"] for item in store.last_filter["must"]} >= {
+        "is_active",
+        "is_deleted",
+        "company_is_active",
+        "company_is_deleted",
+        "start_date_epoch_ms",
+        "end_date_epoch_ms",
+    }

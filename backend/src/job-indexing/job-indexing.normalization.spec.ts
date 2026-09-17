@@ -12,6 +12,8 @@ import {
   getJobSourceVersion,
   serializeCanonicalJobSourceVersion,
   deterministicJobPointId,
+  getJobIndexPhase,
+  getJobIndexSourceVersion,
 } from './job-indexing.normalization';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
 import { createHash } from 'crypto';
@@ -80,7 +82,10 @@ describe('job indexing normalization', () => {
     const { job, company } = fixture();
     job.salary = '38000000' as unknown as number;
 
-    expect(buildCanonicalJobSnapshot(job, company).salary).toBe(38000000);
+    const snapshot = buildCanonicalJobSnapshot(job, company);
+    expect(snapshot.salary).toBe(38000000);
+    expect(snapshot.start_date_epoch_ms).toBe(1735689600000);
+    expect(snapshot.end_date_epoch_ms).toBe(1798761600000);
   });
 
   it('uses an explicit timestamp-only canonical source-version projection', () => {
@@ -138,6 +143,122 @@ describe('job indexing normalization', () => {
     );
   });
 
+  it('derives deterministic lifecycle phases at exact date boundaries', () => {
+    const { job, company } = fixture();
+    job.startDate = new Date('2026-06-01T00:00:00Z');
+    job.endDate = new Date('2026-07-01T00:00:00Z');
+
+    expect(
+      getJobIndexPhase(job, company, new Date('2026-05-31T23:59:59.999Z')),
+    ).toBe('SCHEDULED');
+    expect(
+      getJobIndexPhase(job, company, new Date('2026-06-01T00:00:00Z')),
+    ).toBe('ACTIVE');
+    expect(
+      getJobIndexPhase(job, company, new Date('2026-07-01T00:00:00Z')),
+    ).toBe('EXPIRED');
+
+    job.isActive = false;
+    expect(
+      getJobIndexPhase(job, company, new Date('2026-06-15T00:00:00Z')),
+    ).toBe('INACTIVE');
+    job.isActive = true;
+    company.isActive = false;
+    expect(
+      getJobIndexPhase(job, company, new Date('2026-06-15T00:00:00Z')),
+    ).toBe('COMPANY_INACTIVE');
+    company.isActive = true;
+    job.isDeleted = true;
+    expect(
+      getJobIndexPhase(job, company, new Date('2026-06-15T00:00:00Z')),
+    ).toBe('DELETED');
+  });
+
+  it('keeps an index source version stable in a phase and changes across date transitions', () => {
+    const { job, company } = fixture();
+    const scheduled = getJobIndexSourceVersion(
+      job,
+      company,
+      new Date('2024-01-01T00:00:00Z'),
+    );
+    expect(
+      getJobIndexSourceVersion(job, company, new Date('2024-06-01T00:00:00Z')),
+    ).toBe(scheduled);
+    const active = getJobIndexSourceVersion(
+      job,
+      company,
+      new Date('2026-06-01T00:00:00Z'),
+    );
+    const expired = getJobIndexSourceVersion(
+      job,
+      company,
+      new Date('2027-01-01T00:00:00Z'),
+    );
+    expect(active).not.toBe(scheduled);
+    expect(expired).not.toBe(active);
+  });
+
+  it('uses the enqueue/freshness source version for every lifecycle phase', () => {
+    const cases = [
+      {
+        phase: 'SCHEDULED',
+        now: new Date('2024-06-01T00:00:00Z'),
+        mutate: (job: Job) => {
+          job.startDate = new Date('2026-06-01T00:00:00Z');
+        },
+      },
+      {
+        phase: 'ACTIVE',
+        now: new Date('2026-06-01T00:00:00Z'),
+        mutate: (job: Job, company: Company) => {
+          void job;
+          void company;
+        },
+      },
+      {
+        phase: 'EXPIRED',
+        now: new Date('2028-01-01T00:00:00Z'),
+        mutate: (job: Job, company: Company) => {
+          void job;
+          void company;
+        },
+      },
+      {
+        phase: 'INACTIVE',
+        now: new Date('2026-06-01T00:00:00Z'),
+        mutate: (job: Job) => {
+          job.isActive = false;
+        },
+      },
+      {
+        phase: 'COMPANY_INACTIVE',
+        now: new Date('2026-06-01T00:00:00Z'),
+        mutate: (job: Job, company: Company) => {
+          void job;
+          company.isActive = false;
+        },
+      },
+      {
+        phase: 'DELETED',
+        now: new Date('2026-06-01T00:00:00Z'),
+        mutate: (job: Job) => {
+          job.isDeleted = true;
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const { job, company } = fixture();
+      testCase.mutate(job, company);
+      const projection = buildCanonicalProjection(job, company, testCase.now);
+
+      expect(projection.phase).toBe(testCase.phase);
+      expect(projection.sourceVersion).toBe(
+        getJobIndexSourceVersion(job, company, testCase.now),
+      );
+    }
+  });
+
   it('excludes inactive jobs from the canonical projection', () => {
     const { job, company } = fixture();
     job.isActive = false;
@@ -167,7 +288,7 @@ function loadNormalizationFixture(): NormalizationFixture {
     readFileSync(
       resolve(
         __dirname,
-        '../../../contracts/job-indexing-normalization-v1.json',
+        '../../../contracts/job-indexing-normalization-v2.json',
       ),
       'utf8',
     ),
@@ -178,8 +299,8 @@ describe('job indexing normalization golden fixture', () => {
   it('matches the checked-in document and SHA-256 values', () => {
     const fixture = loadNormalizationFixture();
 
-    expect(fixture.fixture_version).toBe('job-indexing-normalization-v1');
-    expect(fixture.normalization_version).toBe('job-normalization-v1');
+    expect(fixture.fixture_version).toBe('job-indexing-normalization-v2');
+    expect(fixture.normalization_version).toBe('job-normalization-v2');
     expect(fixture.cases).toHaveLength(2);
 
     for (const testCase of fixture.cases) {

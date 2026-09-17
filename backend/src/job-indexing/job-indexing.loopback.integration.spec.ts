@@ -7,7 +7,7 @@ import {
   buildCanonicalJobSnapshot,
   computeJobContentHash,
   deterministicJobPointId,
-  getJobSourceVersion,
+  getJobIndexSourceVersion,
 } from './job-indexing.normalization';
 import { JOB_INDEX_VERSION } from './job-indexing.constants';
 import { JobIndexingService } from './job-indexing.service';
@@ -165,7 +165,7 @@ describe('NestJS -> FastAPI job indexing loopback contract', () => {
       deletedAt: null,
       updatedAt,
     } as any;
-    const sourceVersion = getJobSourceVersion(job, company);
+    const sourceVersion = getJobIndexSourceVersion(job, company);
     const expectedSnapshot = buildCanonicalJobSnapshot(job, company);
     const expectedContentHash = computeJobContentHash(job, company);
 
@@ -231,6 +231,8 @@ describe('NestJS -> FastAPI job indexing loopback contract', () => {
       salary_currency: null,
       start_date: '2025-01-01T00:00:00.000Z',
       end_date: '2028-01-01T00:00:00.000Z',
+      start_date_epoch_ms: 1735689600000,
+      end_date_epoch_ms: 1830297600000,
       is_active: true,
       is_deleted: false,
       company_is_active: true,

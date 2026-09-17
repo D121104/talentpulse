@@ -9,7 +9,7 @@ export class JobIndexingProcessor {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async processPendingOutbox(): Promise<void> {
-    const result = await this.indexing.drain(25);
+    const result = await this.indexing.reconcile(25);
     if (result.claimed)
       this.logger.log(`Indexed job outbox batch: ${JSON.stringify(result)}`);
   }

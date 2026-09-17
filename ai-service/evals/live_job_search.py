@@ -443,6 +443,7 @@ def _index_fixture_jobs(
         dimensions=config.dimensions,
     )
     indexer = JobIndexingService(cast(Any, embedding), vector)
+    indexed_jobs = 0
     for job in jobs:
         snapshot = fixture_job_snapshot(job)
         document = build_job_document(snapshot)
@@ -454,10 +455,14 @@ def _index_fixture_jobs(
             representation_version=config.index_version,
             content_hash=compute_content_hash(document),
         )
-        indexer.upsert(request)
+        response = indexer.upsert(request)
+        if response.status == "INDEXED":
+            indexed_jobs += 1
     point_count = _read_count(cast(Any, client).count(collection_name=collection_name, exact=True))
-    if point_count != len(jobs):
-        raise RuntimeError("temporary collection point count does not match fixture cardinality")
+    if point_count != indexed_jobs:
+        raise RuntimeError(
+            "temporary collection point count does not match indexed fixture cardinality"
+        )
     return vector
 
 

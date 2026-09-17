@@ -1,18 +1,14 @@
 {
-  "fixture_version": "job-indexing-normalization-v1",
-  "normalization_version": "job-normalization-v1",
+  "fixture_version": "job-indexing-normalization-v2",
+  "normalization_version": "job-normalization-v2",
   "cases": [
     {
       "id": "html-entities-whitespace-and-filter-fields",
       "snapshot": {
         "job_id": "11111111-1111-4111-8111-111111111111",
         "title": "Senior <strong>Backend</strong> Engineer",
-        "description": "<p>Build &amp; ship&nbsp;&quot;secure&quot; APIs &gt; legacy; &apos;ổn định&apos; &#8212; 東京 &#x1F680;.</p>",
-        "skills": [
-          "TypeScript",
-          " PostgreSQL ",
-          "C&#x2B;&#x2B; &amp; APIs"
-        ],
+        "description": "<p>Build &amp; ship&nbsp;&quot;secure&quot; APIs &gt; legacy; &apos;ổn định&apos; &#8212; 東京 &#x1F680; &copy; &eacute; &ldquo;quoted&rdquo; &mdash; &frac12;.</p>",
+        "skills": ["TypeScript", " PostgreSQL ", "C&#x2B;&#x2B; &amp; APIs"],
         "company_id": "22222222-2222-4222-8222-222222222222",
         "company_name": "Công ty <em>Ánh Dương</em>",
         "location": "Hồ Chí Minh",
@@ -29,8 +25,8 @@
         "company_is_deleted": false
       },
       "expected": {
-        "document": "title: Senior Backend Engineer\ndescription: Build & ship \"secure\" APIs > legacy; 'ổn định' — 東京 🚀.\nskills: C++ & APIs, PostgreSQL, TypeScript\ncompany: Công ty Ánh Dương\nlocation: Hồ Chí Minh\nlevel: senior\nwork_mode: hybrid\nemployment_type: full-time",
-        "content_hash": "516e8de46a15b68269229f2cc230589cfa3d3945c677c8a081fb55b3a0d58771"
+        "document": "title: Senior Backend Engineer\ndescription: Build & ship \"secure\" APIs > legacy; 'ổn định' — 東京 🚀 © é “quoted” — ½.\nskills: C++ & APIs, PostgreSQL, TypeScript\ncompany: Công ty Ánh Dương\nlocation: Hồ Chí Minh\nlevel: senior\nwork_mode: hybrid\nemployment_type: full-time",
+        "content_hash": "2971faced43b4713331686af73fcfcf66829d958ccd8da1c351cb540360a7dfb"
       }
     },
     {
@@ -39,11 +35,7 @@
         "job_id": "33333333-3333-4333-8333-333333333333",
         "title": "Ingénieur logiciel",
         "description": "<div>Développer   des systèmes fiables 中文 日本語</div>",
-        "skills": [
-          " Go ",
-          "Rust &gt; C",
-          "Go"
-        ],
+        "skills": [" Go ", "Rust &gt; C", "Go"],
         "company_id": "44444444-4444-4444-8444-444444444444",
         "company_name": "München Tech",
         "location": null,

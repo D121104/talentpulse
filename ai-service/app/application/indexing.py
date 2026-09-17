@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
+from datetime import UTC, datetime
+from html import unescape
 from typing import Final
 from uuid import UUID
 
@@ -9,51 +12,23 @@ from app.core.errors import ServiceError
 from app.domain.indexing import (
     CanonicalJobSnapshot,
     DocumentEmbeddingProvider,
+    IndexIdentity,
     IndexJobDeleteRequest,
     IndexJobResponse,
     IndexJobUpsertRequest,
     JobVectorWriter,
 )
 
-NORMALIZATION_VERSION: Final = "job-normalization-v1"
-_ENTITY_RE = re.compile(r"&(#(?:x[0-9a-f]+|[0-9]+)|[a-z]+);", re.IGNORECASE)
+NORMALIZATION_VERSION: Final = "job-normalization-v2"
 _TAG_RE = re.compile(r"<[^>]{0,256}>")
 _SPACE_RE = re.compile(r"\s+")
-_NAMED_ENTITIES = {
-    "amp": "&",
-    "apos": "'",
-    "gt": ">",
-    "lt": "<",
-    "nbsp": " ",
-    "quot": '"',
-}
-
-
-def _decode_job_entities(value: str) -> str:
-    """Decode only the entities supported by the backend indexing contract."""
-
-    def replace(match: re.Match[str]) -> str:
-        reference = match.group(1)
-        if reference.casefold().startswith("#x"):
-            try:
-                code_point = int(reference[2:], 16)
-            except ValueError:
-                return match.group(0)
-            return chr(code_point) if 0 <= code_point <= 0x10FFFF else match.group(0)
-        if reference.startswith("#"):
-            try:
-                code_point = int(reference[1:], 10)
-            except ValueError:
-                return match.group(0)
-            return chr(code_point) if 0 <= code_point <= 0x10FFFF else match.group(0)
-        return _NAMED_ENTITIES.get(reference.casefold(), match.group(0))
-
-    return _ENTITY_RE.sub(replace, value)
 
 
 def normalize_job_text(value: str) -> str:
     """Apply the byte-stable backend/FastAPI job representation normalization."""
-    decoded = _decode_job_entities(value)
+    # Python's stdlib decoder follows the HTML5 named/numeric entity table used by
+    # NestJS's `entities.decodeHTML`, including legacy references and replacements.
+    decoded = unescape(value)
     return _SPACE_RE.sub(" ", _TAG_RE.sub(" ", decoded)).strip()
 
 
@@ -104,6 +79,8 @@ def _safe_payload(
         "salary_currency": job.salary_currency,
         "start_date": job.start_date.isoformat() if job.start_date else None,
         "end_date": job.end_date.isoformat() if job.end_date else None,
+        "start_date_epoch_ms": job.start_date_epoch_ms,
+        "end_date_epoch_ms": job.end_date_epoch_ms,
         "is_active": job.is_active,
         "is_deleted": job.is_deleted,
         "status": "DELETED" if job.is_deleted else ("ACTIVE" if job.is_active else "INACTIVE"),
@@ -121,9 +98,16 @@ def _safe_payload(
 class JobIndexingService:
     """Application port for one-job indexing; it persists no business data."""
 
-    def __init__(self, embedding: DocumentEmbeddingProvider, vector: JobVectorWriter) -> None:
+    def __init__(
+        self,
+        embedding: DocumentEmbeddingProvider,
+        vector: JobVectorWriter,
+        *,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
         self._embedding = embedding
         self._vector = vector
+        self._clock = clock or _utc_now_ms
         self._retries: dict[tuple[str, str], tuple[str, IndexJobResponse]] = {}
         model_dimensions = getattr(embedding, "dimensions", None)
         vector_dimensions = getattr(vector, "dimensions", None)
@@ -137,7 +121,7 @@ class JobIndexingService:
         job = request.job
         point_id = stable_job_point_id(job.job_id, request.representation_version)
         fingerprint = self._fingerprint(request)
-        cached = self._cached("UPSERT", request.idempotency_key, fingerprint)
+        cached = self._cached("UPSERT", request.idempotency_key, fingerprint, request.identity)
         if cached is not None:
             return cached
         document = build_job_document(job)
@@ -148,6 +132,31 @@ class JobIndexingService:
             )
         model_name = self._required_metadata("model_name", "embedding model")
         provider_name = self._required_metadata("provider_name", "embedding provider")
+        if not self._date_window_active(job):
+            try:
+                self._vector.delete_point(str(point_id))
+            except Exception as exc:
+                raise ServiceError(
+                    "index_unavailable", "Job indexing is temporarily unavailable.", 503
+                ) from exc
+            response = IndexJobResponse(
+                request_id=request.identity.request_id,
+                trace_id=request.identity.trace_id,
+                operation_attempt_id=request.identity.operation_attempt_id,
+                job_id=job.job_id,
+                operation="UPSERT",
+                status="SKIPPED_INACTIVE",
+                source_version=request.source_version,
+                representation_version=request.representation_version,
+                point_id=point_id,
+                content_hash=None,
+                embedding_provider=provider_name,
+                embedding_model=model_name,
+                embedding_dimensions=self._dimensions,
+                embedded=False,
+            )
+            self._remember("UPSERT", request.idempotency_key, fingerprint, response)
+            return response
         try:
             embed_document = self._embedding.embed_document
             vector = embed_document(document)
@@ -187,7 +196,7 @@ class JobIndexingService:
     def delete(self, request: IndexJobDeleteRequest) -> IndexJobResponse:
         point_id = stable_job_point_id(request.job_id, request.representation_version)
         fingerprint = self._fingerprint(request)
-        cached = self._cached("DELETE", request.idempotency_key, fingerprint)
+        cached = self._cached("DELETE", request.idempotency_key, fingerprint, request.identity)
         if cached is not None:
             return cached
         try:
@@ -214,6 +223,21 @@ class JobIndexingService:
         self._remember("DELETE", request.idempotency_key, fingerprint, response)
         return response
 
+    def _date_window_active(self, job: CanonicalJobSnapshot) -> bool:
+        if (
+            not job.is_active
+            or job.is_deleted
+            or not job.company_is_active
+            or job.company_is_deleted
+        ):
+            return False
+        now_ms = self._clock()
+        if isinstance(now_ms, bool) or not isinstance(now_ms, int):
+            raise ServiceError("invalid_clock", "Indexing clock returned an invalid value.", 500)
+        if job.start_date_epoch_ms is None or job.end_date_epoch_ms is None:
+            return True
+        return job.start_date_epoch_ms <= now_ms < job.end_date_epoch_ms
+
     def _required_metadata(self, name: str, label: str) -> str:
         value = getattr(self._embedding, name, None)
         if not isinstance(value, str) or not value.strip() or len(value) > 128:
@@ -228,13 +252,23 @@ class JobIndexingService:
         encoded = repr(sorted(data.items()))
         return hashlib.sha256(encoded.encode()).hexdigest()
 
-    def _cached(self, operation: str, key: str, fingerprint: str) -> IndexJobResponse | None:
+    def _cached(
+        self, operation: str, key: str, fingerprint: str, identity: IndexIdentity
+    ) -> IndexJobResponse | None:
         cached = self._retries.get((operation, key))
         if cached is None:
             return None
         if cached[0] != fingerprint:
             raise ServiceError("idempotency_conflict", "Idempotency key was reused.", 409)
-        return cached[1]
+        # Correlation/attempt IDs belong to this delivery. Rebind them on replay while
+        # retaining the original operation result and avoiding provider writes.
+        return cached[1].model_copy(
+            update={
+                "request_id": identity.request_id,
+                "trace_id": identity.trace_id,
+                "operation_attempt_id": identity.operation_attempt_id,
+            }
+        )
 
     def _remember(
         self, operation: str, key: str, fingerprint: str, response: IndexJobResponse
@@ -242,3 +276,9 @@ class JobIndexingService:
         if len(self._retries) >= 4096:
             self._retries.pop(next(iter(self._retries)))
         self._retries[(operation, key)] = (fingerprint, response)
+
+
+def _utc_now_ms() -> int:
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    delta = datetime.now(UTC) - epoch
+    return delta.days * 86_400_000 + delta.seconds * 1_000 + delta.microseconds // 1_000

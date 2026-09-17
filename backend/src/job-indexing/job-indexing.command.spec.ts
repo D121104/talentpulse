@@ -1,4 +1,5 @@
 import { JobIndexingService } from './job-indexing.service';
+import { JobIndexingProcessor } from './job-indexing.processor';
 
 function service(jobRepo: any) {
   return new JobIndexingService(
@@ -27,8 +28,8 @@ describe('JobIndexingService backfill', () => {
       failed: 0,
       leaseLost: 0,
     });
-    expect(enqueue).toHaveBeenCalledWith('job-1');
-    expect(enqueue).toHaveBeenCalledWith('job-2');
+    expect(enqueue).toHaveBeenCalledWith('job-1', false, expect.any(Date));
+    expect(enqueue).toHaveBeenCalledWith('job-2', false, expect.any(Date));
     expect(drain).toHaveBeenCalledWith(2);
     expect((indexing as any).jobRepo.find).toHaveBeenCalledWith({
       where: { isDeleted: false },
@@ -36,9 +37,13 @@ describe('JobIndexingService backfill', () => {
     });
   });
 
-  it('forces completed events through explicit reconciliation', async () => {
+  it('reconciles in bounded pages without force-requeueing completed events', async () => {
     const jobs = [{ _id: 'job-1' }];
-    const indexing = service({ find: jest.fn().mockResolvedValue(jobs) });
+    const find = jest
+      .fn()
+      .mockResolvedValueOnce(jobs)
+      .mockResolvedValueOnce([]);
+    const indexing = service({ find });
     const enqueue = jest.spyOn(indexing, 'enqueue').mockResolvedValue();
     jest.spyOn(indexing, 'drain').mockResolvedValue({
       claimed: 0,
@@ -49,7 +54,21 @@ describe('JobIndexingService backfill', () => {
 
     await indexing.backfill(1, true);
 
-    expect(enqueue).toHaveBeenCalledWith('job-1', true);
+    expect(enqueue).toHaveBeenCalledWith('job-1', false, expect.any(Date));
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ withDeleted: true, take: 1, skip: 0 }),
+    );
+  });
+
+  it('runs reconciliation from the scheduled processor path', async () => {
+    const reconcile = jest.fn().mockResolvedValue({
+      claimed: 1,
+      completed: 1,
+      failed: 0,
+      leaseLost: 0,
+    });
+    await new JobIndexingProcessor({ reconcile } as any).processPendingOutbox();
+    expect(reconcile).toHaveBeenCalledWith(25);
   });
 
   it('rejects an unbounded or invalid operation limit', async () => {

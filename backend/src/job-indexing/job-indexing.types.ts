@@ -8,6 +8,14 @@ export type JobIndexOutboxStatus =
   | 'COMPLETED'
   | 'FAILED';
 
+export type JobIndexPhase =
+  | 'SCHEDULED'
+  | 'ACTIVE'
+  | 'EXPIRED'
+  | 'INACTIVE'
+  | 'DELETED'
+  | 'COMPANY_INACTIVE';
+
 export interface CanonicalJobSnapshot {
   job_id: string;
   title: string;
@@ -23,6 +31,8 @@ export interface CanonicalJobSnapshot {
   salary_currency: string | null;
   start_date: string | null;
   end_date: string | null;
+  start_date_epoch_ms: number | null;
+  end_date_epoch_ms: number | null;
   is_active: boolean;
   is_deleted: boolean;
   company_is_active: boolean;
@@ -38,6 +48,7 @@ export interface CanonicalJobProjection {
   job: Job;
   company: Company;
   active: boolean;
+  phase: JobIndexPhase;
   contentHash: string;
   sourceVersion: string;
   text: string;

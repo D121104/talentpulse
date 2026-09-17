@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Final
 
 from app.core.errors import ServiceError
@@ -31,6 +33,8 @@ FILTERABLE_PAYLOAD_SCHEMA: Final[dict[str, str]] = {
     "is_deleted": "bool",
     "company_is_active": "bool",
     "company_is_deleted": "bool",
+    "start_date_epoch_ms": "integer",
+    "end_date_epoch_ms": "integer",
     REPRESENTATION_MARKER_FIELD: "keyword",
 }
 ALLOWED_METADATA: Final = frozenset(
@@ -48,6 +52,8 @@ ALLOWED_METADATA: Final = frozenset(
         "skills",
         "start_date",
         "end_date",
+        "start_date_epoch_ms",
+        "end_date_epoch_ms",
         "is_active",
         "is_deleted",
         "company_is_active",
@@ -64,8 +70,14 @@ def _any(key: str, values: list[object]) -> dict[str, object]:
     return {"should": [_match(key, value) for value in values], "min_should": 1}
 
 
-def translate_filters(state: StructuredFilterState, explicit: ExplicitFilters) -> dict[str, object]:
+def translate_filters(
+    state: StructuredFilterState, explicit: ExplicitFilters, *, now_ms: int | None = None
+) -> dict[str, object]:
     """Build a Qdrant-compatible filter from structured, allowlisted constraints."""
+    if now_ms is None:
+        now_ms = _utc_now_ms()
+    if isinstance(now_ms, bool) or not isinstance(now_ms, int):
+        raise ValueError("now_ms must be an integer")
     must: list[dict[str, object]] = [
         _match("is_active", True),
         _match("is_deleted", False),
@@ -89,6 +101,12 @@ def translate_filters(state: StructuredFilterState, explicit: ExplicitFilters) -
     must.extend(_match("skills", skill) for skill in skills_all)
     if explicit.skills_any:
         must.append(_any("skills", list(dict.fromkeys(explicit.skills_any))))
+    must.extend(
+        [
+            {"key": "start_date_epoch_ms", "range": {"lte": now_ms}},
+            {"key": "end_date_epoch_ms", "range": {"gt": now_ms}},
+        ]
+    )
 
     salary_gte = explicit.salary_gte
     if salary_gte is None:
@@ -134,15 +152,44 @@ def _passes_lifecycle(metadata: Mapping[str, str]) -> bool:
     )
 
 
+_SAFE_EPOCH_RE = re.compile(r"^(?:0|-[1-9]\d*|[1-9]\d*)$")
+_SAFE_EPOCH_MAX = 2**53 - 1
+
+
+def _parse_epoch(value: str | None) -> int | None:
+    if value is None or not _SAFE_EPOCH_RE.fullmatch(value):
+        return None
+    parsed = int(value)
+    return parsed if -_SAFE_EPOCH_MAX <= parsed <= _SAFE_EPOCH_MAX else None
+
+
+def _passes_date_window(metadata: Mapping[str, str], now_ms: int) -> bool:
+    start = _parse_epoch(metadata.get("start_date_epoch_ms"))
+    end = _parse_epoch(metadata.get("end_date_epoch_ms"))
+    return start is not None and end is not None and start <= now_ms < end
+
+
 class RetrievalService:
-    def __init__(self, embedding: EmbeddingProvider, vector_store: VectorRetriever) -> None:
+    def __init__(
+        self,
+        embedding: EmbeddingProvider,
+        vector_store: VectorRetriever,
+        *,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
         self._embedding = embedding
         self._vector_store = vector_store
+        self._clock = clock or _utc_now_ms
 
     def retrieve(self, request: RagRetrieveRequest) -> RagRetrieveResponse:
         if request.policy.data_scope != "PUBLIC_ACTIVE_JOBS":
             raise ServiceError("invalid_policy", "Only public active jobs are supported.", 422)
-        query_filter = translate_filters(request.filter_state, request.explicit_filters)
+        now_ms = self._clock()
+        if isinstance(now_ms, bool) or not isinstance(now_ms, int):
+            raise ServiceError("invalid_clock", "Retrieval clock returned an invalid value.", 500)
+        query_filter = translate_filters(
+            request.filter_state, request.explicit_filters, now_ms=now_ms
+        )
         try:
             vector = self._embedding.embed_query(request.normalized_user_message)
             chunks = self._vector_store.search(vector, query_filter, MAX_CANDIDATES)
@@ -158,7 +205,7 @@ class RetrievalService:
             if len(jobs) == MAX_CANDIDATES:
                 break
             metadata = _safe_metadata(chunk.metadata)
-            if not _passes_lifecycle(metadata):
+            if not _passes_lifecycle(metadata) or not _passes_date_window(metadata, now_ms):
                 continue
             jobs.setdefault(chunk.job_id, RetrievedChunk(chunk.job_id, chunk.score, metadata))
 
@@ -198,3 +245,10 @@ class RetrievalService:
         if skills:
             values["skills"] = ",".join(skills)
         return values
+
+
+def _utc_now_ms() -> int:
+    current = datetime.now(UTC)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    delta = current - epoch
+    return delta.days * 86_400_000 + delta.seconds * 1_000 + delta.microseconds // 1_000

@@ -346,6 +346,8 @@ const jobIndexUpsertRequest: JobIndexUpsertRequest = {
     salary_currency: null,
     start_date: '2025-01-01T00:00:00.000Z',
     end_date: '2027-01-01T00:00:00.000Z',
+    start_date_epoch_ms: 1735689600000,
+    end_date_epoch_ms: 1798761600000,
     is_active: true,
     is_deleted: false,
     company_is_active: true,
@@ -368,9 +370,11 @@ const jobIndexDeleteRequest: JobIndexDeleteRequest = {
 function jobIndexResponse(
   request: JobIndexUpsertRequest | JobIndexDeleteRequest,
   operation: 'UPSERT' | 'DELETE',
-  status: 'INDEXED' | 'DELETED' | 'ALREADY_DELETED' = operation === 'UPSERT'
-    ? 'INDEXED'
-    : 'DELETED',
+  status:
+    | 'INDEXED'
+    | 'DELETED'
+    | 'ALREADY_DELETED'
+    | 'SKIPPED_INACTIVE' = operation === 'UPSERT' ? 'INDEXED' : 'DELETED',
 ) {
   const jobId = 'job_id' in request ? request.job_id : request.job.job_id;
   return {
@@ -385,12 +389,14 @@ function jobIndexResponse(
     point_id: '00000000-0000-4000-8000-000000000022',
     content_hash:
       operation === 'UPSERT'
-        ? (request as JobIndexUpsertRequest).content_hash
+        ? status === 'SKIPPED_INACTIVE'
+          ? null
+          : (request as JobIndexUpsertRequest).content_hash
         : null,
     embedding_provider: 'cohere',
     embedding_model: 'cohere.embed-multilingual-v3',
     embedding_dimensions: 1024,
-    embedded: operation === 'UPSERT',
+    embedded: operation === 'UPSERT' && status !== 'SKIPPED_INACTIVE',
   };
 }
 
@@ -501,6 +507,27 @@ describe('AiServiceClient job indexing boundary', () => {
         message: 'AI service authentication failed',
       },
     );
+  });
+
+  it('accepts SKIPPED_INACTIVE as a terminal successful upsert', async () => {
+    const client = new AiServiceClient(config(auth));
+    request.mockResolvedValue({
+      status: 200,
+      data: jobIndexResponse(
+        jobIndexUpsertRequest,
+        'UPSERT',
+        'SKIPPED_INACTIVE',
+      ),
+    });
+
+    await expect(
+      client.upsertJob(jobIndexUpsertRequest),
+    ).resolves.toMatchObject({
+      status: 'SKIPPED_INACTIVE',
+      operation: 'UPSERT',
+      embedded: false,
+      content_hash: null,
+    });
   });
 
   it('rejects malformed job index responses', async () => {

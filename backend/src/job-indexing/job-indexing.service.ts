@@ -14,7 +14,8 @@ import {
 import {
   buildCanonicalJobSnapshot,
   buildCanonicalProjection,
-  getJobSourceVersion,
+  getJobIndexPhase,
+  getJobIndexSourceVersion,
 } from './job-indexing.normalization';
 import { JobIndexingClient } from 'src/ai-matching/ai-service.client';
 import { CanonicalJobProjection } from './job-indexing.types';
@@ -48,6 +49,7 @@ export class JobIndexingService {
   async backfill(
     maxOperations: number,
     reconcile = false,
+    now = new Date(),
   ): Promise<JobIndexDrainResult> {
     if (
       !Number.isInteger(maxOperations) ||
@@ -57,22 +59,57 @@ export class JobIndexingService {
       throw new Error('maxOperations must be a positive integer');
     }
     if (reconcile) {
-      const jobs = await this.jobRepo.find({
-        withDeleted: true,
-        take: maxOperations,
-      });
-      for (const job of jobs) await this.enqueue(job._id, true);
+      await this.reconcileJobs(maxOperations, now);
     } else {
       const jobs = await this.jobRepo.find({
         where: { isDeleted: false },
         take: maxOperations,
       });
-      for (const job of jobs) await this.enqueue(job._id);
+      for (const job of jobs) await this.enqueue(job._id, false, now);
     }
     return this.drain(maxOperations);
   }
 
-  async enqueue(jobId: string, requeueCompleted = false): Promise<void> {
+  async reconcile(
+    maxOperations: number,
+    now = new Date(),
+  ): Promise<JobIndexDrainResult> {
+    if (
+      !Number.isInteger(maxOperations) ||
+      maxOperations < 1 ||
+      maxOperations > JOB_INDEX_MAX_BACKFILL_OPERATIONS
+    ) {
+      throw new Error('maxOperations must be a positive integer');
+    }
+    await this.reconcileJobs(maxOperations, now);
+    return this.drain(maxOperations);
+  }
+
+  private async reconcileJobs(maxOperations: number, now: Date): Promise<void> {
+    let offset = 0;
+    let scanned = 0;
+    while (scanned < maxOperations) {
+      const pageSize = Math.min(100, maxOperations - scanned);
+      const jobs = await this.jobRepo.find({
+        withDeleted: true,
+        take: pageSize,
+        skip: offset,
+        order: { _id: 'ASC' },
+      });
+      const page = jobs.slice(0, pageSize);
+      if (!page.length) break;
+      for (const job of page) await this.enqueue(job._id, false, now);
+      scanned += page.length;
+      offset += page.length;
+      if (page.length < pageSize) break;
+    }
+  }
+
+  async enqueue(
+    jobId: string,
+    _requeueCompleted = false,
+    now = new Date(),
+  ): Promise<void> {
     const job = await this.jobRepo.findOne({
       where: { _id: jobId },
       withDeleted: true,
@@ -83,7 +120,7 @@ export class JobIndexingService {
       withDeleted: true,
     });
     if (!company) return;
-    const sourceVersion = getJobSourceVersion(job, company);
+    const sourceVersion = getJobIndexSourceVersion(job, company, now);
     const representationVersion = resolveJobIndexRepresentationVersion(
       process.env.AI_JOB_INDEX_REPRESENTATION_VERSION,
     );
@@ -110,23 +147,6 @@ export class JobIndexingService {
       },
     });
     if (existing) {
-      if (requeueCompleted && existing.status === 'COMPLETED') {
-        // Reconciliation repairs a false completion without creating a second
-        // idempotency key or bypassing the unique outbox event constraint.
-        await this.outboxRepo.update(
-          { _id: existing._id, status: 'COMPLETED' },
-          {
-            status: 'PENDING',
-            attemptCount: 0,
-            availableAt: new Date(),
-            leaseUntil: null,
-            leaseToken: null,
-            claimedAt: null,
-            processedAt: null,
-            lastError: null,
-          },
-        );
-      }
       return;
     }
 
@@ -243,24 +263,72 @@ export class JobIndexingService {
 
   private async indexClaim(
     outbox: JobIndexOutbox,
+    now = new Date(),
   ): Promise<'completed' | 'lease_lost'> {
+    const projection = await this.loadProjection(outbox.aggregateId, now);
+    const currentSourceVersion = projection?.sourceVersion ?? null;
+
+    // A missing projection is authoritative only for the newest tombstone event.
+    // Older events must not delete a vector after a hard-delete race.
+    if (currentSourceVersion !== outbox.sourceVersion) {
+      if (!projection && !(await this.isLatestOutbox(outbox))) {
+        return 'completed';
+      }
+      if (projection) {
+        await this.enqueue(projection.job._id, false, now);
+        return 'completed';
+      }
+    }
+
+    await this.applyProjection(outbox, projection, now);
+
+    // The provider call is external. Re-read PostgreSQL after both UPSERT and
+    // DELETE, then immediately compensate with the current projection. This
+    // closes the race where the canonical row changes while the provider call
+    // is in flight; the follow-up outbox event makes the repair durable.
+    const postProviderNow = new Date();
+    const latest = await this.loadProjection(
+      outbox.aggregateId,
+      postProviderNow,
+    );
+    const latestSourceVersion = latest?.sourceVersion ?? null;
+    if (latestSourceVersion !== outbox.sourceVersion) {
+      if (latest) {
+        const latestOutbox = await this.findLatestOutbox(outbox.aggregateId);
+        const compensation =
+          latestOutbox?.sourceVersion === latestSourceVersion
+            ? latestOutbox
+            : this.syntheticOutbox(outbox, latestSourceVersion);
+        await this.applyProjection(compensation, latest, postProviderNow);
+        await this.enqueue(latest.job._id, false, postProviderNow);
+      } else {
+        const tombstone = await this.findLatestOutbox(outbox.aggregateId);
+        if (tombstone && tombstone._id !== outbox._id) {
+          await this.applyProjection(tombstone, null, postProviderNow);
+        }
+      }
+    }
+    return 'completed';
+  }
+
+  private async applyProjection(
+    outbox: JobIndexOutbox,
+    projection: CanonicalJobProjection | null,
+    now: Date,
+  ): Promise<void> {
     const representationVersion = resolveJobIndexRepresentationVersion(
       outbox.representationVersion,
     );
-    const projection = await this.loadProjection(outbox.aggregateId);
-    const currentSourceVersion = projection
-      ? getJobSourceVersion(projection.job, projection.company)
-      : null;
-    if (currentSourceVersion !== outbox.sourceVersion) return 'completed';
-
     const identity = {
       request_id: deterministicJobIndexOperationId('request', outbox),
       trace_id: deterministicJobIndexOperationId('trace', outbox),
       operation_attempt_id: deterministicJobIndexOperationId('attempt', outbox),
     };
     const idempotencyKey = deterministicJobIndexIdempotencyKey(outbox);
-
-    if (!projection || !projection.active) {
+    if (
+      !projection ||
+      getJobIndexPhase(projection.job, projection.company, now) !== 'ACTIVE'
+    ) {
       const response = await this.indexingClient.deleteJob({
         identity,
         job_id: outbox.aggregateId,
@@ -269,7 +337,7 @@ export class JobIndexingService {
         representation_version: representationVersion,
       });
       assertSuccessfulJobIndexResponse(response, 'DELETE', outbox, identity);
-      return 'completed';
+      return;
     }
 
     const response = await this.indexingClient.upsertJob({
@@ -281,20 +349,42 @@ export class JobIndexingService {
       content_hash: projection.contentHash,
     });
     assertSuccessfulJobIndexResponse(response, 'UPSERT', outbox, identity);
+  }
 
-    const latest = await this.loadProjection(outbox.aggregateId);
-    if (
-      latest &&
-      getJobSourceVersion(latest.job, latest.company) !== outbox.sourceVersion
-    ) {
-      return 'completed';
-    }
-    return 'completed';
+  private syntheticOutbox(
+    source: JobIndexOutbox,
+    sourceVersion: string,
+  ): JobIndexOutbox {
+    return {
+      ...source,
+      _id: deterministicUuid(
+        `talentpulse:job-index:compensation:${source.aggregateId}:${sourceVersion}:${source.representationVersion}`,
+      ),
+      sourceVersion,
+      status: 'PROCESSING',
+    };
+  }
+
+  private async findLatestOutbox(
+    aggregateId: string,
+  ): Promise<JobIndexOutbox | null> {
+    if (!this.outboxRepo.find) return null;
+    const rows = await this.outboxRepo.find({
+      where: { aggregateId },
+      order: { createdAt: 'DESC' },
+      take: 1,
+    });
+    return rows[0] ?? null;
+  }
+
+  private async isLatestOutbox(outbox: JobIndexOutbox): Promise<boolean> {
+    const latest = await this.findLatestOutbox(outbox.aggregateId);
+    return !latest || latest._id === outbox._id;
   }
 
   // Projection loading remains a NestJS/PostgreSQL concern.
 
-  private async loadProjection(jobId: string) {
+  private async loadProjection(jobId: string, now = new Date()) {
     const job = await this.jobRepo.findOne({
       where: { _id: jobId },
       withDeleted: true,
@@ -304,7 +394,7 @@ export class JobIndexingService {
       where: { _id: job.company._id },
       withDeleted: true,
     });
-    return company ? buildCanonicalProjection(job, company) : null;
+    return company ? buildCanonicalProjection(job, company, now) : null;
   }
 }
 
@@ -367,8 +457,10 @@ function assertSuccessfulJobIndexResponse(
 ): void {
   const validStatus =
     operation === 'UPSERT'
-      ? response.status === 'INDEXED'
-      : response.status === 'DELETED' || response.status === 'ALREADY_DELETED';
+      ? response.status === 'INDEXED' || response.status === 'SKIPPED_INACTIVE'
+      : response.status === 'DELETED' ||
+        response.status === 'ALREADY_DELETED' ||
+        response.status === 'SKIPPED_INACTIVE';
   if (
     response.operation !== operation ||
     !validStatus ||
