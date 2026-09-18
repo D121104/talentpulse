@@ -4,6 +4,20 @@
 
 ---
 
+## 🛡️ 0. TÀI KHOẢN QUẢN TRỊ VIÊN (ADMIN)
+
+| STT | Email | Mật khẩu | Họ tên & Vai trò | Phân quyền | Đường dẫn vào |
+| :-: | :--- | :--- | :--- | :--- | :--- |
+| 1 | `admin@talentpulse.com` | `12345678` | **Quản Trị Viên Hệ Thống** | **🛡️ Super Admin** | Chuyển thẳng vào `/admin/dashboard` |
+
+*Lệnh chạy lại seed Admin & Gói Premium:*
+```bash
+cd backend
+npm run seed:admin
+```
+
+---
+
 ## 🏢 1. TÀI KHOẢN NHÀ TUYỂN DỤNG (HR)
 
 | STT | Email | Mật khẩu | Công ty & Ngành nghề | Cấp tài khoản |
@@ -52,8 +66,36 @@
 
 ---
 
+## 💎 3. DANH SÁCH GÓI PREMIUM ĐÃ SEED TRONG DATABASE & ÁNH XẠ
+
+Tất cả các gói được lưu động tại bảng `premium_packages` và ánh xạ trực tiếp qua `user.premiumPackageId` & `user.aiQuotaRemaining`:
+
+| STT | Mã gói (`code`) | Tên hiển thị | Đối tượng | Thời hạn | Giá niêm yết | AI Quota | Đặc quyền nổi bật |
+| :-: | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | `CANDIDATE_MONTHLY` | Candidate Premium (1 Tháng) | Ứng viên | 30 ngày | 49.000đ | 50 lượt | Đẩy top hồ sơ, không giới hạn CV, huy hiệu VIP |
+| 2 | `CANDIDATE_SEMI_ANNUAL` | Candidate Premium (6 Tháng) | Ứng viên | 180 ngày | 249.000đ | 200 lượt | Toàn bộ quyền lợi gói tháng, ưu tiên kết nối NTD |
+| 3 | `CANDIDATE_ANNUAL` | Candidate Premium (1 Năm) | Ứng viên | 365 ngày | 399.000đ | 500 lượt | Gói trọn gói 1 năm, tối ưu CV bởi AI |
+| 4 | `HR_MONTHLY` | HR Premium Enterprise (1 Tháng) | Nhà tuyển dụng | 30 ngày | 299.000đ | 100 lượt | Đăng tin ko giới hạn, 3 tin HOT, tìm 50 CV/ngày |
+| 5 | `HR_SEMI_ANNUAL` | HR Premium Enterprise (6 Tháng) | Nhà tuyển dụng | 180 ngày | 1.490.000đ | 500 lượt | Đăng tin ko giới hạn, 5 tin HOT, tìm 100 CV/ngày |
+| 6 | `HR_ANNUAL` | HR Premium Enterprise (1 Năm) | Nhà tuyển dụng | 365 ngày | 2.390.000đ | 1500 lượt | Đăng tin ko giới hạn, 10 tin HOT, không giới hạn mở khóa CV (999.999 CV/ngày) |
+
+### 🔗 Trạng thái gán gói cho các tài khoản mẫu:
+- **HR Trưởng (`hr@talentpulse.com`)**: Gán gói `HR_ANNUAL` (`006e93d6-458a-4752-bd92-a86ec809fdad`), AI Quota: 1500, Hot Jobs: 10, Tìm CV: Không giới hạn.
+- **9 Ứng viên Premium** (`candidate.premium@talentpulse.com`, `long.le.frontend@...`, `minhanh.tran.backend@...`, `hoangnam.bds@...`, `bichngoc.salesb2b@...`, `maihuong.ketoan@...`, `thaonhi.uiux@...`, `thanhhuyen.hr@...`, `quochuy.marketing@...`): Gán gói `CANDIDATE_ANNUAL` (`0b57ca60-6f9c-4a00-b9ac-de5bc5db38f3`), AI Quota: 500.
+
+---
+
 ## 🛠️ Lệnh chạy lại Seed:
 ```bash
 cd backend
+# 1. Khởi tạo Admin & 6 gói Premium chuẩn:
+npm run seed:admin
+
+# 2. Seed HR & Candidate chính:
+npm run seed:hr
+npm run seed:candidate
+
+# 3. Seed toàn bộ 20 ứng viên & 3 công ty đa ngành:
 npx ts-node -r tsconfig-paths/register src/scripts/seed-candidate-pool.ts
 ```
+
