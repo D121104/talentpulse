@@ -773,10 +773,11 @@ export class JobsService {
     const now = new Date();
 
     // Check & Enforce Boost Quota:
-    // HR Premium / Admin: Unlimited boosts, but max 5 active HOT jobs simultaneously
+    // HR Premium / Admin: Hot limit fetched dynamically from database (e.g. 3, 5, 10...)
     // HR Standard: 1 boost per calendar month (HOT lasts 24h)
     if (isHrPrem || user.role === Role.ADMIN) {
       if (userInDb.company?._id && user.role !== Role.ADMIN) {
+        const hotJobLimit = await this.usersService.getUserHotJobLimit(userInDb);
         const activeHotCount = await this.activeJobQueryService
           .createNonDeletedQuery()
           .andWhere("job.company->>'_id' = :companyId", {
@@ -787,9 +788,9 @@ export class JobsService {
           .andWhere('job._id != :currentJobId', { currentJobId: id })
           .getCount();
 
-        if (activeHotCount >= 5) {
+        if (activeHotCount >= hotJobLimit) {
           throw new BadRequestException(
-            'Tài khoản HR Premium chỉ được đẩy HOT tối đa 5 tin tuyển dụng cùng lúc (hiện bạn đã có 5 tin đang HOT). Vui lòng gỡ HOT một tin hoặc chờ tin hết hạn 24h để đẩy tin khác!',
+            `Gói dịch vụ HR của bạn cho phép đẩy HOT tối đa ${hotJobLimit} tin tuyển dụng cùng lúc (hiện bạn đã có ${activeHotCount} tin đang HOT). Vui lòng gỡ HOT một tin hoặc chờ tin hết hạn 24h để đẩy tin khác!`,
           );
         }
       }
@@ -800,7 +801,7 @@ export class JobsService {
         Number(await this.redisService.getValue<number>(monthKey)) || 0;
       if (usedThisMonth >= 1) {
         throw new BadRequestException(
-          'Tài khoản HR Standard chỉ được đẩy HOT tối đa 1 tin tuyển dụng trong 1 tháng (bạn đã sử dụng trong tháng này). Vui lòng nâng cấp HR Premium để đẩy HOT tối đa 5 tin cùng lúc không giới hạn!',
+          'Tài khoản HR Standard chỉ được đẩy HOT tối đa 1 tin tuyển dụng trong 1 tháng (bạn đã sử dụng trong tháng này). Vui lòng nâng cấp HR Premium để đẩy HOT nhiều tin cùng lúc!',
         );
       }
       await this.redisService.setValue(monthKey, usedThisMonth + 1, 32 * 24 * 3600);
@@ -1130,7 +1131,8 @@ export class JobsService {
     const distinctJobIds = new Set(weeklyViews.map((v) => v.jobId));
     const isUnlocked = distinctJobIds.has(jobId);
     const weeklyQuotaUsed = distinctJobIds.size;
-    const weeklyQuotaRemaining = Math.max(0, 5 - weeklyQuotaUsed);
+    const weeklyQuotaMax = await this.usersService.getUserCandidateWeeklyApplicantLimit(effectiveUser);
+    const weeklyQuotaRemaining = weeklyQuotaMax >= 999999 ? 999999 : Math.max(0, weeklyQuotaMax - weeklyQuotaUsed);
 
     let applicantCount: number | null = null;
     if (isUnlocked) {
@@ -1144,7 +1146,7 @@ export class JobsService {
       applicantCount,
       weeklyQuotaUsed,
       weeklyQuotaRemaining,
-      weeklyQuotaMax: 5,
+      weeklyQuotaMax,
       nextResetDate: nextWeekReset.toISOString(),
       isPremium,
       isAdminOrHr: false,
@@ -1228,6 +1230,8 @@ export class JobsService {
 
     const distinctJobIds = new Set(weeklyViews.map((v) => v.jobId));
 
+    const weeklyQuotaMax = await this.usersService.getUserCandidateWeeklyApplicantLimit(effectiveUser);
+
     // If already unlocked for this job in the current week
     if (distinctJobIds.has(jobId)) {
       const applicantCount = await this.applicationRepo.count({
@@ -1237,18 +1241,18 @@ export class JobsService {
         isUnlocked: true,
         applicantCount,
         weeklyQuotaUsed: distinctJobIds.size,
-        weeklyQuotaRemaining: Math.max(0, 5 - distinctJobIds.size),
-        weeklyQuotaMax: 5,
+        weeklyQuotaRemaining: weeklyQuotaMax >= 999999 ? 999999 : Math.max(0, weeklyQuotaMax - distinctJobIds.size),
+        weeklyQuotaMax,
         nextResetDate: nextWeekReset.toISOString(),
         isPremium: true,
         isAdminOrHr: false,
       };
     }
 
-    // Check if quota exceeded (max 5 jobs per week)
-    if (distinctJobIds.size >= 5) {
+    // Check if quota exceeded
+    if (distinctJobIds.size >= weeklyQuotaMax && effectiveUser.role !== Role.ADMIN) {
       throw new BadRequestException(
-        'Bạn đã sử dụng hết 5 lượt xem số lượng người ứng tuyển trong tuần này. Hạn mức sẽ được làm mới vào tuần tới.',
+        `Bạn đã sử dụng hết ${weeklyQuotaMax} lượt xem số lượng người ứng tuyển trong tuần này theo gói dịch vụ của bạn. Hạn mức sẽ được làm mới vào tuần tới hoặc nâng cấp gói cao hơn!`,
       );
     }
 

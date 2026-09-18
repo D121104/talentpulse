@@ -1,16 +1,77 @@
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Check } from 'lucide-react';
+import { Check, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { paymentApi } from '../../lib/paymentApi';
+import { AdminPackageItem } from '../../lib/adminApi';
 
 export default function PremiumPlans() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { status } = useAuth();
+  const [packages, setPackages] = useState<AdminPackageItem[]>([]);
 
-  const candidateFeatures = t('premium.candidate.features', { returnObjects: true }) as string[];
-  const hrFeatures = t('premium.hr.features', { returnObjects: true }) as string[];
+  useEffect(() => {
+    let mounted = true;
+    paymentApi
+      .getPublicPackages()
+      .then((data) => {
+        if (mounted && Array.isArray(data) && data.length > 0) {
+          setPackages(data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not fetch dynamic packages for landing page, using fallback', err);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Find monthly packages (or primary packages) from DB
+  const candidatePkg =
+    packages.find((p) => p.planType === 'CANDIDATE_PREMIUM' && p.billingCycle === 'monthly') ||
+    packages.find((p) => p.planType === 'CANDIDATE_PREMIUM');
+
+  const hrPkg =
+    packages.find((p) => p.planType === 'HR_PREMIUM' && p.billingCycle === 'monthly') ||
+    packages.find((p) => p.planType === 'HR_PREMIUM');
+
+  const candidateFeatures: string[] =
+    candidatePkg?.features && candidatePkg.features.length > 0
+      ? candidatePkg.features
+      : (t('premium.candidate.features', { returnObjects: true }) as string[]);
+
+  const hrFeatures: string[] =
+    hrPkg?.features && hrPkg.features.length > 0
+      ? hrPkg.features
+      : (t('premium.hr.features', { returnObjects: true }) as string[]);
+
+  const candidatePriceText = candidatePkg
+    ? `${candidatePkg.price.toLocaleString('vi-VN')}đ`
+    : t('premium.candidate.price');
+
+  const hrPriceText = hrPkg
+    ? `${hrPkg.price.toLocaleString('vi-VN')}đ`
+    : t('premium.hr.price');
+
+  const candidatePeriodText = candidatePkg
+    ? candidatePkg.billingCycle === 'annual'
+      ? '/năm'
+      : candidatePkg.billingCycle === 'semi_annual'
+      ? '/6 tháng'
+      : '/tháng'
+    : t('premium.candidate.period');
+
+  const hrPeriodText = hrPkg
+    ? hrPkg.billingCycle === 'annual'
+      ? '/năm'
+      : hrPkg.billingCycle === 'semi_annual'
+      ? '/6 tháng'
+      : '/tháng'
+    : t('premium.hr.period');
 
   const handleAction = (_target?: 'candidate' | 'hr') => {
     if (status !== 'authenticated') {
@@ -56,11 +117,25 @@ export default function PremiumPlans() {
           >
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <div className="relative z-10">
-              <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">{t('premium.candidate.title')}</h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">{t('premium.candidate.desc')}</p>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xl font-bold text-slate-800 dark:text-white">
+                  {candidatePkg?.name || t('premium.candidate.title')}
+                </h3>
+                {candidatePkg?.badge && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-bold text-primary dark:bg-primary/20">
+                    <Sparkles className="h-3 w-3" />
+                    {candidatePkg.badge}
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+                {candidatePkg?.description || t('premium.candidate.desc')}
+              </p>
               <div className="flex items-baseline gap-1 mb-6">
-                <span className="text-4xl font-extrabold text-slate-900 dark:text-white">{t('premium.candidate.price')}</span>
-                <span className="text-sm text-slate-500">{t('premium.candidate.period')}</span>
+                <span className="text-4xl font-extrabold text-slate-900 dark:text-white">
+                  {candidatePriceText}
+                </span>
+                <span className="text-sm text-slate-500">{candidatePeriodText}</span>
               </div>
               <ul className="space-y-3 mb-8">
                 {candidateFeatures.map((feature, i) => (
@@ -91,15 +166,19 @@ export default function PremiumPlans() {
           >
             {/* Popular badge */}
             <div className="absolute top-4 right-4 px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-xs font-bold">
-              Popular
+              {hrPkg?.badge || 'Popular'}
             </div>
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-transparent" />
             <div className="relative z-10">
-              <h3 className="text-xl font-bold mb-2">{t('premium.hr.title')}</h3>
-              <p className="text-sm text-white/70 mb-6">{t('premium.hr.desc')}</p>
+              <h3 className="text-xl font-bold mb-2">
+                {hrPkg?.name || t('premium.hr.title')}
+              </h3>
+              <p className="text-sm text-white/70 mb-6">
+                {hrPkg?.description || t('premium.hr.desc')}
+              </p>
               <div className="flex items-baseline gap-1 mb-6">
-                <span className="text-4xl font-extrabold">{t('premium.hr.price')}</span>
-                <span className="text-sm text-white/60">{t('premium.hr.period')}</span>
+                <span className="text-4xl font-extrabold">{hrPriceText}</span>
+                <span className="text-sm text-white/60">{hrPeriodText}</span>
               </div>
               <ul className="space-y-3 mb-8">
                 {hrFeatures.map((feature, i) => (

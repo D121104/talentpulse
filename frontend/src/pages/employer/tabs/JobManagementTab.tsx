@@ -97,7 +97,10 @@ interface JobManagementTabProps {
   accessToken: string | null;
   todayPostedCount: number;
   maxDailyJobs: number;
+  maxActiveJobsProp?: number;
+  hotJobLimit?: number;
   isPremium?: boolean;
+  packageName?: string;
   onNavigateTab: (tab: string, extraData?: any) => void;
   onRefreshStats: () => Promise<void>;
 }
@@ -108,13 +111,18 @@ export function JobManagementTab({
   isProfileComplete,
   accessToken,
   maxDailyJobs,
+  maxActiveJobsProp,
+  hotJobLimit,
   isPremium: isPremiumProp,
+  packageName,
   onNavigateTab,
   onRefreshStats,
 }: JobManagementTabProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { success, error, info } = useToast();
+
+  const effectiveHotJobLimit = typeof hotJobLimit === 'number' && hotJobLimit > 0 ? hotJobLimit : 5;
 
   const [jobs, setJobs] = useState<HrJobItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -125,7 +133,7 @@ export function JobManagementTab({
   const [showPremiumModal, setShowPremiumModal] = useState(false);
 
   const isPremium = isPremiumProp !== undefined ? isPremiumProp : maxDailyJobs >= 999;
-  const maxActiveJobs = isPremium ? 999999 : 6;
+  const maxActiveJobs = maxActiveJobsProp ?? (isPremium ? 999999 : 6);
 
   const fetchJobs = async () => {
     if (!accessToken || !hasCompany) {
@@ -201,7 +209,7 @@ export function JobManagementTab({
 
     if (!isPremium && hotJobsCount >= 1) {
       error(
-        'Tài khoản HR Thường chỉ được đẩy HOT 1 tin trong 1 tháng (bạn đã sử dụng lượt của tháng này). Vui lòng nâng cấp HR Premium để đẩy HOT tối đa 5 tin cùng lúc và tự do đổi tin!',
+        'Tài khoản HR Thường chỉ được đẩy HOT 1 tin trong 1 tháng (bạn đã sử dụng lượt của tháng này). Vui lòng nâng cấp HR Premium để đẩy HOT đồng thời nhiều tin tuyển dụng và tự do đổi tin!',
       );
       setShowPremiumModal(true);
       return;
@@ -221,7 +229,6 @@ export function JobManagementTab({
       const errMsg =
         err?.response?.data?.message || err?.message || 'Không thể đẩy TOP tin tuyển dụng';
       error(errMsg);
-      // If HR Standard ran out of monthly boost quota, offer Premium upgrade modal
       if (!isPremium && (errMsg.includes('HR Standard') || errMsg.includes('1 tháng'))) {
         setShowPremiumModal(true);
       }
@@ -234,34 +241,15 @@ export function JobManagementTab({
   const handleUnboostJob = async (job: HrJobItem) => {
     if (!accessToken) return;
 
-    if (!isPremium) {
-      error(
-        'Chỉ tài khoản HR Premium mới có quyền gỡ HOT để nhường slot cho tin khác. Tài khoản HR Thường không thể thu hồi lượt đẩy HOT của tháng này.',
-      );
-      setShowPremiumModal(true);
-      return;
-    }
-
-    if (
-      !window.confirm(
-        `Bạn có chắc muốn gỡ trạng thái HOT của tin "${job.name}"?\n\nSau khi gỡ, tin sẽ không còn hiển thị ưu tiên và bạn sẽ giải phóng 1 slot đẩy HOT cho tin khác.`,
-      )
-    ) {
-      return;
-    }
-
     setUnboostingJobId(job._id);
     try {
       const res = await employerApi.unboostJob(job._id, accessToken);
-      success(
-        res.message ||
-          'Đã gỡ HOT tin tuyển dụng thành công! Đã giải phóng slot đẩy HOT cho tin khác.',
-      );
+      success(res.message || 'Đã gỡ nhãn HOT của tin tuyển dụng thành công! Đã giải phóng 1 slot đẩy HOT.');
       await fetchJobs();
       await onRefreshStats();
     } catch (err: any) {
       console.error('Failed to unboost job', err);
-      error(err?.response?.data?.message || 'Không thể gỡ HOT tin tuyển dụng');
+      error(err?.response?.data?.message || err?.message || 'Không thể gỡ nhãn HOT');
     } finally {
       setUnboostingJobId(null);
     }
@@ -332,7 +320,7 @@ export function JobManagementTab({
               <span>
                 {isPremium ? (
                   <>
-                    Gói tài khoản: <strong className="text-amber-600 dark:text-amber-400 font-extrabold">HR Premium</strong> &bull; Đang đẩy HOT: <strong className={`font-black ${hotJobsCount >= 5 ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'}`}>{hotJobsCount}/5 tin</strong> (Hạn 24h/tin)
+                    Gói tài khoản: <strong className="text-amber-600 dark:text-amber-400 font-extrabold">{packageName || 'HR Premium'}</strong> &bull; Đang đẩy HOT: <strong className={`font-black ${hotJobsCount >= effectiveHotJobLimit ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'}`}>{hotJobsCount}/{effectiveHotJobLimit} tin</strong> (Hạn 24h/tin)
                   </>
                 ) : (
                   <>
@@ -432,7 +420,7 @@ export function JobManagementTab({
             }`}
           >
             <Flame className="h-3.5 w-3.5" />
-            <span>HOT / TOP ({hotJobsCount}{isPremium ? '/5' : ''})</span>
+            <span>HOT / TOP ({hotJobsCount}{isPremium ? `/${hotJobLimit}` : ''})</span>
           </button>
         </div>
       </div>
@@ -633,9 +621,9 @@ export function JobManagementTab({
                               } disabled:opacity-50 disabled:cursor-not-allowed`}
                               title={
                                 isPremium
-                                  ? 'Đẩy tin lên đầu trang với nhãn HOT trong 24h (Tối đa 5 tin cùng lúc)'
+                                  ? `Đẩy tin lên đầu trang với nhãn HOT trong 24h (Tối đa ${effectiveHotJobLimit} tin cùng lúc)`
                                   : hotJobsCount >= 1
-                                  ? 'Bạn đã sử dụng lượt đẩy HOT của tháng này. Nâng cấp HR Premium để đẩy tối đa 5 tin cùng lúc!'
+                                  ? 'Bạn đã sử dụng lượt đẩy HOT của tháng này. Nâng cấp HR Premium để đẩy nhiều tin cùng lúc!'
                                   : 'Đẩy tin lên đầu trang với nhãn HOT trong 24h (1 tin/tháng với tài khoản thường)'
                               }
                             >
@@ -722,7 +710,7 @@ export function JobManagementTab({
               <div className="mt-5 space-y-3 rounded-2xl bg-amber-50/70 p-4 border border-amber-200/70 dark:bg-amber-950/40 dark:border-amber-800/60">
                 <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
                   <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <span><strong>Đẩy HOT tối đa 5 tin cùng lúc:</strong> Đẩy thoải mái không giới hạn lượt, mỗi tin hiệu lực 24h. Có thể gỡ HOT bất kỳ lúc nào để nhường slot cho tin khác!</span>
+                  <span><strong>Đẩy HOT đồng thời:</strong> Đẩy thoải mái không giới hạn lượt, tối đa lên đến 10 tin tùy gói dịch vụ. Mỗi tin hiệu lực 24h và có thể gỡ HOT bất kỳ lúc nào để nhường slot cho tin khác!</span>
                 </div>
                 <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
                   <Zap className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />

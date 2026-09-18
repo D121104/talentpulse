@@ -19,11 +19,18 @@ import {
   PaymentStatus,
   PaymentBillingCycle,
 } from './entities/payment-order.entity';
+import { PremiumPackage } from './entities/premium-package.entity';
+import {
+  CreatePremiumPackageDto,
+  UpdatePremiumPackageDto,
+} from './dto/premium-package.dto';
 import { UsersService } from '../users/users.service';
 import { RedisService } from '../redis/redis.service';
 import { PaymentsGateway } from './payments.gateway';
 import { PremiumPlan, User } from '../users/entities/user.entity';
+import { Company } from 'src/companies/entities/company.entity';
 import { Role } from '../decorator/customize';
+import { IUser } from '../users/users.interface';
 
 export interface CreatePaymentOrderDto {
   planType: PremiumPlan;
@@ -45,7 +52,7 @@ export class PaymentsService implements OnModuleInit {
   private readonly logger = new Logger(PaymentsService.name);
   private static readonly FETCH_TIMEOUT_MS = 15000;
 
-  // Standard pricing table configuration
+  // Standard fallback pricing table configuration
   private readonly pricingPlans: Record<
     PremiumPlan,
     Record<PaymentBillingCycle, PricingPlanConfig>
@@ -96,6 +103,8 @@ export class PaymentsService implements OnModuleInit {
     private readonly paymentOrderRepo: Repository<PaymentOrder>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(PremiumPackage)
+    private readonly packageRepo: Repository<PremiumPackage>,
     private readonly usersService: UsersService,
     private readonly redisService: RedisService,
     private readonly paymentsGateway: PaymentsGateway,
@@ -109,6 +118,14 @@ export class PaymentsService implements OnModuleInit {
    * Khởi động service: quét đơn hết hạn và lập lịch timeout chính xác cho các đơn đang PENDING
    */
   async onModuleInit() {
+    try {
+      await this.seedDefaultPackagesIfEmpty();
+    } catch (err: any) {
+      this.logger.warn(
+        `seedDefaultPackagesIfEmpty warning: ${err?.message || err}`,
+      );
+    }
+
     if (!areQueueWorkersEnabled()) {
       return;
     }
@@ -370,13 +387,33 @@ export class PaymentsService implements OnModuleInit {
       throw new ForbiddenException('Tài khoản HR vui lòng chọn gói HR Premium Enterprise');
     }
 
-    const planConfig = this.pricingPlans[dto.planType]?.[dto.billingCycle];
-    if (!planConfig || planConfig.price <= 0) {
-      throw new BadRequestException('Gói dịch vụ hoặc chu kỳ thanh toán không hợp lệ');
+    // Dynamic package lookup from database with fallback
+    const dynamicPkg = await this.packageRepo.findOne({
+      where: {
+        planType: dto.planType,
+        billingCycle: dto.billingCycle,
+        isActive: true,
+        isDeleted: false,
+      },
+    });
+
+    let amount: number;
+    let durationDays: number;
+
+    if (dynamicPkg) {
+      amount = Number(dynamicPkg.price);
+      durationDays = dynamicPkg.durationDays;
+    } else {
+      const planConfig = this.pricingPlans[dto.planType]?.[dto.billingCycle];
+      if (!planConfig || planConfig.price <= 0) {
+        throw new BadRequestException(
+          'Gói dịch vụ hoặc chu kỳ thanh toán không hợp lệ',
+        );
+      }
+      amount = planConfig.price;
+      durationDays = planConfig.durationDays;
     }
 
-    const amount = planConfig.price;
-    const durationDays = planConfig.durationDays;
     const orderCode = await this.generateUniqueOrderCode();
     const description = `TP ${orderCode}`.slice(0, 25);
 
@@ -621,11 +658,30 @@ export class PaymentsService implements OnModuleInit {
         const newExpiry = new Date(
           currentExpiry.getTime() + order.durationDays * 24 * 60 * 60 * 1000,
         );
+        const pkg = await manager.getRepository(PremiumPackage).findOne({
+          where: {
+            planType: order.planType,
+            billingCycle: order.billingCycle,
+            isActive: true,
+            isDeleted: false,
+          },
+        });
+        const addedAiQuota = pkg?.aiQuota || (order.planType === PremiumPlan.CANDIDATE_PREMIUM ? 500 : 1500);
+
         await userRepo.update(user._id, {
           isPremium: true,
           premiumPlan: order.planType,
           premiumExpiresAt: newExpiry,
+          premiumPackageId: pkg ? pkg._id : (null as any),
+          aiQuotaRemaining: (user.aiQuotaRemaining || 0) + addedAiQuota,
         });
+
+        if (user.company?._id && order.planType === PremiumPlan.HR_PREMIUM) {
+          await manager.getRepository(Company).update(user.company._id, {
+            isPremium: true,
+            premiumExpiresAt: newExpiry,
+          });
+        }
       }
 
       wasUpdated = true;
@@ -945,5 +1001,568 @@ export class PaymentsService implements OnModuleInit {
       });
     });
     await Promise.allSettled(cleanupPromises);
+  }
+
+  // ==========================================
+  // PREMIUM PACKAGES & ADMIN MANAGEMENT
+  // ==========================================
+
+  /**
+   * Tự động khởi tạo 6 gói Premium chuẩn nếu bảng premium_packages đang trống
+   */
+  async seedDefaultPackagesIfEmpty(): Promise<void> {
+    const count = await this.packageRepo.count({ where: { isDeleted: false } });
+    if (count > 0) return;
+
+    this.logger.log('Seeding default premium packages into database...');
+
+    const defaultPackages: Partial<PremiumPackage>[] = [
+      {
+        code: 'CANDIDATE_MONTHLY',
+        planType: PremiumPlan.CANDIDATE_PREMIUM,
+        billingCycle: PaymentBillingCycle.MONTHLY,
+        name: 'Candidate Premium (1 Tháng)',
+        description: 'Bứt phá sự nghiệp & tiếp cận NTD hàng đầu',
+        price: 49000,
+        originalPrice: 49000,
+        durationDays: 30,
+        aiQuota: 50,
+        badge: null,
+        features: [
+          'Không giới hạn tạo và tải CV chất lượng cao',
+          'Đẩy Top hồ sơ 24h mỗi ngày',
+          'Xem danh sách NTD đã ghé thăm hồ sơ',
+          'Huy hiệu Candidate Premium VIP nổi bật',
+          'AI Career Assistant: 50 lượt phân tích/tháng',
+        ],
+        hotJobLimit: 0,
+        candidateSearchLimit: 0,
+        isActive: true,
+        displayOrder: 1,
+      },
+      {
+        code: 'CANDIDATE_SEMI_ANNUAL',
+        planType: PremiumPlan.CANDIDATE_PREMIUM,
+        billingCycle: PaymentBillingCycle.SEMI_ANNUAL,
+        name: 'Candidate Premium (6 Tháng)',
+        description: 'Tiết kiệm 15% - Lựa chọn hoàn hảo cho lộ trình đổi việc',
+        price: 249000,
+        originalPrice: 294000,
+        durationDays: 180,
+        aiQuota: 200,
+        badge: 'Tiết kiệm 15%',
+        features: [
+          'Toàn bộ quyền lợi gói Tháng',
+          'Đẩy Top hồ sơ mỗi ngày',
+          'Ưu tiên kết nối với chuyên viên tuyển dụng',
+          'AI Career Assistant: 200 lượt phân tích',
+        ],
+        hotJobLimit: 0,
+        candidateSearchLimit: 0,
+        isActive: true,
+        displayOrder: 2,
+      },
+      {
+        code: 'CANDIDATE_ANNUAL',
+        planType: PremiumPlan.CANDIDATE_PREMIUM,
+        billingCycle: PaymentBillingCycle.ANNUAL,
+        name: 'Candidate Premium (1 Năm)',
+        description: 'Gói trọn gói 12 tháng - Tiết kiệm 32%',
+        price: 399000,
+        originalPrice: 588000,
+        durationDays: 365,
+        aiQuota: 500,
+        badge: 'Khuyên Dùng - Phổ Biến Nhất',
+        features: [
+          'Toàn bộ quyền lợi gói 6 Tháng',
+          'Đẩy Top hồ sơ 365 ngày',
+          'Tối ưu CV bởi chuyên gia AI',
+          'AI Career Assistant: 500 lượt phân tích',
+        ],
+        hotJobLimit: 0,
+        candidateSearchLimit: 0,
+        isActive: true,
+        displayOrder: 3,
+      },
+      {
+        code: 'HR_MONTHLY',
+        planType: PremiumPlan.HR_PREMIUM,
+        billingCycle: PaymentBillingCycle.MONTHLY,
+        name: 'HR Premium Enterprise (1 Tháng)',
+        description: 'Tuyển dụng không giới hạn & AI Sourcing',
+        price: 299000,
+        originalPrice: 299000,
+        durationDays: 30,
+        aiQuota: 100,
+        badge: null,
+        features: [
+          'Đăng tin tuyển dụng không giới hạn',
+          'Gắn nhãn HOT JOB cho 3 vị trí',
+          'Mở khóa tìm kiếm hồ sơ ứng viên nâng cao (50 CV/ngày)',
+          'Huy hiệu Nhà tuyển dụng Uy tín Premium',
+          'AI Matching phân tích độ phù hợp ứng viên',
+        ],
+        hotJobLimit: 3,
+        candidateSearchLimit: 50,
+        isActive: true,
+        displayOrder: 4,
+      },
+      {
+        code: 'HR_SEMI_ANNUAL',
+        planType: PremiumPlan.HR_PREMIUM,
+        billingCycle: PaymentBillingCycle.SEMI_ANNUAL,
+        name: 'HR Premium Enterprise (6 Tháng)',
+        description: 'Tiết kiệm 17% chi phí tuyển dụng cho doanh nghiệp',
+        price: 1490000,
+        originalPrice: 1794000,
+        durationDays: 180,
+        aiQuota: 500,
+        badge: 'Tiết kiệm 17%',
+        features: [
+          'Đăng tin tuyển dụng không giới hạn',
+          'Gắn nhãn HOT JOB cho 5 vị trí',
+          'Mở khóa tìm kiếm 100 CV ứng viên/ngày',
+          'Ưu tiên hiển thị tin tuyển dụng đầu trang tìm kiếm',
+          'AI Matching: 500 lượt phân tích',
+        ],
+        hotJobLimit: 5,
+        candidateSearchLimit: 100,
+        isActive: true,
+        displayOrder: 5,
+      },
+      {
+        code: 'HR_ANNUAL',
+        planType: PremiumPlan.HR_PREMIUM,
+        billingCycle: PaymentBillingCycle.ANNUAL,
+        name: 'HR Premium Enterprise (1 Năm)',
+        description: 'Giải pháp tuyển dụng toàn diện 365 ngày cho doanh nghiệp bứt phá',
+        price: 2390000,
+        originalPrice: 3588000,
+        durationDays: 365,
+        aiQuota: 1500,
+        badge: 'Lựa Chọn Hàng Đầu Của HR Pro',
+        features: [
+          'Đăng tin tuyển dụng không giới hạn 365 ngày',
+          'Gắn nhãn HOT JOB cho 10 vị trí',
+          'Không giới hạn mở khóa tìm kiếm CV ứng viên',
+          'Tài khoản chuyên biệt chăm sóc 24/7',
+          'AI Sourcing & Matching: 1500 lượt phân tích',
+        ],
+        hotJobLimit: 10,
+        candidateSearchLimit: 999999,
+        isActive: true,
+        displayOrder: 6,
+      },
+    ];
+
+    for (const pkg of defaultPackages) {
+      const entity = this.packageRepo.create(pkg);
+      await this.packageRepo.save(entity);
+    }
+    this.logger.log(`✓ Seeded ${defaultPackages.length} default premium packages.`);
+  }
+
+  /**
+   * Lấy danh sách gói Premium đang kích hoạt (Public API cho Bảng giá)
+   */
+  async getPublicPackages(): Promise<PremiumPackage[]> {
+    return this.packageRepo.find({
+      where: { isActive: true, isDeleted: false },
+      order: { planType: 'ASC', displayOrder: 'ASC', createdAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Lấy toàn bộ gói Premium cho Admin (Bao gồm cả gói đã tắt)
+   */
+  async getAllPackagesForAdmin(): Promise<PremiumPackage[]> {
+    return this.packageRepo.find({
+      where: { isDeleted: false },
+      order: { planType: 'ASC', displayOrder: 'ASC', createdAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Tạo gói Premium mới (Admin)
+   */
+  async createPackage(
+    dto: CreatePremiumPackageDto,
+    admin: IUser,
+  ): Promise<PremiumPackage> {
+    const code =
+      dto.code?.trim() ||
+      `${dto.planType}_${dto.billingCycle}_${Date.now()}`.toUpperCase();
+
+    const existing = await this.packageRepo.findOne({
+      where: { code, isDeleted: false },
+    });
+    if (existing) {
+      throw new BadRequestException(`Mã gói "${code}" đã tồn tại trong hệ thống.`);
+    }
+
+    const pkg = this.packageRepo.create({
+      ...dto,
+      code,
+      createdBy: {
+        _id: admin._id,
+        email: admin.email,
+      },
+    });
+
+    return this.packageRepo.save(pkg);
+  }
+
+  /**
+   * Cập nhật thông tin gói Premium (Admin)
+   */
+  async updatePackage(
+    id: string,
+    dto: UpdatePremiumPackageDto,
+    admin: IUser,
+  ): Promise<PremiumPackage> {
+    const pkg = await this.packageRepo.findOne({
+      where: { _id: id, isDeleted: false },
+    });
+    if (!pkg) {
+      throw new NotFoundException('Không tìm thấy gói Premium');
+    }
+
+    const { code, planType, billingCycle, ...updateData } = dto;
+    Object.assign(pkg, updateData);
+
+    if (code && code.trim() && code.trim() !== pkg.code) {
+      const existing = await this.packageRepo.findOne({
+        where: { code: code.trim(), isDeleted: false },
+      });
+      if (existing && existing._id !== id) {
+        throw new BadRequestException(`Mã gói "${code}" đã tồn tại trong hệ thống.`);
+      }
+      pkg.code = code.trim();
+    }
+
+    pkg.updatedBy = {
+      _id: admin._id,
+      email: admin.email,
+    };
+
+    return this.packageRepo.save(pkg);
+  }
+
+  /**
+   * Bật / Tắt kích hoạt gói Premium (Admin)
+   */
+  async togglePackageActive(id: string, admin: IUser): Promise<PremiumPackage> {
+    const pkg = await this.packageRepo.findOne({
+      where: { _id: id, isDeleted: false },
+    });
+    if (!pkg) {
+      throw new NotFoundException('Không tìm thấy gói Premium');
+    }
+
+    pkg.isActive = !pkg.isActive;
+    pkg.updatedBy = {
+      _id: admin._id,
+      email: admin.email,
+    };
+
+    return this.packageRepo.save(pkg);
+  }
+
+  /**
+   * Xóa mềm gói Premium (Admin)
+   */
+  async deletePackage(id: string, admin: IUser): Promise<{ message: string }> {
+    const pkg = await this.packageRepo.findOne({
+      where: { _id: id, isDeleted: false },
+    });
+    if (!pkg) {
+      throw new NotFoundException('Không tìm thấy gói Premium');
+    }
+
+    pkg.isDeleted = true;
+    pkg.deletedAt = new Date();
+    await this.packageRepo.save(pkg);
+
+    return { message: 'Đã xóa gói Premium thành công' };
+  }
+
+  /**
+   * Lấy danh sách toàn bộ giao dịch PayOS cho Admin
+   */
+  async getAdminTransactions(qs: any) {
+    const page = qs?.current ? parseInt(qs.current, 10) : 1;
+    const limit = qs?.pageSize ? parseInt(qs.pageSize, 10) : 10;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.paymentOrderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.user', 'user')
+      .select([
+        'order._id',
+        'order.orderCode',
+        'order.planType',
+        'order.billingCycle',
+        'order.durationDays',
+        'order.amount',
+        'order.status',
+        'order.checkoutUrl',
+        'order.paidAt',
+        'order.expiresAt',
+        'order.vatInvoiceRequested',
+        'order.vatCompanyName',
+        'order.vatTaxCode',
+        'order.createdAt',
+        'user._id',
+        'user.name',
+        'user.email',
+        'user.avatar',
+        'user.role',
+      ]);
+
+    if (qs?.status) {
+      queryBuilder.andWhere('order.status = :status', { status: qs.status });
+    }
+    if (qs?.planType) {
+      queryBuilder.andWhere('order.planType = :planType', {
+        planType: qs.planType,
+      });
+    }
+    if (qs?.search) {
+      queryBuilder.andWhere(
+        '(CAST(order.orderCode AS TEXT) LIKE :search OR user.email ILIKE :search OR user.name ILIKE :search)',
+        { search: `%${qs.search}%` },
+      );
+    }
+
+    queryBuilder.orderBy('order.createdAt', 'DESC');
+    const [result, total] = await queryBuilder
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: Math.ceil(total / limit),
+        total,
+      },
+      result,
+    };
+  }
+
+  /**
+   * Lấy danh sách thuê bao người dùng cho Admin
+   */
+  async getAdminSubscriptions(qs: any) {
+    const page = qs?.current ? parseInt(qs.current, 10) : 1;
+    const limit = qs?.pageSize ? parseInt(qs.pageSize, 10) : 10;
+    const skip = (page - 1) * limit;
+
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .where(
+        '(user.isPremium = true OR (user.premiumPlan IS NOT NULL AND user.premiumPlan != :freePlan))',
+        {
+          freePlan: PremiumPlan.FREE,
+        },
+      );
+
+    if (qs?.role) {
+      qb.andWhere('user.role = :role', { role: qs.role });
+    }
+    if (qs?.status === 'ACTIVE') {
+      qb.andWhere(
+        '(user.premiumExpiresAt IS NULL OR user.premiumExpiresAt > :now)',
+        { now: new Date() },
+      );
+    } else if (qs?.status === 'EXPIRED') {
+      qb.andWhere('user.premiumExpiresAt <= :now', { now: new Date() });
+    }
+    if (qs?.search) {
+      qb.andWhere(
+        '(user.name ILIKE :search OR user.email ILIKE :search)',
+        { search: `%${qs.search}%` },
+      );
+    }
+
+    qb.orderBy('user.premiumExpiresAt', 'DESC');
+    const [users, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    const result = users.map((u) => {
+      const now = Date.now();
+      const expTime = u.premiumExpiresAt
+        ? new Date(u.premiumExpiresAt).getTime()
+        : null;
+      const daysRemaining = expTime
+        ? Math.max(0, Math.ceil((expTime - now) / (1000 * 60 * 60 * 24)))
+        : 9999;
+      const isExpired = expTime ? expTime <= now : false;
+
+      return {
+        _id: u._id,
+        name: u.name,
+        email: u.email,
+        avatar: u.avatar,
+        role: u.role,
+        companyName: u.company?.name || null,
+        premiumPlan: u.premiumPlan,
+        isPremium: u.isPremium,
+        premiumExpiresAt: u.premiumExpiresAt,
+        daysRemaining,
+        isExpired,
+      };
+    });
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: Math.ceil(total / limit),
+        total,
+      },
+      result,
+    };
+  }
+
+  /**
+   * Gia hạn thuê bao thủ công cho người dùng (Admin)
+   */
+  async manualExtendSubscription(userId: string, days: number, admin: IUser) {
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) throw new NotFoundException('Không tìm thấy người dùng');
+
+    const plan =
+      user.premiumPlan && user.premiumPlan !== PremiumPlan.FREE
+        ? user.premiumPlan
+        : user.role === Role.HR
+        ? PremiumPlan.HR_PREMIUM
+        : PremiumPlan.CANDIDATE_PREMIUM;
+
+    await this.usersService.upgradePremiumPlan(userId, plan, days);
+    this.logger.log(
+      `Admin ${admin.email} manually extended subscription for user ${user.email} by ${days} days.`,
+    );
+
+    return {
+      message: `Gia hạn thành công thêm ${days} ngày cho tài khoản ${user.name}`,
+    };
+  }
+
+  /**
+   * Hủy thuê bao thủ công của người dùng (Admin)
+   */
+  async manualCancelSubscription(userId: string, admin: IUser) {
+    const user = await this.userRepo.findOne({
+      where: { _id: userId },
+    });
+    if (!user) throw new NotFoundException('Không tìm thấy người dùng');
+
+    user.isPremium = false;
+    user.premiumPlan = PremiumPlan.FREE;
+    user.premiumExpiresAt = new Date();
+    user.premiumPackageId = null as any;
+    await this.userRepo.save(user);
+
+    if (user.company) {
+      await this.dataSource
+        .getRepository('companies')
+        .update(user.company._id, {
+          isPremium: false,
+          premiumExpiresAt: new Date(),
+        });
+    }
+
+    this.logger.log(
+      `Admin ${admin.email} cancelled subscription for user ${user.email}.`,
+    );
+
+    return {
+      message: `Đã hủy gói Premium của người dùng ${user.name}`,
+    };
+  }
+
+  /**
+   * Thống kê doanh thu và chỉ số tài chính cho Admin Dashboard
+   */
+  async getAdminRevenueStats() {
+    const paidOrders = await this.paymentOrderRepo.find({
+      where: { status: PaymentStatus.PAID },
+      order: { paidAt: 'ASC' },
+    });
+
+    let totalRevenue = 0;
+    let candidateRevenue = 0;
+    let hrRevenue = 0;
+
+    const now = new Date();
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    let todayRevenue = 0;
+    let thisMonthRevenue = 0;
+
+    // Timeline 14 ngày gần nhất
+    const dailyStats: Record<string, number> = {};
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const key = `${d.getDate()}/${d.getMonth() + 1}`;
+      dailyStats[key] = 0;
+    }
+
+    for (const order of paidOrders) {
+      const amount = Number(order.amount) || 0;
+      totalRevenue += amount;
+      if (order.planType === PremiumPlan.CANDIDATE_PREMIUM) {
+        candidateRevenue += amount;
+      }
+      if (order.planType === PremiumPlan.HR_PREMIUM) {
+        hrRevenue += amount;
+      }
+
+      const paidTime = order.paidAt
+        ? new Date(order.paidAt)
+        : new Date(order.createdAt);
+
+      if (paidTime >= startOfToday) todayRevenue += amount;
+      if (paidTime >= startOfMonth) thisMonthRevenue += amount;
+
+      const dayKey = `${paidTime.getDate()}/${paidTime.getMonth() + 1}`;
+      if (dailyStats[dayKey] !== undefined) {
+        dailyStats[dayKey] += amount;
+      }
+    }
+
+    const totalOrdersCount = await this.paymentOrderRepo.count();
+    const paidOrdersCount = paidOrders.length;
+    const pendingOrdersCount = await this.paymentOrderRepo.count({
+      where: { status: PaymentStatus.PENDING },
+    });
+    const failedOrExpiredCount = await this.paymentOrderRepo.count({
+      where: [
+        { status: PaymentStatus.EXPIRED },
+        { status: PaymentStatus.CANCELLED },
+        { status: PaymentStatus.FAILED },
+      ],
+    });
+
+    return {
+      totalRevenue,
+      candidateRevenue,
+      hrRevenue,
+      todayRevenue,
+      thisMonthRevenue,
+      totalOrdersCount,
+      paidOrdersCount,
+      pendingOrdersCount,
+      failedOrExpiredCount,
+      dailyTimeline: Object.entries(dailyStats).map(([date, revenue]) => ({
+        date,
+        revenue,
+      })),
+    };
   }
 }

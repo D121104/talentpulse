@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Crown,
   Sparkles,
@@ -14,6 +14,8 @@ import { PremiumCheckoutModal } from '../../../components/premium/PremiumCheckou
 import { PaymentWaitingModal, WaitingPaymentInfo } from '../../../components/premium/PaymentWaitingModal';
 import { HrDashboardStats } from '../../../lib/employerApi';
 import { useAuth } from '../../../auth/AuthContext';
+import { paymentApi } from '../../../lib/paymentApi';
+import { AdminPackageItem } from '../../../lib/adminApi';
 
 interface HrPremiumTabProps {
   statsData: HrDashboardStats | null;
@@ -28,6 +30,19 @@ export const HrPremiumTab: React.FC<HrPremiumTabProps> = ({
   const [selectedPlanInfo, setSelectedPlanInfo] = useState<any | null>(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [waitingPayment, setWaitingPayment] = useState<WaitingPaymentInfo | null>(null);
+  const [annualHrPkg, setAnnualHrPkg] = useState<AdminPackageItem | null>(null);
+
+  useEffect(() => {
+    paymentApi
+      .getPublicPackages()
+      .then((pkgs: AdminPackageItem[]) => {
+        const annual = pkgs.find(
+          (p: AdminPackageItem) => p.planType === 'HR_PREMIUM' && p.billingCycle === 'annual',
+        );
+        if (annual) setAnnualHrPkg(annual);
+      })
+      .catch((err: unknown) => console.warn('Could not fetch public packages for HrPremiumTab', err));
+  }, []);
 
   const isPremium = statsData?.isPremium ?? false;
   const planName = statsData?.premiumPlan ?? 'FREE';
@@ -60,13 +75,13 @@ export const HrPremiumTab: React.FC<HrPremiumTabProps> = ({
           {isPremium ? (
             <div className="flex items-center gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs font-black text-amber-700 dark:text-amber-300">
               <Crown className="h-4 w-4 text-amber-500" />
-              <span>Gói Hiện Tại: HR Premium (Không Giới Hạn)</span>
+              <span>Gói Hiện Tại: {statsData?.stats?.packageName || 'HR Premium Enterprise'} (Đang kích hoạt)</span>
             </div>
           ) : (
             <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
               <span className="h-2 w-2 rounded-full bg-slate-400" />
               <span>
-                Gói Hiện Tại: Standard (Tối đa 6 tin cùng lúc)
+                Gói Hiện Tại: Standard (Tối đa {statsData?.stats?.maxActiveJobs || 6} tin cùng lúc)
               </span>
             </div>
           )}
@@ -143,13 +158,17 @@ export const HrPremiumTab: React.FC<HrPremiumTabProps> = ({
 
         <button
           type="button"
-          onClick={() => handleSelectPlan({
-            planType: 'HR_PREMIUM',
-            billingCycle: 'annual',
-            price: 2390000,
-            originalPrice: 3588000,
-            title: 'HR Premium Enterprise (1 Năm)',
-          })}
+          onClick={() =>
+            handleSelectPlan({
+              planType: 'HR_PREMIUM',
+              billingCycle: 'annual',
+              price: annualHrPkg ? annualHrPkg.price : 2390000,
+              originalPrice: annualHrPkg
+                ? annualHrPkg.originalPrice ?? annualHrPkg.price
+                : 3588000,
+              title: annualHrPkg ? annualHrPkg.name : 'HR Premium Enterprise (1 Năm)',
+            })
+          }
           className="flex items-center gap-2 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 px-6 py-3 text-xs font-black shadow-lg transition active:scale-95 cursor-pointer shrink-0"
         >
           <Headphones className="h-4 w-4 text-primary" />

@@ -674,7 +674,10 @@ export default function EmployerDashboardPage() {
                     isProfileComplete={statsData?.isProfileComplete ?? false}
                     accessToken={accessToken}
                     todayPostedCount={statsData?.stats?.todayJobsPostedCount ?? 0}
-                    maxDailyJobs={statsData?.stats?.maxDailyJobs ?? 5}
+                    maxDailyJobs={statsData?.stats?.maxDailyJobs ?? 6}
+                    maxActiveJobsProp={statsData?.stats?.maxActiveJobs}
+                    hotJobLimit={statsData?.stats?.hotJobLimit}
+                    packageName={statsData?.stats?.packageName}
                     isPremium={Boolean(statsData?.isPremium || (statsData?.stats?.maxDailyJobs ?? 0) >= 999)}
                     onNavigateTab={handleNavigateTab}
                     onRefreshStats={refreshAll}

@@ -66,7 +66,7 @@ export class OnlineCVsService {
     const isVerified = userInDb.isVerified || false;
 
     // 1. Enforce max CV limits: Thường (3), Đã xác thực (6), Premium (Không giới hạn)
-    const maxLimit = isPremium ? 9999 : isVerified ? 6 : 3;
+    const maxLimit = this.usersService.getUserMaxCvLimit(userInDb);
     const currentCount = await this.onlineCVRepo.count({
       where: { userId: user._id, isDeleted: false },
     });

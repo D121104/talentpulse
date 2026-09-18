@@ -35,7 +35,7 @@ import { CVPreviewCanvas } from '../../components/cv/CVPreviewCanvas';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { onlineCvApi, userCvApi, fileUploadApi } from '../../lib/cvApi';
-import { candidateApi, type BoostStatusResult } from '../../lib/userApi';
+import { candidateApi, userApi, type BoostStatusResult, type UserEntitlementsResult } from '../../lib/userApi';
 import { authApi } from '../../lib/api';
 import type { OnlineCV, UserCV } from '../../lib/cvTypes';
 
@@ -91,8 +91,9 @@ export default function MyCVPage() {
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [selectedCvForDownload, setSelectedCvForDownload] = useState<OnlineCV | null>(null);
 
-  // Profile Boost state
+  // Profile Boost & Dynamic Entitlements state
   const [boostStatus, setBoostStatus] = useState<BoostStatusResult | null>(null);
+  const [entitlements, setEntitlements] = useState<UserEntitlementsResult | null>(null);
   const [isBoosting, setIsBoosting] = useState(false);
   const [isResendingVerify, setIsResendingVerify] = useState(false);
 
@@ -249,12 +250,24 @@ export default function MyCVPage() {
     }
   };
 
+  // Fetch dynamic entitlements from database
+  const fetchEntitlements = async () => {
+    if (!accessToken) return;
+    try {
+      const res = await userApi.getMyEntitlements(accessToken);
+      setEntitlements(res);
+    } catch (err) {
+      console.error('Error fetching entitlements:', err);
+    }
+  };
+
   useEffect(() => {
     if (accessToken) {
       void fetchSettings();
       void fetchOnlineCvs();
       void fetchUploadedCvs();
       void fetchBoostStatus();
+      void fetchEntitlements();
     }
   }, [accessToken]);
 
@@ -438,7 +451,7 @@ export default function MyCVPage() {
   };
 
   // Handle Create CV click
-  const maxCvLimit = user?.isPremium ? 9999 : user?.isVerified ? 6 : 3;
+  const maxCvLimit = entitlements?.limits?.maxCvLimit ?? (user?.isPremium ? 9999 : user?.isVerified ? 6 : 3);
   const isCvLimitReached = !user?.isPremium && onlineCvs.length >= maxCvLimit;
 
   const handleCreateCvClick = () => {
@@ -687,11 +700,11 @@ export default function MyCVPage() {
                           : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                       }`}>
                         {user?.isPremium ? (
-                          <>👑 Premium (Không giới hạn)</>
+                          <>👑 {entitlements?.package?.name || 'Candidate Premium'} (Không giới hạn)</>
                         ) : user?.isVerified ? (
-                          <>🛡️ Đã Xác Thực (Tối đa 6 CV)</>
+                          <>🛡️ Đã Xác Thực (Tối đa {maxCvLimit} CV)</>
                         ) : (
-                          <>Tài khoản Thường (Tối đa 3 CV)</>
+                          <>Tài khoản Thường (Tối đa {maxCvLimit} CV)</>
                         )}
                       </span>
                     </div>
@@ -699,7 +712,7 @@ export default function MyCVPage() {
                       <h3 className="text-2xl font-black text-slate-900 dark:text-white">
                         {onlineCvs.length}
                         <span className="text-sm font-semibold text-slate-400">
-                          {' '}/ {user?.isPremium ? '∞ (25+)' : user?.isVerified ? '6' : '3'} CV đã tạo
+                          {' '}/ {user?.isPremium ? '∞' : maxCvLimit} CV đã tạo
                         </span>
                       </h3>
                     </div>

@@ -21,6 +21,8 @@ import {
   Receipt,
   Clock,
   Heart,
+  ChevronRight,
+  LayoutDashboard,
 } from 'lucide-react';
 import { formatDate, parseDate } from '../../lib/dateUtils';
 import { useAuth } from '../../auth/AuthContext';
@@ -212,6 +214,28 @@ export function UserDropdownMenu() {
                   </div>
                 </div>
               </div>
+
+              {/* Admin Portal Shortcut if user is ADMIN */}
+              {user.role === 'ADMIN' && (
+                <div className="px-3 pt-3 pb-1">
+                  <Link
+                    to="/admin/dashboard"
+                    onClick={() => setIsOpen(false)}
+                    className="group relative flex items-center justify-between overflow-hidden rounded-xl bg-gradient-to-r from-violet-600 via-indigo-600 to-purple-600 p-3 text-white shadow-md shadow-indigo-500/20 transition-all duration-200 hover:shadow-lg hover:shadow-indigo-500/30 hover:scale-[1.01]"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/20 backdrop-blur-sm">
+                        <LayoutDashboard className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="text-left">
+                        <p className="text-[13px] font-bold tracking-tight">Cổng Quản Trị Hệ Thống</p>
+                        <p className="text-[11px] text-indigo-100">Bảng điều khiển & quản trị TalentPulse</p>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-white/80 transition-transform group-hover:translate-x-0.5" />
+                  </Link>
+                </div>
+              )}
 
               {/* 2. Menu Sections */}
               <div className="py-3 space-y-1">

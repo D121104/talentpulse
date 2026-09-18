@@ -118,6 +118,32 @@ export class CompaniesService {
       .take(limit)
       .getManyAndCount();
 
+    const companyIds = companies.map((c) => c._id);
+    let jobCountMap: Record<string, number> = {};
+
+    if (companyIds.length > 0) {
+      const jobCounts = await this.jobRepo
+        .createQueryBuilder('job')
+        .select("job.company->>'_id'", 'companyId')
+        .addSelect('COUNT(job._id)', 'count')
+        .where("job.company->>'_id' IN (:...companyIds)", { companyIds })
+        .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+        .groupBy("job.company->>'_id'")
+        .getRawMany();
+
+      jobCountMap = jobCounts.reduce((acc, row) => {
+        if (row.companyId) {
+          acc[row.companyId] = parseInt(row.count, 10) || 0;
+        }
+        return acc;
+      }, {} as Record<string, number>);
+    }
+
+    const companiesWithJobCount = companies.map((c) => ({
+      ...c,
+      jobCount: jobCountMap[c._id] || 0,
+    }));
+
     const totalPage = Math.ceil(totalRecord / limit);
 
     return {
@@ -127,7 +153,7 @@ export class CompaniesService {
         pages: totalPage,
         total: totalRecord,
       },
-      result: companies,
+      result: companiesWithJobCount,
     };
   }
 
@@ -938,6 +964,9 @@ export class CompaniesService {
     const isPremium = this.usersService.isHrPremium(userInDb);
     const maxActiveJobs = this.usersService.getUserMaxActiveJobs(userInDb);
     const maxDailyJobs = maxActiveJobs;
+    const hotJobLimit = await this.usersService.getUserHotJobLimit(userInDb);
+    const candidateSearchLimit = await this.usersService.getUserCandidateSearchLimit(userInDb);
+    const userPackage = await this.usersService.getUserPackage(userInDb);
 
     return {
       hasCompany: true,
@@ -963,6 +992,10 @@ export class CompaniesService {
         maxActiveJobs,
         todayJobsPostedCount,
         maxDailyJobs,
+        hotJobLimit,
+        candidateSearchLimit,
+        aiQuota: userInDb.aiQuotaRemaining ?? (userPackage ? userPackage.aiQuota : 0),
+        packageName: userPackage ? userPackage.name : (isPremium ? 'HR Premium' : 'HR Standard'),
         totalApplications,
         pendingApplications,
         reviewingApplications,

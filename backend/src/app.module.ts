@@ -34,6 +34,7 @@ import { CandidateAccessModule } from './candidate-access/candidate-access.modul
 import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
 import { SavedJobsModule } from './saved-jobs/saved-jobs.module';
 import { ChatModule } from './chat/chat.module';
+import { AdminModule } from './admin/admin.module';
 import { areQueueWorkersEnabled } from './config/runtime-flags';
 import { createRedisConnectionOptions } from './redis/redis.module';
 
@@ -122,6 +123,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     ElasticsearchModule,
     SavedJobsModule,
     ChatModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],
