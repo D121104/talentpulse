@@ -65,12 +65,16 @@ export class OtpsService {
       where: { token: cleanToken, isDeleted: false },
     });
     if (!otp) {
-      throw new BadRequestException('Mã xác thực không đúng hoặc đã được sử dụng');
+      throw new BadRequestException(
+        'Mã xác thực không đúng hoặc đã được sử dụng',
+      );
     }
 
     if (otp.expiredAt && new Date(otp.expiredAt) < new Date()) {
       await this.otpRepo.delete({ token: cleanToken });
-      throw new BadRequestException('Mã xác thực đã hết hạn. Vui lòng yêu cầu mã mới.');
+      throw new BadRequestException(
+        'Mã xác thực đã hết hạn. Vui lòng yêu cầu mã mới.',
+      );
     }
 
     return {

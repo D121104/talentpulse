@@ -5,26 +5,28 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "start": "nest start",
     "dev": "nest start --watch",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,tests}/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e": "jest --testRegex \"tests/.*\\.integration\\.spec\\.ts$\"",
     "package:lambda": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda.ps1",
     "package:lambda-image": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-lambda-image.ps1",
     "migration:show": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/database/data-source.ts",
     "migration:run": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d src/database/data-source.ts",
     "migration:revert": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d src/database/data-source.ts",
     "migration:generate": "node -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d src/database/data-source.ts",
+    "index:jobs": "ts-node -r tsconfig-paths/register src/commands/job-index.ts",
     "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
     "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
+    "seed:local-jobs": "ts-node -r tsconfig-paths/register src/scripts/seed-local-jobs.ts",
     "seed:admin": "ts-node -r tsconfig-paths/register src/scripts/seed-admin.ts",
     "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts && ts-node -r tsconfig-paths/register src/scripts/seed-admin.ts",
     "sync:elasticsearch": "ts-node -r tsconfig-paths/register src/scripts/sync-jobs-elasticsearch.ts"
@@ -60,6 +62,7 @@
     "cloudinary": "^2.1.0",
     "cookie-parser": "^1.4.6",
     "crypto": "^1.0.1",
+    "entities": "4.5.0",
     "handlebars": "^4.7.8",
     "hbs": "^4.2.0",
     "helmet": "^7.1.0",
@@ -122,18 +125,18 @@
       "json",
       "ts"
     ],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
+    "rootDir": ".",
+    "testRegex": "tests/.*\\.(spec|test)\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "collectCoverageFrom": [
-      "**/*.(t|j)s"
+      "src/**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
     "moduleNameMapper": {
-      "^src/(.*)$": "<rootDir>/$1"
+      "^src/(.*)$": "<rootDir>/src/$1"
     }
   }
 }

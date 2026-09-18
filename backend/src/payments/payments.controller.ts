@@ -61,8 +61,9 @@ export class PaymentsController {
     @Res() res: Response,
   ) {
     try {
-      const { redirectUrl } =
-        await this.paymentsService.verifyPaymentOrder(orderCode);
+      const { redirectUrl } = await this.paymentsService.verifyPaymentOrder(
+        orderCode,
+      );
       return res.redirect(redirectUrl);
     } catch {
       const frontendUrl = process.env.URL_FRONTEND || 'http://localhost:5173';
@@ -123,10 +124,7 @@ export class PaymentsController {
   @Roles(Role.ADMIN)
   @Post('admin/packages')
   @ResponseMessage('Tạo gói Premium mới thành công')
-  createPackage(
-    @Body() dto: CreatePremiumPackageDto,
-    @UserDec() admin: IUser,
-  ) {
+  createPackage(@Body() dto: CreatePremiumPackageDto, @UserDec() admin: IUser) {
     return this.paymentsService.createPackage(dto, admin);
   }
 
@@ -146,10 +144,7 @@ export class PaymentsController {
   @Roles(Role.ADMIN)
   @Patch('admin/packages/:id/toggle')
   @ResponseMessage('Thay đổi trạng thái gói Premium thành công')
-  togglePackageActive(
-    @Param('id') id: string,
-    @UserDec() admin: IUser,
-  ) {
+  togglePackageActive(@Param('id') id: string, @UserDec() admin: IUser) {
     return this.paymentsService.togglePackageActive(id, admin);
   }
 
@@ -157,10 +152,7 @@ export class PaymentsController {
   @Roles(Role.ADMIN)
   @Delete('admin/packages/:id')
   @ResponseMessage('Xóa gói Premium thành công')
-  deletePackage(
-    @Param('id') id: string,
-    @UserDec() admin: IUser,
-  ) {
+  deletePackage(@Param('id') id: string, @UserDec() admin: IUser) {
     return this.paymentsService.deletePackage(id, admin);
   }
 
@@ -215,4 +207,3 @@ export class PaymentsController {
     return this.paymentsService.getAdminRevenueStats();
   }
 }
-

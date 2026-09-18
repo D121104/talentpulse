@@ -134,7 +134,9 @@ export class CreateOnlineCVDto {
   @IsEnum(['template1', 'template2'])
   templateType: string;
 
-  @ApiPropertyOptional({ description: 'Tên / Tiêu đề của CV (vd: CV - Senior Developer)' })
+  @ApiPropertyOptional({
+    description: 'Tên / Tiêu đề của CV (vd: CV - Senior Developer)',
+  })
   @IsOptional()
   @IsString()
   title?: string;
@@ -221,7 +223,10 @@ export class CreateOnlineCVDto {
   @Type(() => AwardEntryDto)
   awards?: AwardEntryDto[];
 
-  @ApiPropertyOptional({ type: [String], example: ['objective', 'skills', 'experience', 'education'] })
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['objective', 'skills', 'experience', 'education'],
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
@@ -246,12 +251,17 @@ export class CreateOnlineCVDto {
   @IsOptional()
   customFormatting?: any;
 
-  @ApiPropertyOptional({ description: 'HTML snapshot of CV canvas for pixel-perfect PDF export' })
+  @ApiPropertyOptional({
+    description: 'HTML snapshot of CV canvas for pixel-perfect PDF export',
+  })
   @IsOptional()
   @IsString()
   htmlContent?: string;
 
-  @ApiPropertyOptional({ description: 'Cho phép Nhà Tuyển Dụng tìm kiếm CV này', default: true })
+  @ApiPropertyOptional({
+    description: 'Cho phép Nhà Tuyển Dụng tìm kiếm CV này',
+    default: true,
+  })
   @IsOptional()
   @IsBoolean()
   isSearchable?: boolean;

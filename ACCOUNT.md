@@ -98,4 +98,3 @@ npm run seed:candidate
 # 3. Seed toàn bộ 20 ứng viên & 3 công ty đa ngành:
 npx ts-node -r tsconfig-paths/register src/scripts/seed-candidate-pool.ts
 ```
-

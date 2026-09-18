@@ -19,16 +19,15 @@ import {
 
 export default function PremiumPage() {
   const { user } = useAuth();
+  const [selectedPlanInfo, setSelectedPlanInfo] = useState<any | null>(null);
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [waitingPayment, setWaitingPayment] = useState<WaitingPaymentInfo | null>(null);
+  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
 
   // If user is HR, redirect them directly to their dedicated HR Premium dashboard tab
   if (user?.role === 'HR') {
     return <Navigate to="/dashboard?tab=premium" replace />;
   }
-
-  const [selectedPlanInfo, setSelectedPlanInfo] = useState<any | null>(null);
-  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-  const [waitingPayment, setWaitingPayment] = useState<WaitingPaymentInfo | null>(null);
-  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
 
   const faqs = [
     {

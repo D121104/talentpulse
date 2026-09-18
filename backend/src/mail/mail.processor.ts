@@ -55,9 +55,7 @@ export class MailProcessor {
   }
 
   @Process('send-premium-success-email')
-  async handleSendPremiumSuccessEmail(
-    job: Job<PremiumSuccessEmailJobData>,
-  ) {
+  async handleSendPremiumSuccessEmail(job: Job<PremiumSuccessEmailJobData>) {
     this.logger.log(
       `Processing premium success email for user: ${job.data.userEmail}, orderCode: ${job.data.orderCode}`,
     );

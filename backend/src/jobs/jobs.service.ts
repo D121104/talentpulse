@@ -37,6 +37,7 @@ import {
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
 import { ElasticsearchService } from 'src/elasticsearch/elasticsearch.service';
 import { JobSyncPayload } from 'src/elasticsearch/job-sync.processor';
 
@@ -142,6 +143,8 @@ export class JobsService {
 
     private readonly activeJobQueryService: ActiveJobQueryService,
 
+    private readonly jobIndexingService: JobIndexingService,
+
     private readonly elasticsearchService: ElasticsearchService,
 
     @Optional()
@@ -240,7 +243,9 @@ export class JobsService {
     const jobsWithApplicationsCount = await Promise.all(
       jobs.map(async (job) => {
         const isHotExpired = Boolean(
-          job.isHot && job.boostExpiresAt && new Date(job.boostExpiresAt) <= now,
+          job.isHot &&
+            job.boostExpiresAt &&
+            new Date(job.boostExpiresAt) <= now,
         );
         if (isHotExpired) {
           job.isHot = false;
@@ -333,7 +338,9 @@ export class JobsService {
     const jobsWithApplicationsCount = await Promise.all(
       jobs.map(async (job) => {
         const isHotExpired = Boolean(
-          job.isHot && job.boostExpiresAt && new Date(job.boostExpiresAt) <= now,
+          job.isHot &&
+            job.boostExpiresAt &&
+            new Date(job.boostExpiresAt) <= now,
         );
         if (isHotExpired) {
           job.isHot = false;
@@ -425,6 +432,7 @@ export class JobsService {
     });
 
     const savedJob = await this.jobRepo.save(newJob);
+    await this.jobIndexingService.enqueue(savedJob._id);
 
     // Sync to Elasticsearch
     void this.enqueueJobSync(savedJob._id);
@@ -696,20 +704,13 @@ export class JobsService {
       },
     });
 
+    await this.jobIndexingService.enqueue(id);
     // Sync to Elasticsearch
     void this.enqueueJobSync(id);
 
     // Re-process all CVs only when description has changed
     if (descriptionChanged) {
-      const updatedJob = await this.activeJobQueryService.findNonDeletedById(id);
-      if (updatedJob) {
-        await this.cvProcessingService.reprocessAllCVsForJob(id, {
-          name: updatedJob.name,
-          description: updatedJob.description,
-          skills: updatedJob.skills || [],
-          level: updatedJob.level,
-        });
-      }
+      await this.cvProcessingService.reprocessAllCVsForJob(id);
     }
 
     return result;
@@ -741,11 +742,13 @@ export class JobsService {
       },
     });
 
+    const result = await this.jobRepo.softDelete(id);
     await this.redisService.invalidateJobsCache();
+    await this.jobIndexingService.enqueue(id);
     // Remove from Elasticsearch
     void this.enqueueJobSync(id, 'delete-job');
 
-    return await this.jobRepo.softDelete(id);
+    return result;
   }
 
   async boostJob(id: string, user: IUser) {
@@ -777,7 +780,9 @@ export class JobsService {
     // HR Standard: 1 boost per calendar month (HOT lasts 24h)
     if (isHrPrem || user.role === Role.ADMIN) {
       if (userInDb.company?._id && user.role !== Role.ADMIN) {
-        const hotJobLimit = await this.usersService.getUserHotJobLimit(userInDb);
+        const hotJobLimit = await this.usersService.getUserHotJobLimit(
+          userInDb,
+        );
         const activeHotCount = await this.activeJobQueryService
           .createNonDeletedQuery()
           .andWhere("job.company->>'_id' = :companyId", {
@@ -796,7 +801,12 @@ export class JobsService {
       }
     } else {
       // HR Standard: 1 boost per calendar month
-      const monthKey = `hr_boost:${userInDb._id}:month:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const monthKey = `hr_boost:${
+        userInDb._id
+      }:month:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+        2,
+        '0',
+      )}`;
       const usedThisMonth =
         Number(await this.redisService.getValue<number>(monthKey)) || 0;
       if (usedThisMonth >= 1) {
@@ -804,7 +814,11 @@ export class JobsService {
           'Tài khoản HR Standard chỉ được đẩy HOT tối đa 1 tin tuyển dụng trong 1 tháng (bạn đã sử dụng trong tháng này). Vui lòng nâng cấp HR Premium để đẩy HOT nhiều tin cùng lúc!',
         );
       }
-      await this.redisService.setValue(monthKey, usedThisMonth + 1, 32 * 24 * 3600);
+      await this.redisService.setValue(
+        monthKey,
+        usedThisMonth + 1,
+        32 * 24 * 3600,
+      );
     }
 
     // HOT duration = 1 day (24 hours)
@@ -814,6 +828,7 @@ export class JobsService {
     job.updatedAt = now;
 
     const savedJob = await this.jobRepo.save(job);
+    await this.jobIndexingService.enqueue(savedJob._id);
     await this.redisService.invalidateJobsCache();
 
     // Sync to Elasticsearch
@@ -939,11 +954,14 @@ export class JobsService {
     }
 
     // Query top ranked candidates from Elasticsearch
-    const { jobs: rawJobs, total, isPersonalized } =
-      await this.elasticsearchService.searchLandingPopularJobs({
-        candidateSkills,
-        size: 45,
-      });
+    const {
+      jobs: rawJobs,
+      total,
+      isPersonalized,
+    } = await this.elasticsearchService.searchLandingPopularJobs({
+      candidateSkills,
+      size: 45,
+    });
 
     // Apply Backend Company Diversity Algorithm
     const diverseJobs = applyCompanyDiversity(rawJobs, 2, 3);
@@ -1131,8 +1149,14 @@ export class JobsService {
     const distinctJobIds = new Set(weeklyViews.map((v) => v.jobId));
     const isUnlocked = distinctJobIds.has(jobId);
     const weeklyQuotaUsed = distinctJobIds.size;
-    const weeklyQuotaMax = await this.usersService.getUserCandidateWeeklyApplicantLimit(effectiveUser);
-    const weeklyQuotaRemaining = weeklyQuotaMax >= 999999 ? 999999 : Math.max(0, weeklyQuotaMax - weeklyQuotaUsed);
+    const weeklyQuotaMax =
+      await this.usersService.getUserCandidateWeeklyApplicantLimit(
+        effectiveUser,
+      );
+    const weeklyQuotaRemaining =
+      weeklyQuotaMax >= 999999
+        ? 999999
+        : Math.max(0, weeklyQuotaMax - weeklyQuotaUsed);
 
     let applicantCount: number | null = null;
     if (isUnlocked) {
@@ -1155,7 +1179,9 @@ export class JobsService {
 
   async unlockApplicantCount(jobId: string, user: IUser) {
     if (!user || (!user._id && !user.email)) {
-      throw new ForbiddenException('Vui lòng đăng nhập để sử dụng tính năng này.');
+      throw new ForbiddenException(
+        'Vui lòng đăng nhập để sử dụng tính năng này.',
+      );
     }
 
     const job = await this.jobRepo.findOne({
@@ -1230,7 +1256,10 @@ export class JobsService {
 
     const distinctJobIds = new Set(weeklyViews.map((v) => v.jobId));
 
-    const weeklyQuotaMax = await this.usersService.getUserCandidateWeeklyApplicantLimit(effectiveUser);
+    const weeklyQuotaMax =
+      await this.usersService.getUserCandidateWeeklyApplicantLimit(
+        effectiveUser,
+      );
 
     // If already unlocked for this job in the current week
     if (distinctJobIds.has(jobId)) {
@@ -1241,7 +1270,10 @@ export class JobsService {
         isUnlocked: true,
         applicantCount,
         weeklyQuotaUsed: distinctJobIds.size,
-        weeklyQuotaRemaining: weeklyQuotaMax >= 999999 ? 999999 : Math.max(0, weeklyQuotaMax - distinctJobIds.size),
+        weeklyQuotaRemaining:
+          weeklyQuotaMax >= 999999
+            ? 999999
+            : Math.max(0, weeklyQuotaMax - distinctJobIds.size),
         weeklyQuotaMax,
         nextResetDate: nextWeekReset.toISOString(),
         isPremium: true,
@@ -1250,7 +1282,10 @@ export class JobsService {
     }
 
     // Check if quota exceeded
-    if (distinctJobIds.size >= weeklyQuotaMax && effectiveUser.role !== Role.ADMIN) {
+    if (
+      distinctJobIds.size >= weeklyQuotaMax &&
+      effectiveUser.role !== Role.ADMIN
+    ) {
       throw new BadRequestException(
         `Bạn đã sử dụng hết ${weeklyQuotaMax} lượt xem số lượng người ứng tuyển trong tuần này theo gói dịch vụ của bạn. Hạn mức sẽ được làm mới vào tuần tới hoặc nâng cấp gói cao hơn!`,
       );

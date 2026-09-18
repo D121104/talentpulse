@@ -21,7 +21,11 @@ function IsStringRecord(validationOptions?: ValidationOptions) {
       options: validationOptions,
       validator: {
         validate(value: unknown) {
-          if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          if (
+            typeof value !== 'object' ||
+            value === null ||
+            Array.isArray(value)
+          ) {
             return false;
           }
           const entries = Object.entries(value as Record<string, unknown>);

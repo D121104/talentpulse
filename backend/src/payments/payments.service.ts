@@ -58,9 +58,21 @@ export class PaymentsService implements OnModuleInit {
     Record<PaymentBillingCycle, PricingPlanConfig>
   > = {
     [PremiumPlan.FREE]: {
-      [PaymentBillingCycle.MONTHLY]: { price: 0, durationDays: 0, title: 'Miễn phí' },
-      [PaymentBillingCycle.SEMI_ANNUAL]: { price: 0, durationDays: 0, title: 'Miễn phí' },
-      [PaymentBillingCycle.ANNUAL]: { price: 0, durationDays: 0, title: 'Miễn phí' },
+      [PaymentBillingCycle.MONTHLY]: {
+        price: 0,
+        durationDays: 0,
+        title: 'Miễn phí',
+      },
+      [PaymentBillingCycle.SEMI_ANNUAL]: {
+        price: 0,
+        durationDays: 0,
+        title: 'Miễn phí',
+      },
+      [PaymentBillingCycle.ANNUAL]: {
+        price: 0,
+        durationDays: 0,
+        title: 'Miễn phí',
+      },
     },
     [PremiumPlan.CANDIDATE_PREMIUM]: {
       [PaymentBillingCycle.MONTHLY]: {
@@ -146,13 +158,17 @@ export class PaymentsService implements OnModuleInit {
         setTimeout(() => {
           this.expireSpecificOrder(order.orderCode).catch((err) => {
             this.logger.warn(
-              `Auto-expire timeout failed for #${order.orderCode}: ${err?.message || err}`,
+              `Auto-expire timeout failed for #${order.orderCode}: ${
+                err?.message || err
+              }`,
             );
           });
         }, remainingMs);
       }
     } catch (err: any) {
-      this.logger.warn(`onModuleInit pending orders schedule warning: ${err?.message || err}`);
+      this.logger.warn(
+        `onModuleInit pending orders schedule warning: ${err?.message || err}`,
+      );
     }
   }
 
@@ -200,10 +216,14 @@ export class PaymentsService implements OnModuleInit {
       // Chỉ bypass trong dev mode khi chạy placeholder
       const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
       if (nodeEnv === 'production') {
-        this.logger.error('PAYOS_CHECKSUM_KEY is missing in production! Rejecting webhook.');
+        this.logger.error(
+          'PAYOS_CHECKSUM_KEY is missing in production! Rejecting webhook.',
+        );
         return false;
       }
-      this.logger.warn('PAYOS_CHECKSUM_KEY is placeholder — bypassing webhook signature in dev mode.');
+      this.logger.warn(
+        'PAYOS_CHECKSUM_KEY is placeholder — bypassing webhook signature in dev mode.',
+      );
       return true;
     }
 
@@ -277,7 +297,9 @@ export class PaymentsService implements OnModuleInit {
     const clientId = this.configService.get<string>('PAYOS_CLIENT_ID', '');
 
     if (!apiKey || apiKey === 'your_payos_api_key') {
-      this.logger.warn('PayOS API Key is placeholder. Skipping PayOS remote fetch.');
+      this.logger.warn(
+        'PayOS API Key is placeholder. Skipping PayOS remote fetch.',
+      );
       return null;
     }
 
@@ -295,7 +317,9 @@ export class PaymentsService implements OnModuleInit {
 
     if (!res.ok) {
       const errorBody = await res.text().catch(() => 'Unknown error');
-      this.logger.warn(`PayOS fetch failed for order ${orderCode}: ${errorBody}`);
+      this.logger.warn(
+        `PayOS fetch failed for order ${orderCode}: ${errorBody}`,
+      );
       return null;
     }
 
@@ -308,7 +332,7 @@ export class PaymentsService implements OnModuleInit {
    */
   async cancelPayosPaymentRequest(
     orderCode: number,
-    cancellationReason: string = 'Đơn hàng hết hạn thanh toán theo TTL',
+    cancellationReason = 'Đơn hàng hết hạn thanh toán theo TTL',
   ): Promise<boolean> {
     const payosUrl = this.configService.get<string>(
       'PAYOS_URL',
@@ -380,11 +404,22 @@ export class PaymentsService implements OnModuleInit {
     }
 
     // Role-based validation
-    if (dto.planType === PremiumPlan.HR_PREMIUM && user.role !== Role.HR && user.role !== Role.ADMIN) {
-      throw new ForbiddenException('Chỉ tài khoản Nhà tuyển dụng (HR) mới được mua gói HR Premium');
+    if (
+      dto.planType === PremiumPlan.HR_PREMIUM &&
+      user.role !== Role.HR &&
+      user.role !== Role.ADMIN
+    ) {
+      throw new ForbiddenException(
+        'Chỉ tài khoản Nhà tuyển dụng (HR) mới được mua gói HR Premium',
+      );
     }
-    if (dto.planType === PremiumPlan.CANDIDATE_PREMIUM && user.role === Role.HR) {
-      throw new ForbiddenException('Tài khoản HR vui lòng chọn gói HR Premium Enterprise');
+    if (
+      dto.planType === PremiumPlan.CANDIDATE_PREMIUM &&
+      user.role === Role.HR
+    ) {
+      throw new ForbiddenException(
+        'Tài khoản HR vui lòng chọn gói HR Premium Enterprise',
+      );
     }
 
     // Dynamic package lookup from database with fallback
@@ -434,7 +469,9 @@ export class PaymentsService implements OnModuleInit {
       await this.paymentOrderRepo.update(pending._id, {
         status: PaymentStatus.CANCELLED,
       });
-      await this.redisService.deleteValue(`payment:pending:${pending.orderCode}`);
+      await this.redisService.deleteValue(
+        `payment:pending:${pending.orderCode}`,
+      );
     }
 
     const backendPort = this.configService.get<string>('PORT', '8000');
@@ -458,7 +495,12 @@ export class PaymentsService implements OnModuleInit {
     let paymentLinkId: string | null = null;
 
     // Call PayOS API if credentials are provided
-    if (apiKey && apiKey !== 'your_payos_api_key' && clientId && clientId !== 'your_payos_client_id') {
+    if (
+      apiKey &&
+      apiKey !== 'your_payos_api_key' &&
+      clientId &&
+      clientId !== 'your_payos_client_id'
+    ) {
       const signatureData = `amount=${amount}&cancelUrl=${cancelUrl}&description=${description}&orderCode=${orderCode}&returnUrl=${returnUrl}`;
       const signature = this.createSignature(signatureData);
       const expiredAt = Math.floor(expiresAt.getTime() / 1000);
@@ -473,20 +515,25 @@ export class PaymentsService implements OnModuleInit {
         signature,
       });
 
-      const res = await this.fetchWithTimeout(`${payosUrl}/v2/payment-requests`, {
-        headers: {
-          'x-api-key': apiKey,
-          'x-client-id': clientId,
-          'Content-Type': 'application/json',
+      const res = await this.fetchWithTimeout(
+        `${payosUrl}/v2/payment-requests`,
+        {
+          headers: {
+            'x-api-key': apiKey,
+            'x-client-id': clientId,
+            'Content-Type': 'application/json',
+          },
+          method: 'POST',
+          body,
         },
-        method: 'POST',
-        body,
-      });
+      );
 
       if (!res.ok) {
         const errorBody = await res.text();
         this.logger.error(`PayOS API error: ${errorBody}`);
-        throw new BadRequestException(`Tạo link thanh toán PayOS thất bại: ${errorBody}`);
+        throw new BadRequestException(
+          `Tạo link thanh toán PayOS thất bại: ${errorBody}`,
+        );
       }
 
       const resp = await res.json();
@@ -569,7 +616,9 @@ export class PaymentsService implements OnModuleInit {
     if (!data || !data.orderCode) return;
 
     if (signature && !this.verifyWebhookSignature(data, signature)) {
-      this.logger.warn(`Invalid webhook signature for orderCode=${data.orderCode}`);
+      this.logger.warn(
+        `Invalid webhook signature for orderCode=${data.orderCode}`,
+      );
       return;
     }
 
@@ -580,13 +629,17 @@ export class PaymentsService implements OnModuleInit {
     });
 
     if (!order) {
-      this.logger.warn(`PaymentOrder not found for webhook orderCode=${orderCode}`);
+      this.logger.warn(
+        `PaymentOrder not found for webhook orderCode=${orderCode}`,
+      );
       return;
     }
 
     // Idempotency check: Nếu đơn đã hoàn thành thì bỏ qua
     if (order.status === PaymentStatus.PAID) {
-      this.logger.log(`PaymentOrder ${orderCode} is already PAID. Webhook idempotency skip.`);
+      this.logger.log(
+        `PaymentOrder ${orderCode} is already PAID. Webhook idempotency skip.`,
+      );
       return;
     }
 
@@ -643,7 +696,9 @@ export class PaymentsService implements OnModuleInit {
         .execute();
 
       if (!updateResult.affected || updateResult.affected === 0) {
-        this.logger.warn(`Order ${orderCode} was already updated concurrently.`);
+        this.logger.warn(
+          `Order ${orderCode} was already updated concurrently.`,
+        );
         return;
       }
 
@@ -666,7 +721,9 @@ export class PaymentsService implements OnModuleInit {
             isDeleted: false,
           },
         });
-        const addedAiQuota = pkg?.aiQuota || (order.planType === PremiumPlan.CANDIDATE_PREMIUM ? 500 : 1500);
+        const addedAiQuota =
+          pkg?.aiQuota ||
+          (order.planType === PremiumPlan.CANDIDATE_PREMIUM ? 500 : 1500);
 
         await userRepo.update(user._id, {
           isPremium: true,
@@ -707,7 +764,9 @@ export class PaymentsService implements OnModuleInit {
     });
 
     // Push job to Bull Queue to send luxurious confirmation email
-    const updatedUser = await this.userRepo.findOne({ where: { _id: order.userId } });
+    const updatedUser = await this.userRepo.findOne({
+      where: { _id: order.userId },
+    });
     if (updatedUser) {
       await this.mailQueue.add(
         'send-premium-success-email',
@@ -848,7 +907,9 @@ export class PaymentsService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
 
-    const pendingOrders = orders.filter((o) => o.status === PaymentStatus.PENDING);
+    const pendingOrders = orders.filter(
+      (o) => o.status === PaymentStatus.PENDING,
+    );
     if (pendingOrders.length === 0) return orders;
 
     // Sync pending orders concurrently with a 10s per-request timeout via Promise.allSettled
@@ -864,7 +925,9 @@ export class PaymentsService implements OnModuleInit {
     syncResults.forEach((r, i) => {
       if (r.status === 'rejected') {
         this.logger.warn(
-          `Failed to sync order ${pendingOrders[i].orderCode}: ${r.reason?.message || r.reason}`,
+          `Failed to sync order ${pendingOrders[i].orderCode}: ${
+            r.reason?.message || r.reason
+          }`,
         );
       }
     });
@@ -890,7 +953,9 @@ export class PaymentsService implements OnModuleInit {
     }
 
     if (order.status !== PaymentStatus.PENDING) {
-      throw new BadRequestException('Chỉ có thể hủy đơn hàng đang chờ thanh toán');
+      throw new BadRequestException(
+        'Chỉ có thể hủy đơn hàng đang chờ thanh toán',
+      );
     }
 
     // Call PayOS cancel API
@@ -921,11 +986,17 @@ export class PaymentsService implements OnModuleInit {
 
     const order = await this.paymentOrderRepo.findOne({ where });
     if (!order) {
-      return { message: 'Không tìm thấy đơn hàng', status: PaymentStatus.EXPIRED };
+      return {
+        message: 'Không tìm thấy đơn hàng',
+        status: PaymentStatus.EXPIRED,
+      };
     }
 
     if (order.status !== PaymentStatus.PENDING) {
-      return { message: `Đơn hàng đã ở trạng thái ${order.status}`, status: order.status };
+      return {
+        message: `Đơn hàng đã ở trạng thái ${order.status}`,
+        status: order.status,
+      };
     }
 
     this.logger.log(
@@ -954,7 +1025,10 @@ export class PaymentsService implements OnModuleInit {
       message: `Đơn hàng #${orderCode} đã hết hạn thanh toán`,
     });
 
-    return { message: 'Đã hủy đơn hàng hết hạn thành công', status: PaymentStatus.EXPIRED };
+    return {
+      message: 'Đã hủy đơn hàng hết hạn thành công',
+      status: PaymentStatus.EXPIRED,
+    };
   }
 
   /**
@@ -993,7 +1067,9 @@ export class PaymentsService implements OnModuleInit {
         'Đơn hàng hết hạn thanh toán theo TTL',
       );
       await this.redisService.deleteValue(`payment:pending:${order.orderCode}`);
-      await this.redisService.deleteValue(`payment:user_pending:${order.userId}`);
+      await this.redisService.deleteValue(
+        `payment:user_pending:${order.userId}`,
+      );
 
       this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
         orderCode: order.orderCode,
@@ -1135,7 +1211,8 @@ export class PaymentsService implements OnModuleInit {
         planType: PremiumPlan.HR_PREMIUM,
         billingCycle: PaymentBillingCycle.ANNUAL,
         name: 'HR Premium Enterprise (1 Năm)',
-        description: 'Giải pháp tuyển dụng toàn diện 365 ngày cho doanh nghiệp bứt phá',
+        description:
+          'Giải pháp tuyển dụng toàn diện 365 ngày cho doanh nghiệp bứt phá',
         price: 2390000,
         originalPrice: 3588000,
         durationDays: 365,
@@ -1159,7 +1236,9 @@ export class PaymentsService implements OnModuleInit {
       const entity = this.packageRepo.create(pkg);
       await this.packageRepo.save(entity);
     }
-    this.logger.log(`✓ Seeded ${defaultPackages.length} default premium packages.`);
+    this.logger.log(
+      `✓ Seeded ${defaultPackages.length} default premium packages.`,
+    );
   }
 
   /**
@@ -1197,7 +1276,9 @@ export class PaymentsService implements OnModuleInit {
       where: { code, isDeleted: false },
     });
     if (existing) {
-      throw new BadRequestException(`Mã gói "${code}" đã tồn tại trong hệ thống.`);
+      throw new BadRequestException(
+        `Mã gói "${code}" đã tồn tại trong hệ thống.`,
+      );
     }
 
     const pkg = this.packageRepo.create({
@@ -1235,7 +1316,9 @@ export class PaymentsService implements OnModuleInit {
         where: { code: code.trim(), isDeleted: false },
       });
       if (existing && existing._id !== id) {
-        throw new BadRequestException(`Mã gói "${code}" đã tồn tại trong hệ thống.`);
+        throw new BadRequestException(
+          `Mã gói "${code}" đã tồn tại trong hệ thống.`,
+        );
       }
       pkg.code = code.trim();
     }
@@ -1380,10 +1463,9 @@ export class PaymentsService implements OnModuleInit {
       qb.andWhere('user.premiumExpiresAt <= :now', { now: new Date() });
     }
     if (qs?.search) {
-      qb.andWhere(
-        '(user.name ILIKE :search OR user.email ILIKE :search)',
-        { search: `%${qs.search}%` },
-      );
+      qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
+        search: `%${qs.search}%`,
+      });
     }
 
     qb.orderBy('user.premiumExpiresAt', 'DESC');

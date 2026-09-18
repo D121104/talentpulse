@@ -61,19 +61,25 @@ export class ChatService {
 
     if (user.role === Role.HR) {
       if (!user.company?._id) {
-        throw new BadRequestException('Tài khoản HR chưa được liên kết với công ty nào.');
+        throw new BadRequestException(
+          'Tài khoản HR chưa được liên kết với công ty nào.',
+        );
       }
       companyId = user.company._id;
       candidateId = dto.candidateId;
       if (!candidateId) {
-        throw new BadRequestException('Vui lòng cung cấp candidateId của ứng viên.');
+        throw new BadRequestException(
+          'Vui lòng cung cấp candidateId của ứng viên.',
+        );
       }
     } else {
       // Candidate / Job seeker
       candidateId = user._id;
       companyId = dto.companyId;
       if (!companyId) {
-        throw new BadRequestException('Vui lòng cung cấp companyId của công ty.');
+        throw new BadRequestException(
+          'Vui lòng cung cấp companyId của công ty.',
+        );
       }
     }
 
@@ -218,7 +224,11 @@ export class ChatService {
   }
 
   // 5. Send message
-  async sendMessage(user: IUser, conversationId: string, dto: CreateMessageDto) {
+  async sendMessage(
+    user: IUser,
+    conversationId: string,
+    dto: CreateMessageDto,
+  ) {
     const conv = await this.conversationRepo.findOne({
       where: { _id: conversationId, isDeleted: false },
       relations: ['candidate', 'company'],
@@ -307,9 +317,7 @@ export class ChatService {
           ? `${user.name} (${conv.company?.name})`
           : user.name,
       senderAvatar:
-        senderRole === 'HR'
-          ? conv.company?.logo || user.avatar
-          : user.avatar,
+        senderRole === 'HR' ? conv.company?.logo || user.avatar : user.avatar,
       senderRole,
       content: snippet,
       createdAt: savedMsg.createdAt,
@@ -359,10 +367,13 @@ export class ChatService {
       .createQueryBuilder()
       .update(ChatMessage)
       .set({ isRead: true, readAt: now })
-      .where('conversationId = :cid AND senderId != :userId AND isRead = false', {
-        cid: conversationId,
-        userId: user._id,
-      })
+      .where(
+        'conversationId = :cid AND senderId != :userId AND isRead = false',
+        {
+          cid: conversationId,
+          userId: user._id,
+        },
+      )
       .execute();
 
     const affectedMessages = updateResult.affected || 0;
@@ -383,7 +394,9 @@ export class ChatService {
     // Collect participants for guaranteed read-receipt delivery
     const participantIds = [user._id, conv.candidateId];
     try {
-      const companyHrs = await this.usersService.findAllByCompanyId(conv.companyId);
+      const companyHrs = await this.usersService.findAllByCompanyId(
+        conv.companyId,
+      );
       for (const hr of companyHrs) {
         if (hr?._id) participantIds.push(hr._id);
       }
@@ -435,7 +448,9 @@ export class ChatService {
         );
       }
     } catch (err) {
-      this.logger.warn(`Failed to mark notifications read for user ${user._id}: ${err.message}`);
+      this.logger.warn(
+        `Failed to mark notifications read for user ${user._id}: ${err.message}`,
+      );
     }
 
     return { success: true, conversationId };
@@ -614,14 +629,20 @@ export class ChatService {
     if (conv) {
       participantIds.push(conv.candidateId);
       try {
-        const companyHrs = await this.usersService.findAllByCompanyId(conv.companyId);
+        const companyHrs = await this.usersService.findAllByCompanyId(
+          conv.companyId,
+        );
         for (const hr of companyHrs) {
           if (hr?._id) participantIds.push(hr._id);
         }
       } catch {}
     }
 
-    this.chatGateway.emitReaction(msg.conversationId, reactionPayload, participantIds);
+    this.chatGateway.emitReaction(
+      msg.conversationId,
+      reactionPayload,
+      participantIds,
+    );
     return reactionPayload;
   }
 
@@ -690,10 +711,9 @@ export class ChatService {
         });
 
       if (search && search.trim()) {
-        qb.andWhere(
-          '(company.name ILIKE :search OR job.name ILIKE :search)',
-          { search: `%${search.trim()}%` },
-        );
+        qb.andWhere('(company.name ILIKE :search OR job.name ILIKE :search)', {
+          search: `%${search.trim()}%`,
+        });
       }
 
       qb.orderBy('app.createdAt', 'DESC');

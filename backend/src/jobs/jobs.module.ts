@@ -14,6 +14,7 @@ import { UsersModule } from 'src/users/users.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { AIMatchingModule } from 'src/ai-matching/ai-matching.module';
 import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
+import { JobIndexingModule } from 'src/job-indexing/job-indexing.module';
 import { ElasticsearchModule } from 'src/elasticsearch/elasticsearch.module';
 import { JwtModule } from '@nestjs/jwt';
 
@@ -35,6 +36,7 @@ import { JwtModule } from '@nestjs/jwt';
     NotificationsModule,
     AIMatchingModule,
     ActiveJobsModule,
+    JobIndexingModule,
     forwardRef(() => UsersModule),
     JwtModule.register({}),
   ],

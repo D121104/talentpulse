@@ -26,7 +26,8 @@ export const AI_CV_CONSENT_ERROR_MESSAGES = {
   INVALID_USER_ID: 'Invalid user id',
   INVALID_CV_ID: 'Invalid CV id',
   INVALID_SCOPE: 'Invalid AI CV consent scope',
-  POLICY_MISMATCH: 'AI CV consent policy/version does not match the active policy',
+  POLICY_MISMATCH:
+    'AI CV consent policy/version does not match the active policy',
   ACTIVE_CONSENT_EXISTS: 'An active consent already exists for this scope',
   NO_ACTIVE_CONSENT: 'No active CV consent exists for this scope',
   INVALID_CONSENT: 'No valid consent exists for this AI purpose',
@@ -43,10 +44,15 @@ export function getActiveAiCvConsentPolicy(
     configService?.get<string>('AI_CV_CONSENT_VERSION')?.trim() ||
     DEFAULT_CONSENT_VERSION;
   const policyHash =
-    configService?.get<string>('AI_CV_CONSENT_POLICY_HASH')?.trim().toLowerCase() ||
-    DEFAULT_POLICY_HASH;
+    configService
+      ?.get<string>('AI_CV_CONSENT_POLICY_HASH')
+      ?.trim()
+      .toLowerCase() || DEFAULT_POLICY_HASH;
 
-  if (!/^\w[\w.-]{0,79}$/.test(consentVersion) || !/^[a-f0-9]{64}$/.test(policyHash)) {
+  if (
+    !/^\w[\w.-]{0,79}$/.test(consentVersion) ||
+    !/^[a-f0-9]{64}$/.test(policyHash)
+  ) {
     throw new Error(
       'AI_CV_CONSENT_VERSION must be a simple version and AI_CV_CONSENT_POLICY_HASH must be a SHA-256 hex digest',
     );

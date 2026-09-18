@@ -56,17 +56,32 @@ export class CVMatchResult {
   @JoinColumn({ name: 'applicationId' })
   application: Application;
 
-  @Column({ nullable: true })
-  cvUrl: string;
-
-  @Column({ type: 'text', nullable: true })
-  cvText: string;
-
-  @Column({ type: 'float', array: true, default: '{}' })
-  cvEmbedding: number[];
-
   @Column({ type: 'float', default: 0 })
   matchScore: number;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  contentHash: string;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  jobSourceVersion: string;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  scoringVersion: string;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  modelVersion: string;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  normalizationVersion: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  components: Record<string, unknown>;
+
+  @Column({ type: 'jsonb', nullable: true })
+  compatibility: Record<string, unknown>;
+
+  @Column({ default: false })
+  degraded: boolean;
 
   @Column({ type: 'text', array: true, default: '{}' })
   matchedSkills: string[];

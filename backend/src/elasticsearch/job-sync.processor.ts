@@ -66,7 +66,9 @@ export class JobSyncProcessor {
   @Process('sync-all-jobs')
   async handleSyncAllJobs(): Promise<void> {
     try {
-      this.logger.log('Starting bulk sync of all active jobs to Elasticsearch...');
+      this.logger.log(
+        'Starting bulk sync of all active jobs to Elasticsearch...',
+      );
       const allJobs = await this.jobRepo.find({
         where: { isDeleted: false },
       });

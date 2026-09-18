@@ -30,7 +30,9 @@ export class SavedJobsController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get list of saved jobs with full details and pagination' })
+  @ApiOperation({
+    summary: 'Get list of saved jobs with full details and pagination',
+  })
   @ResponseMessage('Lấy danh sách việc làm đã lưu thành công')
   getMySavedJobs(
     @Query('current') current: number,
@@ -41,7 +43,9 @@ export class SavedJobsController {
   }
 
   @Get('ids')
-  @ApiOperation({ summary: 'Get list of saved job IDs for quick heart checking' })
+  @ApiOperation({
+    summary: 'Get list of saved job IDs for quick heart checking',
+  })
   @ResponseMessage('Lấy danh sách ID việc làm đã lưu')
   getMySavedJobIds(@User() user: IUser) {
     return this.savedJobsService.getMySavedJobIds(user._id);

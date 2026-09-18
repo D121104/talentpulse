@@ -23,6 +23,7 @@ import { AI_CV_CONSENT_ERROR_MESSAGES } from 'src/ai-consents/ai-cv-consent.poli
 export interface CandidateCvSnapshot {
   cvId: string;
   contentHash: string;
+  contentVersion: string;
   title: string | null;
   target: string | null;
   skills: string[];
@@ -42,13 +43,12 @@ export class UserCVsService {
     private readonly aiCvConsentsService: AiCvConsentsService,
   ) {}
 
-  private getUploadedFileType(url: string): 'pdf' | 'doc' | 'docx' {
+  private getUploadedFileType(url: string): 'pdf' | 'docx' {
     const cleanUrl = url.toLowerCase().split('?')[0].split('#')[0];
     if (cleanUrl.endsWith('.pdf')) return 'pdf';
-    if (cleanUrl.endsWith('.doc')) return 'doc';
     if (cleanUrl.endsWith('.docx')) return 'docx';
     throw new BadRequestException(
-      'Chỉ chấp nhận file PDF, DOC hoặc DOCX. Vui lòng tải lên đúng định dạng.',
+      'Chỉ chấp nhận file PDF hoặc DOCX. Vui lòng tải lên đúng định dạng.',
     );
   }
 
@@ -187,12 +187,58 @@ export class UserCVsService {
         policyHash,
       ))
     ) {
-      throw new BadRequestException(AI_CV_CONSENT_ERROR_MESSAGES.INVALID_CONSENT);
+      throw new BadRequestException(
+        AI_CV_CONSENT_ERROR_MESSAGES.INVALID_CONSENT,
+      );
     }
 
     return {
       cvId: cv._id,
       contentHash: cv.contentHash,
+      contentVersion: cv.contentVersion,
+      title: cv.title || null,
+      target: null,
+      skills: [...(cv.skills || [])],
+      education: [...(cv.education || [])],
+      experience: [...(cv.experience || [])],
+      certificates: [...(cv.certificates || [])],
+      sanitizedText: (cv.parsedText || '').slice(0, 12000),
+    };
+  }
+
+  /**
+   * Candidate-assistant snapshot boundary. Ownership and parsing readiness are
+   * checked here; the caller is responsible for the separate assistant consent.
+   */
+  async createCandidateAssistantSnapshot(
+    userId: string,
+    cvId: string,
+  ): Promise<CandidateCvSnapshot> {
+    if (!isUUID(userId) || !isUUID(cvId)) {
+      throw new BadRequestException('Invalid user or CV id');
+    }
+    const cv = await this.userCVRepo.findOne({
+      where: { _id: cvId, userId, isDeleted: false, deletedAt: IsNull() },
+    });
+    if (!cv) {
+      throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
+    }
+    if (
+      cv.parseStatus !== CVParseStatus.READY ||
+      typeof cv.contentHash !== 'string' ||
+      !cv.contentHash.trim() ||
+      typeof cv.parsedText !== 'string' ||
+      !cv.parsedText.trim()
+    ) {
+      throw new ConflictException({
+        code: 'CV_NOT_READY',
+        message: 'CV chưa sẵn sàng để xử lý AI',
+      });
+    }
+    return {
+      cvId: cv._id,
+      contentHash: cv.contentHash,
+      contentVersion: cv.contentVersion,
       title: cv.title || null,
       target: null,
       skills: [...(cv.skills || [])],
@@ -218,7 +264,9 @@ export class UserCVsService {
       .map((e: any) =>
         typeof e === 'string'
           ? e
-          : `${e?.schoolName || ''}${e?.major ? ` - ${e.major}` : ''}${e?.description ? `: ${e.description}` : ''}`.trim(),
+          : `${e?.schoolName || ''}${e?.major ? ` - ${e.major}` : ''}${
+              e?.description ? `: ${e.description}` : ''
+            }`.trim(),
       )
       .filter(Boolean);
 
@@ -226,7 +274,9 @@ export class UserCVsService {
       .map((w: any) =>
         typeof w === 'string'
           ? w
-          : `${w?.companyName || ''}${w?.position ? ` - ${w.position}` : ''}${w?.description ? `: ${w.description}` : ''}`.trim(),
+          : `${w?.companyName || ''}${w?.position ? ` - ${w.position}` : ''}${
+              w?.description ? `: ${w.description}` : ''
+            }`.trim(),
       )
       .filter(Boolean);
 
@@ -241,7 +291,9 @@ export class UserCVsService {
         ? `Mục tiêu nghề nghiệp: ${onlineCv.careerObjective}`
         : '',
       skills.length ? `Kỹ năng: ${skills.join(', ')}` : '',
-      experience.length ? `Kinh nghiệm làm việc:\n${experience.join('\n')}` : '',
+      experience.length
+        ? `Kinh nghiệm làm việc:\n${experience.join('\n')}`
+        : '',
       education.length ? `Học vấn:\n${education.join('\n')}` : '',
       certificates.length ? `Chứng chỉ: ${certificates.join(', ')}` : '',
     ]
@@ -272,7 +324,9 @@ export class UserCVsService {
         parsedAt: new Date(),
         updatedBy: { _id: user._id, email: user.email },
       });
-      return (await this.userCVRepo.findOne({ where: { _id: existingCv._id } }))!;
+      return (await this.userCVRepo.findOne({
+        where: { _id: existingCv._id },
+      }))!;
     }
 
     const newCv = this.userCVRepo.create({
@@ -358,7 +412,9 @@ export class UserCVsService {
     }
     const nextUrl = updateUserCVDto.url?.trim();
     const sourceChanged =
-      nextUrl !== undefined && nextUrl !== cv.url && !updateUserCVDto.onlineCvId;
+      nextUrl !== undefined &&
+      nextUrl !== cv.url &&
+      !updateUserCVDto.onlineCvId;
     const updatePayload: Partial<UserCV> = {
       title: updateUserCVDto.title,
       description: updateUserCVDto.description,
@@ -412,7 +468,8 @@ export class UserCVsService {
   // Toggle allow recruiter to search this CV
   async toggleSearchable(id: string, user: IUser, isSearchable?: boolean) {
     const cv = await this.findOne(id, user);
-    const newSearchable = isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
+    const newSearchable =
+      isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
 
     await this.userCVRepo.update(id, {
       isSearchable: newSearchable,

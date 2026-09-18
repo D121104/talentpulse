@@ -111,6 +111,55 @@ services:
     networks:
       - backend-net
 
+  # Opt-in local vector store for the Ollama profile.
+  qdrant:
+    image: qdrant/qdrant@sha256:12364fe851b9f17356fc88189fc06d1b521262e04659ec7345975b00c9246a10 # v1.19.1
+    container_name: qdrant
+    restart: unless-stopped
+    profiles:
+      - ollama
+    ports:
+      - '127.0.0.1:6333:6333'
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - backend-net
+    healthcheck:
+      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q "^HTTP/1.1 200" <&3']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Opt-in local model server. Models persist in the named volume.
+  ollama:
+    image: ollama/ollama@sha256:684d8674b4315fa18f4f0e973a118ec2652ed96f67563277839985175858e0ba # 0.34.0
+    container_name: ollama
+    restart: unless-stopped
+    profiles:
+      - ollama
+    ports:
+      - '127.0.0.1:11435:11434'
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Keep local inference bounded so model swaps cannot freeze the host.
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    mem_limit: 3g
+    cpus: 4.0
+    pids_limit: 256
+    gpus: all
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - backend-net
+    healthcheck:
+      test: ['CMD', 'ollama', 'list']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
 volumes:
   postgres_data:
     driver: local
@@ -123,6 +172,10 @@ volumes:
   grafana_data:
     driver: local
   loki_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  ollama_data:
     driver: local
 
 networks:

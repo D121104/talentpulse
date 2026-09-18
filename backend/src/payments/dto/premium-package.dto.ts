@@ -18,11 +18,14 @@ const transformNumber = ({ value }: { value: any }) => {
   return isNaN(num) ? undefined : num;
 };
 
-const transformNumberWithDefault = (defaultValue: number) => ({ value }: { value: any }) => {
-  if (value === '' || value === null || value === undefined) return defaultValue;
-  const num = Number(value);
-  return isNaN(num) ? defaultValue : num;
-};
+const transformNumberWithDefault =
+  (defaultValue: number) =>
+  ({ value }: { value: any }) => {
+    if (value === '' || value === null || value === undefined)
+      return defaultValue;
+    const num = Number(value);
+    return isNaN(num) ? defaultValue : num;
+  };
 
 export class CreatePremiumPackageDto {
   @IsOptional()

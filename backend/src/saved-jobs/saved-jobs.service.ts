@@ -62,11 +62,7 @@ export class SavedJobsService {
   /**
    * Get list of saved jobs for current user with pagination
    */
-  async getMySavedJobs(
-    userId: string,
-    current = 1,
-    pageSize = 10,
-  ) {
+  async getMySavedJobs(userId: string, current = 1, pageSize = 10) {
     const page = Math.max(1, Number(current) || 1);
     const limit = Math.max(1, Number(pageSize) || 10);
     const skip = (page - 1) * limit;

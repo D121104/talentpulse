@@ -48,7 +48,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (sockets.size === 0) {
           this.userSockets.delete(userId);
         }
-        this.logger.log(`[Chat] User ${userId} disconnected socket ${client.id}`);
+        this.logger.log(
+          `[Chat] User ${userId} disconnected socket ${client.id}`,
+        );
         break;
       }
     }
@@ -63,16 +65,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       this.userSockets.get(userId)!.add(client.id);
       client.join(`user:${userId}`);
-      this.logger.log(`[Chat] Socket ${client.id} explicitly joined user:${userId}`);
+      this.logger.log(
+        `[Chat] Socket ${client.id} explicitly joined user:${userId}`,
+      );
       return { event: 'joined', room: `user:${userId}` };
     }
   }
 
   @SubscribeMessage('join_conversation')
-  handleJoinConversation(
-    client: Socket,
-    payload: { conversationId: string },
-  ) {
+  handleJoinConversation(client: Socket, payload: { conversationId: string }) {
     if (payload?.conversationId) {
       const room = `conversation:${payload.conversationId}`;
       client.join(room);
@@ -82,10 +83,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('leave_conversation')
-  handleLeaveConversation(
-    client: Socket,
-    payload: { conversationId: string },
-  ) {
+  handleLeaveConversation(client: Socket, payload: { conversationId: string }) {
     if (payload?.conversationId) {
       const room = `conversation:${payload.conversationId}`;
       client.leave(room);

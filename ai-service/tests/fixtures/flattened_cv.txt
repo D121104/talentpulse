@@ -1,0 +1,2 @@
+Skills are useful, and education matters in prose; this is not a section.
+SKILLS Python, FastAPI, PostgreSQL, Docker KỸ NĂNG MỀM Communication, teamwork EDUCATION BSc Computer Science, Example University PERSONAL PROJECTS Project Atlas, synthetic dashboard, FastAPI EXPERIENCE Backend Engineer at Example Co (2022-2025) CERTIFICATES AWS Certified Developer

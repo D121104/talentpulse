@@ -19,11 +19,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Environment files
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env*
 *.env
 !*.env.example
 
@@ -61,6 +57,7 @@ scratch/
 
 # Local agent configuration and state
 .kilo/
+skills-lock.json
 
 # Generated Graphify artifacts and cache
 graphify-out/
@@ -74,6 +71,79 @@ plans/
 *.tsbuildinfo
 .eslintcache
 .stylelintcache
+
+# Python / uv / FastAPI development artifacts
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Local databases and runtime state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.pid
+*.pid.lock
+*.seed
+*.sock
+*.retry
+runtime/
+run/
+tmp/
+temp/
+.cache/
+
+# Model, dataset and serialized local artifacts
+*.bin
+*.ckpt
+*.gguf
+*.joblib
+*.onnx
+*.parquet
+*.pickle
+*.pkl
+*.pt
+*.pth
+*.safetensors
+*.npy
+*.npz
+models/
+model_cache/
+
+# Local deployment state and generated bundles
+.aws-sam/
+.terraform/
+*.tfstate
+*.tfstate.*
+.serverless/
+deployment-bundle/
+
+# Secret material and certificate variants
+.secrets/
+.secret/
+secrets/
+*.secret
+*.token
+*.csr
+*.der
+*.jks
+*.keystore
 
 # Certificates and private keys
 *.pem

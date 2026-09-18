@@ -55,26 +55,26 @@ export class AddPremiumPackagesAndUserColumns20260918020000
     `);
 
     await queryRunner.query(`
-      CREATE INDEX IF NOT EXISTS "IDX_premium_packages_plan_billing" 
+      CREATE INDEX IF NOT EXISTS "IDX_premium_packages_plan_billing"
       ON "premium_packages" ("plan_type", "billing_cycle");
     `);
 
     // 3. Add columns to users table
     await queryRunner.query(`
-      ALTER TABLE "users" 
+      ALTER TABLE "users"
       ADD COLUMN IF NOT EXISTS "premiumPackageId" character varying;
     `);
 
     await queryRunner.query(`
-      ALTER TABLE "users" 
+      ALTER TABLE "users"
       ADD COLUMN IF NOT EXISTS "aiQuotaRemaining" integer NOT NULL DEFAULT 0;
     `);
 
     // 4. Seed default packages if table is empty
     await queryRunner.query(`
       INSERT INTO "premium_packages" (
-        "code", "plan_type", "billing_cycle", "name", "description", 
-        "price", "original_price", "duration_days", "ai_quota", "badge", 
+        "code", "plan_type", "billing_cycle", "name", "description",
+        "price", "original_price", "duration_days", "ai_quota", "badge",
         "features", "hot_job_limit", "candidate_search_limit", "is_active", "display_order"
       )
       SELECT * FROM (VALUES
@@ -181,8 +181,8 @@ export class AddPremiumPackagesAndUserColumns20260918020000
           6
         )
       ) AS v (
-        code, plan_type, billing_cycle, name, description, 
-        price, original_price, duration_days, ai_quota, badge, 
+        code, plan_type, billing_cycle, name, description,
+        price, original_price, duration_days, ai_quota, badge,
         features, hot_job_limit, candidate_search_limit, is_active, display_order
       )
       WHERE NOT EXISTS (

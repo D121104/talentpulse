@@ -567,10 +567,7 @@ export class UsersService {
     if (!user) return false;
     if (user.role === Role.ADMIN) return true;
     if (!this.isUserPremium(user)) return false;
-    return (
-      user.premiumPlan === PremiumPlan.HR_PREMIUM ||
-      user.role === Role.HR
-    );
+    return user.premiumPlan === PremiumPlan.HR_PREMIUM || user.role === Role.HR;
   }
 
   /**
@@ -594,7 +591,9 @@ export class UsersService {
   /**
    * Tra cứu gói Premium tương ứng từ cơ sở dữ liệu (premium_packages)
    */
-  async getUserPackage(user: User | IUser | any): Promise<PremiumPackage | null> {
+  async getUserPackage(
+    user: User | IUser | any,
+  ): Promise<PremiumPackage | null> {
     if (!user) return null;
 
     let packageId = user.premiumPackageId;
@@ -659,7 +658,11 @@ export class UsersService {
     if (!this.isHrPremium(user)) return 5;
 
     const pkg = await this.getUserPackage(user);
-    if (pkg && typeof pkg.candidateSearchLimit === 'number' && pkg.candidateSearchLimit > 0) {
+    if (
+      pkg &&
+      typeof pkg.candidateSearchLimit === 'number' &&
+      pkg.candidateSearchLimit > 0
+    ) {
       return pkg.candidateSearchLimit;
     }
 
@@ -720,7 +723,10 @@ export class UsersService {
     if (pkg.code === 'CANDIDATE_ANNUAL' || pkg.billingCycle === 'annual') {
       return 999999;
     }
-    if (pkg.code === 'CANDIDATE_SEMI_ANNUAL' || pkg.billingCycle === 'semi_annual') {
+    if (
+      pkg.code === 'CANDIDATE_SEMI_ANNUAL' ||
+      pkg.billingCycle === 'semi_annual'
+    ) {
       return 20;
     }
     return 5;
@@ -784,7 +790,8 @@ export class UsersService {
           ? 24 * 60 * 60 * 1000
           : 30 * 24 * 60 * 60 * 1000,
         canViewApplicantCount: isCandidate || user?.role === Role.ADMIN,
-        weeklyApplicantCountLimit: await this.getUserCandidateWeeklyApplicantLimit(user),
+        weeklyApplicantCountLimit:
+          await this.getUserCandidateWeeklyApplicantLimit(user),
       },
     };
   }
@@ -864,7 +871,9 @@ export class UsersService {
     }
 
     if (user.role !== Role.USER) {
-      throw new BadRequestException('Tính năng Đẩy Top chỉ dành cho tài khoản Ứng viên (Candidate)');
+      throw new BadRequestException(
+        'Tính năng Đẩy Top chỉ dành cho tài khoản Ứng viên (Candidate)',
+      );
     }
 
     const isPremium = this.isCandidatePremium(user);
@@ -911,7 +920,8 @@ export class UsersService {
     await this.userRepo.save(user);
 
     return {
-      message: '🚀 Đẩy top hồ sơ thành công! Hồ sơ của bạn đã được đưa lên vị trí ưu tiên hàng đầu trong tìm kiếm CV của Nhà Tuyển Dụng.',
+      message:
+        '🚀 Đẩy top hồ sơ thành công! Hồ sơ của bạn đã được đưa lên vị trí ưu tiên hàng đầu trong tìm kiếm CV của Nhà Tuyển Dụng.',
       lastBoostedAt: user.lastBoostedAt,
       boostExpiresAt: user.boostExpiresAt,
       isBoosted: true,

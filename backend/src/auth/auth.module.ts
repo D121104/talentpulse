@@ -14,6 +14,7 @@ import { GoogleStrategy } from './passport/google.strategy';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { RedisModule } from 'src/redis/redis.module';
 import { MailModule } from 'src/mail/mail.module';
+import { requiredSecret } from './required-secret';
 
 @Module({
   imports: [
@@ -25,7 +26,7 @@ import { MailModule } from 'src/mail/mail.module';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
+        secret: requiredSecret(configService, 'JWT_SECRET'),
         signOptions: {
           expiresIn: ms(configService.get<string>('JWT_EXPIRES_IN')) / 1000,
         },
@@ -35,7 +36,7 @@ import { MailModule } from 'src/mail/mail.module';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_REFRESH_SECRET'),
+        secret: requiredSecret(configService, 'JWT_REFRESH_SECRET'),
         signOptions: {
           expiresIn:
             ms(configService.get<string>('JWT_REFRESH_EXPIRES_IN')) / 1000,

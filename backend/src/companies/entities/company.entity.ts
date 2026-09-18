@@ -42,7 +42,12 @@ export class Company {
   @BeforeInsert()
   @BeforeUpdate()
   syncLocation() {
-    if (this.lat != null && this.lon != null && !isNaN(Number(this.lat)) && !isNaN(Number(this.lon))) {
+    if (
+      this.lat != null &&
+      this.lon != null &&
+      !isNaN(Number(this.lat)) &&
+      !isNaN(Number(this.lon))
+    ) {
       this.location = {
         type: 'Point',
         coordinates: [Number(this.lon), Number(this.lat)],

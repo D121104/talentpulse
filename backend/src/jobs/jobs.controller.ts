@@ -77,7 +77,10 @@ export class JobsController {
     @Query('limit') limit?: string,
   ) {
     const parsedSkills = skills
-      ? skills.split(',').map((s) => s.trim()).filter(Boolean)
+      ? skills
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
       : undefined;
     return this.jobsService.searchJobsFromElasticsearch({
       query,
@@ -108,10 +111,7 @@ export class JobsController {
   }
 
   @Get(':id/related')
-  getRelatedJobs(
-    @Param('id') id: string,
-    @Query('limit') limit?: string,
-  ) {
+  getRelatedJobs(@Param('id') id: string, @Query('limit') limit?: string) {
     return this.jobsService.getRelatedJobs(id, limit ? Number(limit) : 6);
   }
 

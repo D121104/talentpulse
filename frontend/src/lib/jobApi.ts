@@ -458,5 +458,3 @@ export async function unfollowCompanyApi(companyId: string, accessToken: string)
     accessToken,
   });
 }
-
-

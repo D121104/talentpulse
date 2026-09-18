@@ -1,12 +1,29 @@
 import { Process, Processor } from '@nestjs/bull';
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job as BullJob } from 'bull';
 import { createHash } from 'crypto';
-import { Repository } from 'typeorm';
-import { AIMatchingService } from 'src/ai-matching/ai-matching.service';
+import { IsNull, Repository } from 'typeorm';
+import {
+  AiServiceClient,
+  AiServiceError,
+} from 'src/ai-matching/ai-service.client';
+import {
+  CvDownloadError,
+  downloadTrustedCv,
+} from 'src/ai-matching/cv-download';
 import { CVParseStatus } from './cv-parse-status';
 import { UserCV } from './entities/usercv.entity';
+
+/** Deterministic integer adapter for the FastAPI contract; local fencing remains UUID-based. */
+export function aiContentVersion(contentVersion: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < contentVersion.length; index += 1) {
+    hash = Math.imul(hash ^ contentVersion.charCodeAt(index), 16777619);
+  }
+  return ((hash >>> 0) % 2147483647) + 1;
+}
 
 export interface UserCvParseJobData {
   cvId: string;
@@ -20,13 +37,31 @@ export function isCurrentParseJob(
   data: Pick<UserCvParseJobData, 'expectedUrl' | 'contentVersion'>,
 ): boolean {
   return Boolean(
-      !cv.isDeleted &&
+    !cv.isDeleted &&
       !cv.deletedAt &&
       data.expectedUrl &&
       data.contentVersion &&
       cv.url === data.expectedUrl &&
       cv.contentVersion === data.contentVersion,
   );
+}
+
+function fileTypeForCv(cv: Pick<UserCV, 'fileType'>): 'pdf' | 'docx' {
+  if (cv.fileType === 'pdf' || cv.fileType === 'docx') return cv.fileType;
+  throw new Error('UNSUPPORTED_MEDIA_TYPE');
+}
+
+function filenameForCv(
+  url: string,
+  fileType: 'pdf' | 'docx',
+  cvId: string,
+): string {
+  const candidate = url.split('?')[0].split('#')[0].split('/').pop() || '';
+  const filename =
+    candidate.length > 0 && candidate.toLowerCase().endsWith(`.${fileType}`)
+      ? candidate
+      : `${cvId}.${fileType}`;
+  return filename.slice(0, 255);
 }
 
 @Injectable()
@@ -37,7 +72,8 @@ export class UserCvParseProcessor {
   constructor(
     @InjectRepository(UserCV)
     private readonly userCvRepo: Repository<UserCV>,
-    private readonly aiMatchingService: AIMatchingService,
+    private readonly aiServiceClient: AiServiceClient,
+    private readonly configService: ConfigService,
   ) {}
 
   @Process('parse-cv')
@@ -54,9 +90,9 @@ export class UserCvParseProcessor {
       {
         _id: cvId,
         isDeleted: false,
-        deletedAt: null,
-        url: job.data.expectedUrl,
-        contentVersion: job.data.contentVersion,
+        deletedAt: IsNull(),
+        url: expectedUrl,
+        contentVersion,
       },
       {
         parseStatus: CVParseStatus.PROCESSING,
@@ -70,14 +106,33 @@ export class UserCvParseProcessor {
     }
 
     try {
-       const parsedText = (
-         await this.aiMatchingService.extractTextFromFile(expectedUrl)
-       ).trim();
-      if (parsedText.length < 10) {
-        throw new Error('PARSE_EMPTY_CONTENT');
-      }
+      const fileType = fileTypeForCv(cv);
+      const content = await downloadTrustedCv(
+        expectedUrl,
+        fileType,
+        this.configService,
+      );
+      const downloadedHash = createHash('sha256').update(content).digest('hex');
+      const response = await this.aiServiceClient.parseCv({
+        cv_id: cvId,
+        filename: filenameForCv(expectedUrl, fileType, cvId),
+        media_type:
+          fileType === 'pdf'
+            ? 'application/pdf'
+            : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        content_base64: content.toString('base64'),
+        content_version: aiContentVersion(contentVersion),
+      });
 
-      const sections = this.aiMatchingService.extractSectionsFromText(parsedText);
+      if (response.content_version !== aiContentVersion(contentVersion)) {
+        throw new Error('AI_CONTENT_VERSION_MISMATCH');
+      }
+      if (response.content_sha256 !== downloadedHash) {
+        throw new Error('AI_CONTENT_HASH_MISMATCH');
+      }
+      const parsedText = response.extracted_text.trim();
+      if (parsedText.length < 10) throw new Error('PARSE_EMPTY_CONTENT');
+
       const currentCV = await this.userCvRepo.findOne({ where: { _id: cvId } });
       if (!currentCV || !isCurrentParseJob(currentCV, job.data)) {
         this.logger.warn(`Skipping stale CV parse result: ${cvId}`);
@@ -88,17 +143,19 @@ export class UserCvParseProcessor {
         {
           _id: cvId,
           isDeleted: false,
-          deletedAt: null,
-          url: job.data.expectedUrl,
-          contentVersion: job.data.contentVersion,
+          deletedAt: IsNull(),
+          url: expectedUrl,
+          contentVersion,
         },
         {
           parsedText,
-          skills: sections.skills,
-          education: sections.education,
-          experience: sections.experience,
-          certificates: sections.certificates,
-          contentHash: createHash('sha256').update(parsedText, 'utf8').digest('hex'),
+          contentHash: response.content_sha256,
+          skills: response.skills ?? [],
+          education: response.education ?? [],
+          experience: response.experience ?? [],
+          certificates: response.certificates ?? [],
+          warnings: response.warnings ?? [],
+          parserVersion: response.parser_version,
           parsedAt: new Date(),
           parseErrorCode: null,
           parseStatus: CVParseStatus.READY,
@@ -110,16 +167,21 @@ export class UserCvParseProcessor {
       }
       this.logger.log(`CV parse completed: ${cvId}`);
     } catch (error) {
-      const errorCode = error instanceof Error ? error.message : 'PARSE_FAILED';
+      const errorCode =
+        error instanceof AiServiceError || error instanceof CvDownloadError
+          ? error.code
+          : error instanceof Error
+          ? error.message
+          : 'PARSE_FAILED';
       const currentCV = await this.userCvRepo.findOne({ where: { _id: cvId } });
       if (currentCV && isCurrentParseJob(currentCV, job.data)) {
         const failedUpdate = await this.userCvRepo.update(
           {
             _id: cvId,
             isDeleted: false,
-            deletedAt: null,
-            url: job.data.expectedUrl,
-            contentVersion: job.data.contentVersion,
+            deletedAt: IsNull(),
+            url: expectedUrl,
+            contentVersion,
           },
           {
             parseStatus: CVParseStatus.FAILED,
@@ -128,7 +190,9 @@ export class UserCvParseProcessor {
           },
         );
         if (failedUpdate.affected === 0) {
-          this.logger.warn(`CV changed before FAILED status was stored: ${cvId}`);
+          this.logger.warn(
+            `CV changed before FAILED status was stored: ${cvId}`,
+          );
           return;
         }
       } else {

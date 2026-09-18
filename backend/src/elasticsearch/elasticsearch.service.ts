@@ -77,7 +77,9 @@ export class ElasticsearchService implements OnModuleInit {
       });
 
       if (!exists) {
-        this.logger.log(`Creating Elasticsearch index "${TALENTPULSE_JOBS_INDEX}"...`);
+        this.logger.log(
+          `Creating Elasticsearch index "${TALENTPULSE_JOBS_INDEX}"...`,
+        );
         await this.client.indices.create({
           index: TALENTPULSE_JOBS_INDEX,
           settings: {
@@ -140,7 +142,9 @@ export class ElasticsearchService implements OnModuleInit {
               salary: { type: 'long' },
               location: {
                 type: 'keyword',
-                fields: { text: { type: 'text', analyzer: 'vi_text_analyzer' } },
+                fields: {
+                  text: { type: 'text', analyzer: 'vi_text_analyzer' },
+                },
               },
               level: { type: 'keyword' },
               isHot: { type: 'boolean' },
@@ -157,10 +161,14 @@ export class ElasticsearchService implements OnModuleInit {
             },
           },
         });
-        this.logger.log(`Elasticsearch index "${TALENTPULSE_JOBS_INDEX}" created successfully`);
+        this.logger.log(
+          `Elasticsearch index "${TALENTPULSE_JOBS_INDEX}" created successfully`,
+        );
       }
     } catch (error) {
-      this.logger.error(`Failed to ensure Elasticsearch index: ${error.message}`);
+      this.logger.error(
+        `Failed to ensure Elasticsearch index: ${error.message}`,
+      );
       throw error;
     }
   }
@@ -243,7 +251,9 @@ export class ElasticsearchService implements OnModuleInit {
       });
     } catch (err) {
       if (err.meta?.statusCode !== 404) {
-        this.logger.warn(`Failed to delete job ${jobId} from ES: ${err.message}`);
+        this.logger.warn(
+          `Failed to delete job ${jobId} from ES: ${err.message}`,
+        );
       }
     }
   }
@@ -329,7 +339,9 @@ export class ElasticsearchService implements OnModuleInit {
       // 1. Personalized Mode with Candidate Skills:
       // Relevance Score = Skill exact match (6.0) + Title text match (3.0) + Description text match (1.0)
       // + Controlled Hot Boost (2.5) + Freshness decay
-      const candidateSkillsString = candidateCandidateSkillsToQuery(normalizedCandidateSkills);
+      const candidateSkillsString = candidateCandidateSkillsToQuery(
+        normalizedCandidateSkills,
+      );
 
       query = {
         function_score: {
@@ -371,7 +383,13 @@ export class ElasticsearchService implements OnModuleInit {
                       {
                         bool: {
                           should: [
-                            { bool: { must_not: { exists: { field: 'boostExpiresAt' } } } },
+                            {
+                              bool: {
+                                must_not: {
+                                  exists: { field: 'boostExpiresAt' },
+                                },
+                              },
+                            },
                             { range: { boostExpiresAt: { gt: nowIso } } },
                           ],
                         },
@@ -427,7 +445,13 @@ export class ElasticsearchService implements OnModuleInit {
                       {
                         bool: {
                           should: [
-                            { bool: { must_not: { exists: { field: 'boostExpiresAt' } } } },
+                            {
+                              bool: {
+                                must_not: {
+                                  exists: { field: 'boostExpiresAt' },
+                                },
+                              },
+                            },
                             { range: { boostExpiresAt: { gt: nowIso } } },
                           ],
                         },
@@ -641,28 +665,59 @@ export class ElasticsearchService implements OnModuleInit {
 
         if (/hồ chí minh|hcm|hcmc/i.test(cleanSubLoc)) {
           locShould.push(
-            { match_phrase: { 'location.text': { query: 'Hồ Chí Minh', boost: 3.0 } } },
-            { match_phrase: { 'location.text': { query: 'TP. Hồ Chí Minh', boost: 3.0 } } },
-            { match_phrase: { 'location.text': { query: 'TP Hồ Chí Minh', boost: 3.0 } } },
-            { match_phrase: { 'location.text': { query: 'TPHCM', boost: 2.0 } } },
+            {
+              match_phrase: {
+                'location.text': { query: 'Hồ Chí Minh', boost: 3.0 },
+              },
+            },
+            {
+              match_phrase: {
+                'location.text': { query: 'TP. Hồ Chí Minh', boost: 3.0 },
+              },
+            },
+            {
+              match_phrase: {
+                'location.text': { query: 'TP Hồ Chí Minh', boost: 3.0 },
+              },
+            },
+            {
+              match_phrase: { 'location.text': { query: 'TPHCM', boost: 2.0 } },
+            },
           );
         } else if (/hà nội|hn/i.test(cleanSubLoc)) {
           locShould.push(
-            { match_phrase: { 'location.text': { query: 'Hà Nội', boost: 3.0 } } },
+            {
+              match_phrase: {
+                'location.text': { query: 'Hà Nội', boost: 3.0 },
+              },
+            },
             { match_phrase: { 'location.text': { query: 'HN', boost: 2.0 } } },
           );
         } else {
           locShould.push(
-            { match_phrase: { 'location.text': { query: cleanSubLoc, boost: 3.0 } } },
-            { match: { 'location.text': { query: cleanSubLoc, operator: 'and' } } },
+            {
+              match_phrase: {
+                'location.text': { query: cleanSubLoc, boost: 3.0 },
+              },
+            },
+            {
+              match: {
+                'location.text': { query: cleanSubLoc, operator: 'and' },
+              },
+            },
           );
         }
 
         // If sub-location has hyphen like "Hà Nội - Cầu Giấy", match district as well
         if (cleanSubLoc.includes('-')) {
-          const parts = cleanSubLoc.split('-').map((p) => p.trim()).filter(Boolean);
+          const parts = cleanSubLoc
+            .split('-')
+            .map((p) => p.trim())
+            .filter(Boolean);
           for (const part of parts) {
-            locShould.push({ match_phrase: { 'location.text': { query: part, boost: 2.5 } } });
+            locShould.push({
+              match_phrase: { 'location.text': { query: part, boost: 2.5 } },
+            });
           }
         }
       }
@@ -804,7 +859,11 @@ export class ElasticsearchService implements OnModuleInit {
               {
                 bool: {
                   should: [
-                    { bool: { must_not: { exists: { field: 'boostExpiresAt' } } } },
+                    {
+                      bool: {
+                        must_not: { exists: { field: 'boostExpiresAt' } },
+                      },
+                    },
                     { range: { boostExpiresAt: { gt: nowIso } } },
                   ],
                 },
@@ -926,10 +985,7 @@ export class ElasticsearchService implements OnModuleInit {
   /**
    * Lấy các việc làm tương tự / liên quan dựa trên skills, chức danh hoặc công ty
    */
-  async getRelatedJobs(
-    jobId: string,
-    limit = 6,
-  ): Promise<any[]> {
+  async getRelatedJobs(jobId: string, limit = 6): Promise<any[]> {
     try {
       const nowIso = new Date().toISOString();
       let sourceJob: any = null;
@@ -967,9 +1023,7 @@ export class ElasticsearchService implements OnModuleInit {
         },
       ];
 
-      const mustNot: any[] = [
-        { ids: { values: [jobId] } },
-      ];
+      const mustNot: any[] = [{ ids: { values: [jobId] } }];
 
       const should: any[] = [];
 
@@ -1070,12 +1124,18 @@ export class ElasticsearchService implements OnModuleInit {
 
       for (const hit of hits) {
         const source = hit._source as any;
-        if (source?.name && source.name.toLowerCase().includes(q.toLowerCase())) {
+        if (
+          source?.name &&
+          source.name.toLowerCase().includes(q.toLowerCase())
+        ) {
           suggestions.add(source.name);
         }
         if (Array.isArray(source?.skills)) {
           for (const s of source.skills) {
-            if (typeof s === 'string' && s.toLowerCase().includes(q.toLowerCase())) {
+            if (
+              typeof s === 'string' &&
+              s.toLowerCase().includes(q.toLowerCase())
+            ) {
               suggestions.add(s);
             }
           }

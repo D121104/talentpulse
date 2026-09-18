@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsUUID } from 'class-validator';
 
 export class CreateApplicationDto {
   @IsNotEmpty({ message: 'Vui lòng chọn CV!' })
@@ -15,4 +15,8 @@ export class CreateApplicationDto {
 
   @IsOptional()
   coverLetter?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  aiRankingConsent?: boolean;
 }

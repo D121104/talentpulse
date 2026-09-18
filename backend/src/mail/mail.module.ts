@@ -29,7 +29,10 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
           },
         },
         defaults: {
-          from: `"TalentPulse" <${configService.get<string>('EMAIL_AUTH_USER') || 'no-reply@talentpulse.com'}>`,
+          from: `"TalentPulse" <${
+            configService.get<string>('EMAIL_AUTH_USER') ||
+            'no-reply@talentpulse.com'
+          }>`,
         },
         template: (() => {
           const compiledDir = join(__dirname, 'templates');

@@ -27,7 +27,9 @@ export class AdminService {
    */
   async getDashboardStats() {
     // 1. User metrics
-    const totalUsers = await this.userRepo.count({ where: { isDeleted: false } });
+    const totalUsers = await this.userRepo.count({
+      where: { isDeleted: false },
+    });
     const totalCandidates = await this.userRepo.count({
       where: { role: Role.USER, isDeleted: false },
     });

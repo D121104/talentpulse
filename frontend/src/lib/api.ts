@@ -3,21 +3,35 @@ import type {
   LoginInput,
   RegisterHrInput,
   RegisterInput,
-} from '../auth/types';
+} from "../auth/types";
 
-const API_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1').replace(/\/$/, '');
+const LOCAL_API_URL = (
+  import.meta.env.VITE_API_URL ?? "http://localhost:8000/api/v1"
+).replace(/\/$/, "");
+
+function isLocalBrowser() {
+  return (
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1")
+  );
+}
+
+/** Production traffic stays same-origin so cookies and CloudFront routing remain aligned. */
+export const API_URL = isLocalBrowser() ? LOCAL_API_URL : "/api/v1";
 
 export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code: string | null = null,
   ) {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
   }
 }
 
-type RequestOptions = Omit<RequestInit, 'body'> & {
+type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
   accessToken?: string | null;
   retryAfterRefresh?: boolean;
@@ -25,7 +39,9 @@ type RequestOptions = Omit<RequestInit, 'body'> & {
 
 let refreshHandler: (() => Promise<string | null>) | null = null;
 
-export function configureRefreshHandler(handler: (() => Promise<string | null>) | null) {
+export function configureRefreshHandler(
+  handler: (() => Promise<string | null>) | null,
+) {
   refreshHandler = handler;
 }
 
@@ -36,23 +52,40 @@ async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const message =
       (Array.isArray(payload?.message)
-        ? payload.message.join(', ')
+        ? payload.message.join(", ")
         : payload?.message) ??
       data?.message ??
-      'Đã xảy ra lỗi. Vui lòng thử lại.';
-    throw new ApiError(message, response.status);
+      "Đã xảy ra lỗi. Vui lòng thử lại.";
+    throw new ApiError(
+      message,
+      response.status,
+      typeof payload?.code === "string"
+        ? payload.code
+        : typeof data?.code === "string"
+          ? data.code
+          : null,
+    );
   }
 
   return data as T;
 }
 
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { body, accessToken, retryAfterRefresh = true, headers, ...requestOptions } = options;
+export async function apiRequest<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  const {
+    body,
+    accessToken,
+    retryAfterRefresh = true,
+    headers,
+    ...requestOptions
+  } = options;
   const response = await fetch(`${API_URL}${path}`, {
     ...requestOptions,
-    credentials: 'include',
+    credentials: "include",
     headers: {
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(body ? { "Content-Type": "application/json" } : {}),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...headers,
     },
@@ -75,29 +108,45 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
 export const authApi = {
   login: (input: LoginInput) =>
-    apiRequest<AuthSession>('/auth/login', { method: 'POST', body: input }),
+    apiRequest<AuthSession>("/auth/login", { method: "POST", body: input }),
   register: (input: RegisterInput) =>
-    apiRequest<{ user: AuthSession['user'] }>('/auth/register', { method: 'POST', body: input }),
-  registerHr: (input: RegisterHrInput) =>
-    apiRequest<{ user: AuthSession['user'] }>('/auth/hr/register', {
-      method: 'POST',
+    apiRequest<{ user: AuthSession["user"] }>("/auth/register", {
+      method: "POST",
       body: input,
     }),
-  refresh: () => apiRequest<AuthSession>('/auth/refresh', { method: 'POST', retryAfterRefresh: false }),
-  account: (accessToken: string) =>
-    apiRequest<{ user: AuthSession['user'] }>('/auth/account', { accessToken }),
-  logout: (accessToken: string) =>
-    apiRequest<{ message: string }>('/auth/logout', { method: 'POST', accessToken }),
-  exchangeGoogleCode: (code: string) =>
-    apiRequest<AuthSession>('/auth/google/exchange', { method: 'POST', body: { code } }),
-  verifyAccount: (token: string) =>
-    apiRequest<{ message: string; user: AuthSession['user'] }>('/auth/verify-account', {
-      method: 'POST',
-      body: { token },
+  registerHr: (input: RegisterHrInput) =>
+    apiRequest<{ user: AuthSession["user"] }>("/auth/hr/register", {
+      method: "POST",
+      body: input,
     }),
+  refresh: () =>
+    apiRequest<AuthSession>("/auth/refresh", {
+      method: "POST",
+      retryAfterRefresh: false,
+    }),
+  account: (accessToken: string) =>
+    apiRequest<{ user: AuthSession["user"] }>("/auth/account", { accessToken }),
+  logout: (accessToken: string) =>
+    apiRequest<{ message: string }>("/auth/logout", {
+      method: "POST",
+      accessToken,
+    }),
+  exchangeGoogleCode: (code: string) =>
+    apiRequest<AuthSession>("/auth/google/exchange", {
+      method: "POST",
+      body: { code },
+    }),
+  verifyAccount: (token: string) =>
+    apiRequest<{ message: string; user: AuthSession["user"] }>(
+      "/auth/verify-account",
+      {
+        method: "POST",
+        body: { token },
+      },
+    ),
   resendVerification: (data: { email?: string; userId?: string }) =>
-    apiRequest<{ message: string }>('/auth/resend-verification', {
-      method: 'POST',
+    apiRequest<{ message: string }>("/auth/resend-verification", {
+      method: "POST",
       body: data,
     }),
   forgotPassword: (email: string) =>

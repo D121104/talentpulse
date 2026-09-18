@@ -13,6 +13,8 @@ import { JobsModule } from 'src/jobs/jobs.module';
 import { MailModule } from 'src/mail/mail.module';
 import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 import { createNoopQueueProvider } from 'src/queues/queue-runtime';
+import { ApplicationAiConsentEvent } from './entities/application-ai-consent-event.entity';
+import { Company } from 'src/companies/entities/company.entity';
 
 import { OnlineCVsModule } from 'src/online-cvs/online-cvs.module';
 
@@ -20,7 +22,12 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Application, CVMatchResult]),
+    TypeOrmModule.forFeature([
+      Application,
+      CVMatchResult,
+      ApplicationAiConsentEvent,
+      Company,
+    ]),
     ...(queueWorkersEnabled
       ? [BullModule.registerQueue({ name: 'mail-queue' })]
       : []),

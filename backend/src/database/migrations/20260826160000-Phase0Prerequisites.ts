@@ -81,9 +81,17 @@ export class Phase0Prerequisites20260826160000 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE IF EXISTS "ai_cv_consent_events"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "ai_cv_consents"`);
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_user_cvs_parse_status"`);
-    await queryRunner.query(`ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "parseErrorCode"`);
-    await queryRunner.query(`ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "parsedAt"`);
-    await queryRunner.query(`ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "contentHash"`);
-    await queryRunner.query(`ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "parseStatus"`);
+    await queryRunner.query(
+      `ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "parseErrorCode"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "parsedAt"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "contentHash"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "user_cvs" DROP COLUMN IF EXISTS "parseStatus"`,
+    );
   }
 }

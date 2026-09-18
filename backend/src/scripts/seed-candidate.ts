@@ -34,7 +34,9 @@ async function runCandidateSeed() {
   const userCvRepo = AppDataSource.getRepository(UserCV);
   const packageRepo = AppDataSource.getRepository(PremiumPackage);
 
-  const candPackage = await packageRepo.findOne({ where: { code: 'CANDIDATE_ANNUAL', isDeleted: false } });
+  const candPackage = await packageRepo.findOne({
+    where: { code: 'CANDIDATE_ANNUAL', isDeleted: false },
+  });
 
   const hashedPassword = bcrypt.hashSync('12345678', bcrypt.genSaltSync(10));
   const oneYearLater = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
@@ -76,7 +78,9 @@ async function runCandidateSeed() {
   } else {
     Object.assign(candidate, candidateData);
     candidate = await userRepo.save(candidate);
-    console.log(`✓ Đã cập nhật 1 Năm Premium cho tài khoản: ${candidate.email}`);
+    console.log(
+      `✓ Đã cập nhật 1 Năm Premium cho tài khoản: ${candidate.email}`,
+    );
   }
 
   // 2. SEED ONLINE CVS CHO ỨNG VIÊN
@@ -107,7 +111,8 @@ async function runCandidateSeed() {
         major: 'Khoa học Máy tính (Chương trình Tiên tiến)',
         startDate: '09/2019',
         endDate: '06/2023',
-        description: 'Tốt nghiệp loại Xuất sắc (GPA: 3.8/4.0). Đạt giải Nhì Olympic Tin học Sinh viên Toàn quốc.',
+        description:
+          'Tốt nghiệp loại Xuất sắc (GPA: 3.8/4.0). Đạt giải Nhì Olympic Tin học Sinh viên Toàn quốc.',
       },
     ],
     workExperience: [
@@ -129,10 +134,24 @@ async function runCandidateSeed() {
       },
     ],
     skills: [
-      { name: 'Ngôn ngữ', description: 'TypeScript, JavaScript, Python, SQL, HTML5/CSS3' },
-      { name: 'Frontend', description: 'React.js, Next.js, TailwindCSS, Framer Motion, Redux Toolkit' },
-      { name: 'Backend & DB', description: 'NestJS, Express, PostgreSQL, TypeORM, Redis, Elasticsearch' },
-      { name: 'DevOps & Tooling', description: 'Docker, Docker Compose, Git, CI/CD, Kafka, PayOS' },
+      {
+        name: 'Ngôn ngữ',
+        description: 'TypeScript, JavaScript, Python, SQL, HTML5/CSS3',
+      },
+      {
+        name: 'Frontend',
+        description:
+          'React.js, Next.js, TailwindCSS, Framer Motion, Redux Toolkit',
+      },
+      {
+        name: 'Backend & DB',
+        description:
+          'NestJS, Express, PostgreSQL, TypeORM, Redis, Elasticsearch',
+      },
+      {
+        name: 'DevOps & Tooling',
+        description: 'Docker, Docker Compose, Git, CI/CD, Kafka, PayOS',
+      },
     ],
     activities: [
       {
@@ -140,16 +159,26 @@ async function runCandidateSeed() {
         position: 'Core Contributor & Speaker',
         startDate: '2023',
         endDate: '2024',
-        description: 'Diễn giả chia sẻ chuyên đề "Xây dựng hệ thống SaaS chịu tải cao với NestJS và Redis" thu hút hơn 500 người tham dự.',
+        description:
+          'Diễn giả chia sẻ chuyên đề "Xây dựng hệ thống SaaS chịu tải cao với NestJS và Redis" thu hút hơn 500 người tham dự.',
       },
     ],
     certificates: [
-      { name: 'AWS Certified Solutions Architect – Associate (SAA-C03)', date: '10/2023' },
-      { name: 'IELTS Academic 7.5 (Listening: 8.0, Reading: 8.0)', date: '04/2023' },
+      {
+        name: 'AWS Certified Solutions Architect – Associate (SAA-C03)',
+        date: '10/2023',
+      },
+      {
+        name: 'IELTS Academic 7.5 (Listening: 8.0, Reading: 8.0)',
+        date: '04/2023',
+      },
     ],
     awards: [
       { name: 'Giải Nhì Olympic Tin học Sinh viên Toàn quốc', date: '2022' },
-      { name: 'Best Innovation Developer of the Year tại TalentPulse', date: '2024' },
+      {
+        name: 'Best Innovation Developer of the Year tại TalentPulse',
+        date: '2024',
+      },
     ],
     createdBy: { _id: candidate._id, email: candidate.email },
   });
@@ -187,21 +216,36 @@ async function runCandidateSeed() {
         position: 'AI Engineer',
         startDate: '2023',
         endDate: 'Hiện tại',
-        description: 'Nghiên cứu và tinh chỉnh các mô hình ONNX Transformers phục vụ bài toán so khớp văn bản thời gian thực.',
+        description:
+          'Nghiên cứu và tinh chỉnh các mô hình ONNX Transformers phục vụ bài toán so khớp văn bản thời gian thực.',
       },
     ],
     skills: [
-      { name: 'AI / ML', description: 'Transformers, ONNX Runtime, HuggingFace, Vector Embeddings, Cosine Matching' },
-      { name: 'Web Stack', description: 'NestJS, React, TypeScript, PostgreSQL' },
+      {
+        name: 'AI / ML',
+        description:
+          'Transformers, ONNX Runtime, HuggingFace, Vector Embeddings, Cosine Matching',
+      },
+      {
+        name: 'Web Stack',
+        description: 'NestJS, React, TypeScript, PostgreSQL',
+      },
     ],
     activities: [],
-    certificates: [{ name: 'DeepLearning.AI TensorFlow Developer Professional Certificate', date: '2023' }],
+    certificates: [
+      {
+        name: 'DeepLearning.AI TensorFlow Developer Professional Certificate',
+        date: '2023',
+      },
+    ],
     awards: [],
     createdBy: { _id: candidate._id, email: candidate.email },
   });
 
   await onlineCvRepo.save([cv1, cv2]);
-  console.log('✓ Đã tạo 2 CV Online chuẩn mẫu cho Ứng viên (CV 1 là CV Chính ⭐)');
+  console.log(
+    '✓ Đã tạo 2 CV Online chuẩn mẫu cho Ứng viên (CV 1 là CV Chính ⭐)',
+  );
 
   // 3. SEED UPLOADED CV (PDF)
   await userCvRepo.delete({ userId: candidate._id });
@@ -225,7 +269,11 @@ async function runCandidateSeed() {
   console.log(`• Email       : \x1b[36m${candidate.email}\x1b[0m`);
   console.log(`• Mật khẩu    : \x1b[33m12345678\x1b[0m`);
   console.log(`• Vai trò     : \x1b[32mUSER (Ứng viên)\x1b[0m`);
-  console.log(`• Cấp tài khoản: \x1b[35m👑 CANDIDATE PREMIUM (Thời hạn 1 Năm đến ${oneYearLater.toLocaleDateString('vi-VN')})\x1b[0m`);
+  console.log(
+    `• Cấp tài khoản: \x1b[35m👑 CANDIDATE PREMIUM (Thời hạn 1 Năm đến ${oneYearLater.toLocaleDateString(
+      'vi-VN',
+    )})\x1b[0m`,
+  );
   console.log(`• Trạng thái  : \x1b[32mĐã Xác Thực (isVerified = true)\x1b[0m`);
   console.log('======================================================\n');
 

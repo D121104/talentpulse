@@ -39,7 +39,9 @@ export class NotificationsGateway
       client.join(`user:${userId}`);
       this.logger.log(`User ${userId} connected with socket ${client.id}`);
     } else {
-      this.logger.log(`Socket client ${client.id} connected without initial userId`);
+      this.logger.log(
+        `Socket client ${client.id} connected without initial userId`,
+      );
     }
   }
 
@@ -66,7 +68,9 @@ export class NotificationsGateway
       this.userSockets.get(userId)!.add(client.id);
       const room = `user:${userId}`;
       client.join(room);
-      this.logger.log(`User ${userId} explicitly joined room ${room} on socket ${client.id}`);
+      this.logger.log(
+        `User ${userId} explicitly joined room ${room} on socket ${client.id}`,
+      );
       return { event: 'joined', room };
     }
   }
@@ -74,7 +78,9 @@ export class NotificationsGateway
   // Send event to all sockets and room of a user (supports multi-device)
   sendToUser(userId: string, event: string, data: any) {
     const room = `user:${userId}`;
-    this.logger.log(`Emitting event "${event}" to user ${userId} (room: ${room})`);
+    this.logger.log(
+      `Emitting event "${event}" to user ${userId} (room: ${room})`,
+    );
 
     // Emit to user room (reaches all sockets/tabs joined for this user)
     this.server.to(room).emit(event, data);

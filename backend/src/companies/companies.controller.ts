@@ -57,7 +57,6 @@ export class CompaniesController {
     return this.companiesService.findOne(id);
   }
 
-
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.HR)
   @Patch(':id')

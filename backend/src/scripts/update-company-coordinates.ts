@@ -35,7 +35,9 @@ async function run() {
       company.lon = item.lon;
       company.website = item.website;
       await companyRepo.save(company);
-      console.log(`Updated coordinates for ${item.name}: lat=${item.lat}, lon=${item.lon}`);
+      console.log(
+        `Updated coordinates for ${item.name}: lat=${item.lat}, lon=${item.lon}`,
+      );
     } else {
       console.log(`Company not found: ${item.name}`);
     }

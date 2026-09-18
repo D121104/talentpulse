@@ -59,7 +59,8 @@ export class PremiumPackage {
     nullable: true,
     transformer: {
       to: (val?: number | null) => val,
-      from: (val?: string | number | null) => (val != null ? Number(val) : null),
+      from: (val?: string | number | null) =>
+        val != null ? Number(val) : null,
     },
   })
   originalPrice: number | null;

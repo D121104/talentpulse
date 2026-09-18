@@ -63,7 +63,7 @@ export class SubscribersService {
 
   // Create or update a subscription. Handles both existing and new skill IDs/names.
   async createOrUpdate(createSubscriberDto: CreateSubscriberDto, user: IUser) {
-    let skillEntities: Skill[] = [];
+    const skillEntities: Skill[] = [];
 
     const isUuid = (val: string) =>
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(

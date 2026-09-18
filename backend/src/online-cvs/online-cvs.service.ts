@@ -23,6 +23,169 @@ import { RedisService } from 'src/redis/redis.service';
 // Dynamic import for puppeteer
 let puppeteer: any;
 
+const MAX_PDF_HTML_LENGTH = 500_000;
+const ALLOWED_PDF_TAGS = new Set([
+  'html',
+  'head',
+  'body',
+  'meta',
+  'title',
+  'style',
+  'div',
+  'span',
+  'p',
+  'br',
+  'strong',
+  'b',
+  'em',
+  'i',
+  'u',
+  'small',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'li',
+  'section',
+  'article',
+  'header',
+  'footer',
+  'table',
+  'thead',
+  'tbody',
+  'tr',
+  'th',
+  'td',
+  'img',
+  'a',
+]);
+const VOID_PDF_TAGS = new Set([
+  'area',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'meta',
+  'source',
+  'track',
+  'wbr',
+]);
+
+export function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    return entities[character];
+  });
+}
+
+function sanitizeCss(css: string): string {
+  return css
+    .replace(/@import[^;]+;?/gi, '')
+    .replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (_match, quote, url) => {
+      return /^(?:data:image\/(?:png|jpeg|gif|webp);|blob:)/i.test(
+        String(url).trim(),
+      )
+        ? `url(${quote}${url}${quote})`
+        : 'none';
+    })
+    .replace(/(?:expression|behavior|-moz-binding)\s*:/gi, 'blocked:');
+}
+
+function sanitizePdfAttributes(attributes: string): string {
+  const safeAttributes: string[] = [];
+  const attributePattern =
+    /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = attributePattern.exec(attributes))) {
+    const name = match[1].toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4] ?? '';
+    if (
+      name.startsWith('on') ||
+      name === 'srcdoc' ||
+      name === 'formaction' ||
+      (name === 'style' &&
+        /(?:url\s*\(|expression|behavior|-moz-binding)/i.test(value))
+    ) {
+      continue;
+    }
+
+    if (name === 'style') {
+      safeAttributes.push(`style="${escapeHtml(sanitizeCss(value))}"`);
+      continue;
+    }
+    if (
+      !['class', 'id', 'title', 'alt', 'width', 'height', 'role'].includes(
+        name,
+      ) &&
+      !name.startsWith('aria-') &&
+      !name.startsWith('data-') &&
+      name !== 'href' &&
+      name !== 'src'
+    ) {
+      continue;
+    }
+    if (name === 'href' && !/^(?:#|mailto:)/i.test(value.trim())) continue;
+    if (
+      name === 'src' &&
+      !/^(?:data:image\/(?:png|jpeg|gif|webp);|blob:)/i.test(value.trim())
+    )
+      continue;
+    safeAttributes.push(`${name}="${escapeHtml(value)}"`);
+  }
+
+  return safeAttributes.length ? ` ${safeAttributes.join(' ')}` : '';
+}
+
+/** Remove executable markup and all non-local resource references before Chromium sees user HTML. */
+export function sanitizePdfHtml(input: string): string {
+  const bounded = input.slice(0, MAX_PDF_HTML_LENGTH);
+  const withoutDangerousBlocks = bounded
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(
+      /<\s*(?:script|iframe|object|embed|base|form|video|audio|source|link|frame|frameset)\b[^>]*>[\s\S]*?(?:<\s*\/\s*(?:script|iframe|object|embed|base|form|video|audio|source|link|frame|frameset)\s*>|$)/gi,
+      '',
+    )
+    .replace(
+      /<\s*(?:script|iframe|object|embed|base|form|video|audio|source|link|frame|frameset)\b[^>]*\/?\s*>/gi,
+      '',
+    );
+
+  const withoutRemoteCss = withoutDangerousBlocks.replace(
+    /<\s*style\b[^>]*>([\s\S]*?)<\s*\/\s*style\s*>/gi,
+    (_full, css) => `<style>${sanitizeCss(String(css))}</style>`,
+  );
+
+  return withoutRemoteCss.replace(
+    /<\s*(\/?)([a-z0-9:-]+)([^>]*)>/gi,
+    (full, closing, rawTag, attributes) => {
+      const tag = String(rawTag).toLowerCase();
+      if (!ALLOWED_PDF_TAGS.has(tag)) return '';
+      if (closing) return `</${tag}>`;
+      if (tag === 'style') return `<style${sanitizePdfAttributes(attributes)}>`;
+      const suffix =
+        VOID_PDF_TAGS.has(tag) || /\/\s*$/.test(attributes) ? ' /' : '';
+      return `<${tag}${sanitizePdfAttributes(attributes)}${suffix}>`;
+    },
+  );
+}
+
+function isTrustedPdfResource(url: string): boolean {
+  return /^(?:about:blank|data:image\/(?:png|jpeg|gif|webp);|blob:)/i.test(url);
+}
+
 @Injectable()
 export class OnlineCVsService {
   constructor(
@@ -91,7 +254,8 @@ export class OnlineCVsService {
       );
     }
 
-    const isPrimary = currentCount === 0 || createOnlineCVDto.isPrimary === true;
+    const isPrimary =
+      currentCount === 0 || createOnlineCVDto.isPrimary === true;
 
     if (isPrimary) {
       await this.onlineCVRepo.update(
@@ -161,7 +325,9 @@ export class OnlineCVsService {
       updateOnlineCVDto.templateType &&
       updateOnlineCVDto.templateType !== 'template1'
     ) {
-      const userInDb = await this.userRepo.findOne({ where: { _id: user._id } });
+      const userInDb = await this.userRepo.findOne({
+        where: { _id: user._id },
+      });
       const isPremium = this.usersService.isCandidatePremium(userInDb);
       if (!isPremium) {
         throw new ForbiddenException(
@@ -214,7 +380,8 @@ export class OnlineCVsService {
   // Toggle allow recruiter to search this online CV
   async toggleSearchable(id: string, user: IUser, isSearchable?: boolean) {
     const cv = await this.findOne(id, user);
-    const newSearchable = isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
+    const newSearchable =
+      isSearchable !== undefined ? Boolean(isSearchable) : !cv.isSearchable;
 
     await this.onlineCVRepo.update(id, {
       isSearchable: newSearchable,
@@ -284,7 +451,12 @@ export class OnlineCVsService {
   }
 
   // Export CV to PDF and save to Cloudinary
-  async exportToPdf(id: string, user: IUser, htmlContent?: string, isPremium?: boolean) {
+  async exportToPdf(
+    id: string,
+    user: IUser,
+    htmlContent?: string,
+    isPremium?: boolean,
+  ) {
     const cv = await this.findOne(id, user);
 
     if (!puppeteer) {
@@ -304,10 +476,19 @@ export class OnlineCVsService {
       if (shouldRemoveWatermark && contentToUse) {
         // Strip any existing watermark blocks from HTML specifically for this Premium download
         contentToUse = contentToUse
-          .replace(/<div[^>]*class="[^"]*cv-watermark[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+          .replace(
+            /<div[^>]*class="[^"]*cv-watermark[^"]*"[^>]*>[\s\S]*?<\/div>/gi,
+            '',
+          )
           .replace(/<div[^>]*data-watermark="true"[^>]*>[\s\S]*?<\/div>/gi, '')
-          .replace(/<div[^>]*>[\s\S]*?Được tạo bởi[\s\S]*?TalentPulse[\s\S]*?<\/div>/gi, '')
-          .replace(/<div style="position: fixed; bottom: 8px;[\s\S]*?<\/div>/gi, '');
+          .replace(
+            /<div[^>]*>[\s\S]*?Được tạo bởi[\s\S]*?TalentPulse[\s\S]*?<\/div>/gi,
+            '',
+          )
+          .replace(
+            /<div style="position: fixed; bottom: 8px;[\s\S]*?<\/div>/gi,
+            '',
+          );
       }
 
       const watermarkHtml = shouldRemoveWatermark
@@ -318,17 +499,15 @@ export class OnlineCVsService {
 </div>`;
 
       if (contentToUse && contentToUse.trim().length > 0) {
+        contentToUse = sanitizePdfHtml(contentToUse);
         finalHtml = `
 <!DOCTYPE html>
 <html lang="vi">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${cv.fullName || 'CV'}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Roboto:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data: blob:;" />
+  <title>${escapeHtml(cv.fullName || 'CV')}</title>
   <style>
     @page {
       size: A4 portrait;
@@ -347,12 +526,20 @@ export class OnlineCVsService {
     .print\\:hidden {
       display: none !important;
     }
-    ${shouldRemoveWatermark ? '.cv-watermark, [data-watermark] { display: none !important; }' : ''}
+    ${
+      shouldRemoveWatermark
+        ? '.cv-watermark, [data-watermark] { display: none !important; }'
+        : ''
+    }
   </style>
 </head>
 <body>
   ${contentToUse}
-  ${!contentToUse.includes('talentpulse.vn') && !shouldRemoveWatermark ? watermarkHtml : ''}
+  ${
+    !contentToUse.includes('talentpulse.vn') && !shouldRemoveWatermark
+      ? watermarkHtml
+      : ''
+  }
 </body>
 </html>`;
       } else {
@@ -367,7 +554,13 @@ export class OnlineCVsService {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
       const page = await browser.newPage();
-      await page.setContent(finalHtml, { waitUntil: 'networkidle0' });
+      await page.setJavaScriptEnabled(false);
+      await page.setRequestInterception(true);
+      page.on('request', (request: any) => {
+        if (isTrustedPdfResource(request.url())) request.continue();
+        else request.abort();
+      });
+      await page.setContent(finalHtml, { waitUntil: 'domcontentloaded' });
 
       const pdfBuffer = await page.pdf({
         format: 'A4',
@@ -405,9 +598,9 @@ export class OnlineCVsService {
         pdfUrl: uploadResult.url,
         message: 'Xuất PDF thành công',
       };
-    } catch (error) {
-      console.error('PDF generation error:', error);
-      throw new BadRequestException('Không thể tạo PDF: ' + error.message);
+    } catch {
+      Logger.error('PDF generation failed');
+      throw new BadRequestException('Không thể tạo PDF');
     }
   }
 

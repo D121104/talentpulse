@@ -5,7 +5,9 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * NOT VALID keeps the migration deployable when an older database contains
  * legacy rows; all new writes and updates are still checked by PostgreSQL.
  */
-export class AiConsentScopeConstraints20260826160200 implements MigrationInterface {
+export class AiConsentScopeConstraints20260826160200
+  implements MigrationInterface
+{
   name = 'AiConsentScopeConstraints20260826160200';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

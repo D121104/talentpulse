@@ -42,10 +42,13 @@ async function runSeedAdmin() {
       isApproved: true,
       isVerified: true,
       isLocked: false,
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      avatar:
+        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
     });
     await userRepo.save(adminUser);
-    console.log(`✓ Đã tạo mới tài khoản Admin: ${adminEmail} (Mật khẩu: 12345678)`);
+    console.log(
+      `✓ Đã tạo mới tài khoản Admin: ${adminEmail} (Mật khẩu: 12345678)`,
+    );
   } else {
     adminUser.role = Role.ADMIN;
     adminUser.password = hashedPassword;
@@ -53,7 +56,9 @@ async function runSeedAdmin() {
     adminUser.isVerified = true;
     adminUser.isLocked = false;
     await userRepo.save(adminUser);
-    console.log(`✓ Đã cập nhật quyền ADMIN và mật khẩu cho tài khoản: ${adminEmail}`);
+    console.log(
+      `✓ Đã cập nhật quyền ADMIN và mật khẩu cho tài khoản: ${adminEmail}`,
+    );
   }
 
   // Seed default packages if empty
@@ -179,7 +184,8 @@ async function runSeedAdmin() {
         planType: PremiumPlan.HR_PREMIUM,
         billingCycle: PaymentBillingCycle.ANNUAL,
         name: 'HR Premium Enterprise (1 Năm)',
-        description: 'Giải pháp tuyển dụng toàn diện 365 ngày cho doanh nghiệp bứt phá',
+        description:
+          'Giải pháp tuyển dụng toàn diện 365 ngày cho doanh nghiệp bứt phá',
         price: 2390000,
         originalPrice: 3588000,
         durationDays: 365,

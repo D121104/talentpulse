@@ -11,7 +11,10 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
-import { Application, ApplicationStatus } from 'src/applications/entities/application.entity';
+import {
+  Application,
+  ApplicationStatus,
+} from 'src/applications/entities/application.entity';
 import { IUser } from 'src/users/users.interface';
 import aqp from 'api-query-params';
 import { FollowCompanyDto } from './dto/follow-company.dto';
@@ -25,6 +28,7 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
 
 import { User, PremiumPlan } from 'src/users/entities/user.entity';
 
@@ -51,8 +55,9 @@ export class CompaniesService {
     private readonly usersService: UsersService,
 
     private readonly activeJobQueryService: ActiveJobQueryService,
-  ) {}
 
+    private readonly jobIndexingService: JobIndexingService,
+  ) {}
 
   // Create a new company (Admin only), invalidate Redis cache
   async create(createCompanyDto: CreateCompanyDto, user: IUser) {
@@ -171,7 +176,13 @@ export class CompaniesService {
     const userId = filter.userId || qs.userId;
     delete filter.userId;
 
-    const searchTerm = (qs.search || qs.q || qs.name || filter.name || '').trim();
+    const searchTerm = (
+      qs.search ||
+      qs.q ||
+      qs.name ||
+      filter.name ||
+      ''
+    ).trim();
 
     const queryBuilder = this.companyRepo
       .createQueryBuilder('company')
@@ -199,7 +210,10 @@ export class CompaniesService {
           '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
           { s1: '%50-100%', s2: '%50 - 100%', s3: '%50-200%' },
         );
-      } else if (scaleStr.includes('100-500') || scaleStr.includes('100 - 500')) {
+      } else if (
+        scaleStr.includes('100-500') ||
+        scaleStr.includes('100 - 500')
+      ) {
         queryBuilder.andWhere(
           '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
           { s1: '%100-500%', s2: '%100 - 500%', s3: '%50-200%' },
@@ -230,7 +244,9 @@ export class CompaniesService {
             { cleanPattern: `%${clean}%`, rawScale: rawScale.trim() },
           );
         } else {
-          queryBuilder.andWhere('company.scale = :rawScale', { rawScale: rawScale.trim() });
+          queryBuilder.andWhere('company.scale = :rawScale', {
+            rawScale: rawScale.trim(),
+          });
         }
       }
     }
@@ -270,7 +286,8 @@ export class CompaniesService {
 
         const isPremium = Boolean(
           company.isPremium &&
-            (!company.premiumExpiresAt || new Date(company.premiumExpiresAt) > new Date()),
+            (!company.premiumExpiresAt ||
+              new Date(company.premiumExpiresAt) > new Date()),
         );
 
         const [topJobs, jobCount] = await Promise.all([
@@ -285,7 +302,9 @@ export class CompaniesService {
               'job.workingModel',
               'job.createdAt',
             ])
-            .where("job.company->>'_id' = :companyId", { companyId: company._id })
+            .where("job.company->>'_id' = :companyId", {
+              companyId: company._id,
+            })
             .andWhere('job.isActive = :isActive', { isActive: true })
             .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
             .orderBy('job.createdAt', 'DESC')
@@ -293,7 +312,9 @@ export class CompaniesService {
             .getMany(),
           this.jobRepo
             .createQueryBuilder('job')
-            .where("job.company->>'_id' = :companyId", { companyId: company._id })
+            .where("job.company->>'_id' = :companyId", {
+              companyId: company._id,
+            })
             .andWhere('job.isActive = :isActive', { isActive: true })
             .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
             .getCount(),
@@ -379,6 +400,7 @@ export class CompaniesService {
     for (const job of jobs) {
       const updatedCompany = { ...job.company, isActive: newActiveStatus };
       await this.jobRepo.update(job._id, { company: updatedCompany });
+      await this.jobIndexingService.enqueue(job._id);
     }
 
     await this.redisService.invalidateCompaniesCache();
@@ -528,13 +550,17 @@ export class CompaniesService {
     ) {
       updatePayload.location = {
         type: 'Point',
-        coordinates: [Number(updateCompanyDto.lon), Number(updateCompanyDto.lat)],
+        coordinates: [
+          Number(updateCompanyDto.lon),
+          Number(updateCompanyDto.lat),
+        ],
       };
     }
 
     const result = await this.companyRepo.update(id, updatePayload);
 
     await this.redisService.invalidateCompaniesCache();
+    await this.enqueueCompanyJobs(id);
     return result;
   }
 
@@ -561,8 +587,18 @@ export class CompaniesService {
       },
     });
 
+    const result = await this.companyRepo.softDelete(id);
     await this.redisService.invalidateCompaniesCache();
-    return await this.companyRepo.softDelete(id);
+    await this.enqueueCompanyJobs(id);
+    return result;
+  }
+
+  private async enqueueCompanyJobs(companyId: string): Promise<void> {
+    const jobs = await this.jobRepo
+      .createQueryBuilder('job')
+      .where("job.company->>'_id' = :companyId", { companyId })
+      .getMany();
+    for (const job of jobs) await this.jobIndexingService.enqueue(job._id);
   }
 
   async countCompanies() {
@@ -831,15 +867,19 @@ export class CompaniesService {
 
     const isProfileComplete = Boolean(
       company.name &&
-      company.taxCode &&
-      company.scale &&
-      company.address &&
-      company.description &&
-      company.logo,
+        company.taxCode &&
+        company.scale &&
+        company.address &&
+        company.description &&
+        company.logo,
     );
 
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
 
     // Total jobs & active jobs & today jobs
     const allCompanyJobs = await this.jobRepo
@@ -887,12 +927,24 @@ export class CompaniesService {
     ).length;
 
     // 7-day breakdown (from 6 days ago up to today)
-    const dailyApplicationStats: { date: string; label: string; count: number }[] = [];
+    const dailyApplicationStats: {
+      date: string;
+      label: string;
+      count: number;
+    }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+      const dayEnd = new Date(
+        d.getFullYear(),
+        d.getMonth(),
+        d.getDate(),
+        23,
+        59,
+        59,
+        999,
+      );
 
       const count = applications.filter((app) => {
         const appDate = new Date(app.createdAt);
@@ -965,7 +1017,8 @@ export class CompaniesService {
     const maxActiveJobs = this.usersService.getUserMaxActiveJobs(userInDb);
     const maxDailyJobs = maxActiveJobs;
     const hotJobLimit = await this.usersService.getUserHotJobLimit(userInDb);
-    const candidateSearchLimit = await this.usersService.getUserCandidateSearchLimit(userInDb);
+    const candidateSearchLimit =
+      await this.usersService.getUserCandidateSearchLimit(userInDb);
     const userPackage = await this.usersService.getUserPackage(userInDb);
 
     return {
@@ -994,8 +1047,13 @@ export class CompaniesService {
         maxDailyJobs,
         hotJobLimit,
         candidateSearchLimit,
-        aiQuota: userInDb.aiQuotaRemaining ?? (userPackage ? userPackage.aiQuota : 0),
-        packageName: userPackage ? userPackage.name : (isPremium ? 'HR Premium' : 'HR Standard'),
+        aiQuota:
+          userInDb.aiQuotaRemaining ?? (userPackage ? userPackage.aiQuota : 0),
+        packageName: userPackage
+          ? userPackage.name
+          : isPremium
+          ? 'HR Premium'
+          : 'HR Standard',
         totalApplications,
         pendingApplications,
         reviewingApplications,
@@ -1060,4 +1118,3 @@ export class CompaniesService {
     }));
   }
 }
-

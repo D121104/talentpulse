@@ -10,7 +10,7 @@ async function main() {
 
   // 1. Ensure columns exist
   await client.query(`
-    ALTER TABLE "users" 
+    ALTER TABLE "users"
     ADD COLUMN IF NOT EXISTS "premiumPackageId" character varying,
     ADD COLUMN IF NOT EXISTS "aiQuotaRemaining" integer DEFAULT 0;
   `);
@@ -48,7 +48,7 @@ async function main() {
 
     await client.query(`
       UPDATE "users"
-      SET 
+      SET
         "premiumPackageId" = $1,
         "aiQuotaRemaining" = $2,
         "updatedAt" = NOW()
@@ -61,7 +61,7 @@ async function main() {
     if (isHr && user.company && user.company._id) {
       await client.query(`
         UPDATE "companies"
-        SET 
+        SET
           "isPremium" = true,
           "premiumExpiresAt" = $1,
           "updatedAt" = NOW()

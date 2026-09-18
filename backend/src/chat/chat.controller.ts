@@ -14,7 +14,10 @@ import { User } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 import { ChatService } from './chat.service';
 import { CreateMessageDto } from './dto/create-message.dto';
-import { StartConversationDto, AddReactionDto } from './dto/start-conversation.dto';
+import {
+  StartConversationDto,
+  AddReactionDto,
+} from './dto/start-conversation.dto';
 
 @ApiTags('Chat & Realtime Messaging')
 @ApiBearerAuth()
@@ -24,29 +27,23 @@ export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
   @Post('conversations')
-  @ApiOperation({ summary: 'Khởi tạo hoặc lấy phòng chat giữa ứng viên và công ty đã nộp hồ sơ' })
-  startConversation(
-    @User() user: IUser,
-    @Body() dto: StartConversationDto,
-  ) {
+  @ApiOperation({
+    summary:
+      'Khởi tạo hoặc lấy phòng chat giữa ứng viên và công ty đã nộp hồ sơ',
+  })
+  startConversation(@User() user: IUser, @Body() dto: StartConversationDto) {
     return this.chatService.getOrCreateConversation(user, dto);
   }
 
   @Get('conversations')
   @ApiOperation({ summary: 'Lấy danh sách các cuộc trò chuyện của người dùng' })
-  getConversations(
-    @User() user: IUser,
-    @Query('search') search?: string,
-  ) {
+  getConversations(@User() user: IUser, @Query('search') search?: string) {
     return this.chatService.getConversations(user, search);
   }
 
   @Get('conversations/:id')
   @ApiOperation({ summary: 'Lấy chi tiết một cuộc trò chuyện' })
-  getConversationById(
-    @User() user: IUser,
-    @Param('id') id: string,
-  ) {
+  getConversationById(@User() user: IUser, @Param('id') id: string) {
     return this.chatService.getConversationById(user, id);
   }
 
@@ -75,10 +72,7 @@ export class ChatController {
 
   @Put('conversations/:id/read')
   @ApiOperation({ summary: 'Đánh dấu tất cả tin nhắn trong phòng là đã đọc' })
-  markAsRead(
-    @User() user: IUser,
-    @Param('id') id: string,
-  ) {
+  markAsRead(@User() user: IUser, @Param('id') id: string) {
     return this.chatService.markAsRead(user, id);
   }
 
@@ -93,11 +87,11 @@ export class ChatController {
   }
 
   @Get('applied-partners')
-  @ApiOperation({ summary: 'Lấy danh sách công ty đã ứng tuyển (Ứng viên) hoặc ứng viên đã ứng tuyển (HR)' })
-  getAppliedPartners(
-    @User() user: IUser,
-    @Query('search') search?: string,
-  ) {
+  @ApiOperation({
+    summary:
+      'Lấy danh sách công ty đã ứng tuyển (Ứng viên) hoặc ứng viên đã ứng tuyển (HR)',
+  })
+  getAppliedPartners(@User() user: IUser, @Query('search') search?: string) {
     return this.chatService.getAppliedPartners(user, search);
   }
 
