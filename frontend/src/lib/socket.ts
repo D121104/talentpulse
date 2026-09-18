@@ -117,3 +117,28 @@ export function getChatSocket(userId?: string): Socket {
   return chatSocket;
 }
 
+let interviewSocket: Socket | null = null;
+
+export function getInterviewRoomSocket(): Socket {
+  const wsUrl = (
+    import.meta.env.VITE_WS_URL ||
+    import.meta.env.VITE_API_URL ||
+    'http://localhost:8000'
+  )
+    .replace(/\/api\/v1\/?$/, '')
+    .replace(/\/$/, '');
+
+  if (!interviewSocket) {
+    interviewSocket = io(`${wsUrl}/interview-room`, {
+      transports: ['websocket', 'polling'],
+      autoConnect: true,
+      withCredentials: true,
+      reconnection: true,
+      reconnectionAttempts: 15,
+      reconnectionDelay: 1500,
+    });
+  }
+
+  return interviewSocket;
+}
+

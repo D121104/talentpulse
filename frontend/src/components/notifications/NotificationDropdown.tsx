@@ -302,9 +302,34 @@ export function NotificationDropdown() {
       return;
     }
 
-    // 2. Extract valid jobId with strict priority:
-    // When data.jobId exists, it is ALWAYS the actual job ID (can be string or object {_id})
-    // targetId is ONLY a jobId if targetType is 'job'. If targetType is 'application', targetId is applicationId!
+    // 2. Candidate Application & Interview Notifications:
+    // Any notification about applications, interview rounds, status updates, or interview invitations
+    // must navigate directly to the candidate's applied jobs tracking page (/applied-jobs),
+    // or directly into the interview room (/interview-room/:roomId) if an online room invite is clicked.
+    const isApplicationOrInterview =
+      typeUpper === 'APPLICATION' ||
+      typeUpper === 'INTERVIEW' ||
+      typeUpper === 'RESUME' ||
+      targetType === 'application' ||
+      targetType === 'interview' ||
+      Boolean(item.data?.applicationId) ||
+      Boolean(item.data?.roundId) ||
+      Boolean(item.data?.roomId) ||
+      titleLower.includes('ứng tuyển') ||
+      titleLower.includes('hồ sơ') ||
+      titleLower.includes('phỏng vấn') ||
+      titleLower.includes('kết quả');
+
+    if (user?.role !== 'HR' && isApplicationOrInterview) {
+      if (item.data?.roomId) {
+        navigate(`/interview-room/${item.data.roomId}`);
+        return;
+      }
+      navigate('/applied-jobs');
+      return;
+    }
+
+    // 3. Extract valid jobId with strict priority:
     const rawJobId =
       typeof item.data?.jobId === 'object' && item.data?.jobId !== null
         ? item.data.jobId._id
@@ -314,33 +339,40 @@ export function NotificationDropdown() {
       (typeof rawJobId === 'string' && rawJobId.trim() ? rawJobId.trim() : null) ||
       (targetType === 'job' && item.targetId ? item.targetId : null);
 
-    // 3. For HR user: if an application arrived, navigate to HR candidate management
-    if (
-      user?.role === 'HR' &&
-      (titleLower.includes('đơn ứng tuyển') || titleLower.includes('ứng viên'))
-    ) {
-      const appId =
-        item.data?.applicationId ||
-        (targetType === 'application' ? item.targetId : null);
-      if (actualJobId) {
-        navigate(
-          `/dashboard?tab=candidates&jobId=${actualJobId}${
-            appId ? `&applicationId=${appId}` : ''
-          }`,
-        );
-      } else {
-        navigate('/dashboard?tab=candidates');
+    // 4. For HR user: if an interview or application arrived, navigate to HR dashboard tabs
+    if (user?.role === 'HR') {
+      if (typeUpper === 'INTERVIEW' || targetType === 'interview' || item.data?.roundId) {
+        navigate('/dashboard?tab=calendar');
+        return;
       }
-      return;
+      if (
+        titleLower.includes('đơn ứng tuyển') ||
+        titleLower.includes('ứng viên') ||
+        isApplicationOrInterview
+      ) {
+        const appId =
+          item.data?.applicationId ||
+          (targetType === 'application' ? item.targetId : null);
+        if (actualJobId) {
+          navigate(
+            `/dashboard?tab=candidates&jobId=${actualJobId}${
+              appId ? `&applicationId=${appId}` : ''
+            }`,
+          );
+        } else {
+          navigate('/dashboard?tab=candidates');
+        }
+        return;
+      }
     }
 
-    // 4. If actualJobId is resolved, navigate to the valid Job Detail Page
+    // 5. If actualJobId is resolved (e.g. new matching job notification), navigate to the Job Detail Page
     if (actualJobId) {
       navigate(`/jobs/${actualJobId}`);
       return;
     }
 
-    // 5. Fallback for Candidate Application notifications if no jobId was found
+    // 6. Fallback for Candidate Application notifications
     if (
       typeUpper === 'RESUME' ||
       typeUpper === 'APPLICATION' ||
@@ -350,19 +382,13 @@ export function NotificationDropdown() {
       return;
     }
 
-    // 6. Fallback for Company notifications
+    // 7. Fallback for Company notifications
     if (typeUpper === 'COMPANY' || targetType === 'company') {
-      const companyId =
-        item.data?.companyId || (targetType === 'company' ? item.targetId : null);
-      if (companyId) {
-        navigate(`/companies`);
-      } else {
-        navigate('/companies');
-      }
+      navigate('/companies');
       return;
     }
 
-    // 7. General fallback
+    // 8. General fallback
     if (user?.role === 'HR') {
       navigate('/dashboard?tab=notifications');
     } else {

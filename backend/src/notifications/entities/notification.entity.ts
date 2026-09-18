@@ -17,6 +17,7 @@ export enum NotificationType {
   COMPANY = 'COMPANY',
   SYSTEM = 'SYSTEM',
   APPLICATION = 'APPLICATION',
+  INTERVIEW = 'INTERVIEW',
 }
 
 export enum NotificationTargetType {
@@ -24,6 +25,7 @@ export enum NotificationTargetType {
   COMPANY = 'company',
   APPLICATION = 'application',
   USER = 'user',
+  INTERVIEW = 'interview',
   NONE = 'none',
 }
 

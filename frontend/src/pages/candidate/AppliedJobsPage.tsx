@@ -23,6 +23,9 @@ import {
   ArrowRight,
   HelpCircle,
   Bot,
+  Video,
+  MinusCircle,
+  X,
 } from 'lucide-react';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
@@ -31,10 +34,18 @@ import { useToast } from '../../context/ToastContext';
 import { apiRequest } from '../../lib/api';
 import { UserAvatar } from '../../components/common/UserAvatar';
 import { userCvApi, onlineCvApi } from '../../lib/cvApi';
+import {
+  employerApi,
+  type InterviewRoundItem,
+  type ApplicationStatusType,
+} from '../../lib/employerApi';
 
 export interface AppliedJobItem {
   _id: string;
-  status: 'PENDING' | 'REVIEWING' | 'CONSIDERING' | 'APPROVED' | 'REJECTED';
+  status: ApplicationStatusType;
+  version?: number;
+  withdrawnAt?: string;
+  withdrawReason?: string;
   coverLetter?: string;
   createdAt: string;
   updatedAt?: string;
@@ -46,6 +57,8 @@ export interface AppliedJobItem {
       _id: string;
       email: string;
     };
+    reason?: string;
+    note?: string;
   }[];
   cvId?: {
     _id: string;
@@ -87,14 +100,17 @@ export interface AppliedJobItem {
   };
 }
 
-// 6 Filter tabs
+// 8 Filter tabs
 type StatusFilter =
   | 'ALL'
   | 'PENDING'
   | 'REVIEWING'
   | 'CONSIDERING'
+  | 'INTERVIEWING'
+  | 'SUITABLE'
   | 'APPROVED'
-  | 'REJECTED';
+  | 'REJECTED'
+  | 'WITHDRAWN';
 
 interface TabConfig {
   id: StatusFilter;
@@ -103,11 +119,13 @@ interface TabConfig {
 
 const FILTER_TABS: TabConfig[] = [
   { id: 'ALL', label: 'Tất cả' },
-  { id: 'PENDING', label: 'Tiếp nhận' },
+  { id: 'PENDING', label: 'Chờ xử lý' },
   { id: 'REVIEWING', label: 'Đã xem' },
   { id: 'CONSIDERING', label: 'Cân nhắc' },
-  { id: 'APPROVED', label: 'Phù hợp' },
+  { id: 'INTERVIEWING', label: 'Phỏng vấn' },
+  { id: 'SUITABLE', label: 'Phù hợp' },
   { id: 'REJECTED', label: 'Chưa phù hợp' },
+  { id: 'WITHDRAWN', label: 'Đã rút đơn' },
 ];
 
 export default function AppliedJobsPage() {
@@ -115,6 +133,7 @@ export default function AppliedJobsPage() {
   const { success, error, info } = useToast();
 
   const [applications, setApplications] = useState<AppliedJobItem[]>([]);
+  const [interviews, setInterviews] = useState<InterviewRoundItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<StatusFilter>('ALL');
 
@@ -129,7 +148,17 @@ export default function AppliedJobsPage() {
   const [jobSearchActive, setJobSearchActive] = useState(true);
   const [totalCvCount, setTotalCvCount] = useState<number>(1);
 
-  // Load user applications and CV counts
+  // Modals state
+  const [withdrawModalApp, setWithdrawModalApp] = useState<AppliedJobItem | null>(null);
+  const [withdrawReason, setWithdrawReason] = useState('');
+  const [isSubmittingWithdraw, setIsSubmittingWithdraw] = useState(false);
+
+  const [declineModalRound, setDeclineModalRound] = useState<InterviewRoundItem | null>(null);
+  const [declineReason, setDeclineReason] = useState('');
+  const [isSubmittingDecline, setIsSubmittingDecline] = useState(false);
+  const [isConfirmingRoundId, setIsConfirmingRoundId] = useState<string | null>(null);
+
+  // Load user applications, interviews, and CV counts
   useEffect(() => {
     if (!accessToken) {
       setLoading(false);
@@ -149,6 +178,14 @@ export default function AppliedJobsPage() {
           ? (res as any).data
           : [];
         setApplications(list);
+
+        // 1b. Fetch candidate interviews
+        try {
+          const ivList = await employerApi.getInterviews({}, accessToken);
+          setInterviews(Array.isArray(ivList) ? ivList : []);
+        } catch {
+          // Ignore secondary interview fetch errors
+        }
 
         // 2. Fetch CVs count for candidate widget
         try {
@@ -189,17 +226,98 @@ export default function AppliedJobsPage() {
         accessToken,
       });
       success(
-        'Đã gửi lời nhắc thành công!',
-        `TalentPulse đã chuyển lời nhắc chuyên nghiệp tới ${companyName}.`,
+        'Đã gửi lời nhắc thành công',
+        `TalentPulse đã gửi thông báo nhắc nhở tới ${companyName}.`,
       );
     } catch (err: any) {
-      // If already reminded or error
       info(
         'Đã ghi nhận yêu cầu nhắc nhở',
-        err?.message || 'Lời nhắc của bạn đang được hệ thống ưu tiên chuyển tới NTD.',
+        err?.message || 'Lời nhắc của bạn đã được chuyển tới nhà tuyển dụng.',
       );
     } finally {
       setRemindingIds((prev) => ({ ...prev, [appId]: false }));
+    }
+  };
+
+  // Candidate confirms interview
+  const handleConfirmInterview = async (roundId: string) => {
+    if (!accessToken) return;
+    try {
+      setIsConfirmingRoundId(roundId);
+      await employerApi.confirmInterview(
+        roundId,
+        { action: 'CONFIRM' },
+        accessToken,
+      );
+      setInterviews((prev) =>
+        prev.map((iv) => (iv._id === roundId ? { ...iv, status: 'CONFIRMED' } : iv)),
+      );
+      success('Đã xác nhận tham gia phỏng vấn', 'Lịch phỏng vấn đã được kích hoạt thành công.');
+    } catch (err: any) {
+      error('Xác nhận thất bại', err?.message || 'Không thể xác nhận lịch phỏng vấn');
+    } finally {
+      setIsConfirmingRoundId(null);
+    }
+  };
+
+  // Candidate declines interview
+  const handleDeclineInterview = async () => {
+    if (!accessToken || !declineModalRound) return;
+    try {
+      setIsSubmittingDecline(true);
+      await employerApi.confirmInterview(
+        declineModalRound._id,
+        { action: 'DECLINE', feedback: declineReason.trim() || undefined },
+        accessToken,
+      );
+      setInterviews((prev) =>
+        prev.map((iv) =>
+          iv._id === declineModalRound._id ? { ...iv, status: 'DECLINED' } : iv,
+        ),
+      );
+      success('Đã gửi phản hồi', 'Bạn đã từ chối lịch phỏng vấn này.');
+      setDeclineModalRound(null);
+      setDeclineReason('');
+    } catch (err: any) {
+      error('Lỗi phản hồi', err?.message || 'Không thể từ chối lịch phỏng vấn');
+    } finally {
+      setIsSubmittingDecline(false);
+    }
+  };
+
+  // Candidate withdraws application
+  const handleWithdrawApplication = async () => {
+    if (!accessToken || !withdrawModalApp) return;
+    try {
+      setIsSubmittingWithdraw(true);
+      await employerApi.withdrawApplication(
+        withdrawModalApp._id,
+        accessToken,
+        {
+          reason: withdrawReason.trim() || undefined,
+          expectedVersion: withdrawModalApp.version,
+        },
+      );
+      setApplications((prev) =>
+        prev.map((app) =>
+          app._id === withdrawModalApp._id
+            ? {
+                ...app,
+                status: 'WITHDRAWN',
+                withdrawnAt: new Date().toISOString(),
+                withdrawReason: withdrawReason.trim() || undefined,
+                version: (app.version || 0) + 1,
+              }
+            : app,
+        ),
+      );
+      success('Đã rút hồ sơ thành công', 'Bạn đã hủy hồ sơ ứng tuyển này.');
+      setWithdrawModalApp(null);
+      setWithdrawReason('');
+    } catch (err: any) {
+      error('Không thể rút hồ sơ', err?.message || 'Đã có lỗi xảy ra hoặc hồ sơ đã được xử lý');
+    } finally {
+      setIsSubmittingWithdraw(false);
     }
   };
 
@@ -228,18 +346,23 @@ export default function AppliedJobsPage() {
   };
 
   // Helper to get step status index (1 to 5)
-  // 1: UV nộp CV, 2: Tiếp nhận CV, 3: NTD xem CV, 4: Xử lý CV (Cân nhắc), 5: NTD phản hồi (Phù hợp / Từ chối)
+  // 1: UV nộp CV, 2: Tiếp nhận CV, 3: NTD xem CV, 4: Phỏng vấn, 5: Kết quả (Phù hợp / Từ chối)
   const getStepperActiveIndex = (status: string) => {
     switch (status) {
       case 'PENDING':
-        return 2; // UV nộp CV & Đã tiếp nhận CV
+        return 2;
       case 'REVIEWING':
-        return 3; // NTD đã xem CV
+        return 3;
       case 'CONSIDERING':
-        return 4; // Xử lý CV (Cân nhắc trở lên)
+        return 3;
+      case 'INTERVIEWING':
+        return 4;
+      case 'SUITABLE':
       case 'APPROVED':
       case 'REJECTED':
-        return 5; // NTD phản hồi (Chấp thuận hoặc Từ chối)
+        return 5;
+      case 'WITHDRAWN':
+        return 1;
       default:
         return 2;
     }
@@ -506,7 +629,13 @@ export default function AppliedJobsPage() {
                               Hồ sơ đang được phòng ban chuyên môn đánh giá ({formatDateTime(app.updatedAt)})
                             </span>
                           )}
-                          {app.status === 'APPROVED' && (
+                          {app.status === 'INTERVIEWING' && (
+                            <span className="text-primary dark:text-primary-light flex items-center gap-1.5 font-bold">
+                              <Video className="h-4 w-4" />
+                              Hồ sơ đang ở giai đoạn Phỏng vấn
+                            </span>
+                          )}
+                          {(app.status === 'SUITABLE' || app.status === 'APPROVED') && (
                             <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                               <CheckCircle2 className="h-4 w-4" />
                               Hồ sơ của bạn được NTD đánh giá Phù hợp!
@@ -517,10 +646,46 @@ export default function AppliedJobsPage() {
                               NTD đánh giá CV của bạn "Chưa phù hợp" ({formatDateTime(app.updatedAt)})
                             </span>
                           )}
+                          {app.status === 'WITHDRAWN' && (
+                            <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                              <MinusCircle className="h-4 w-4" />
+                              Bạn đã rút hồ sơ ứng tuyển vị trí này
+                            </span>
+                          )}
                         </div>
 
-                        {/* Action Buttons: Nhắc NTD (chỉ hiện khi đủ điều kiện) & Nhắn tin */}
+                        {/* Action Buttons: Hủy đơn (chỉ active khi PENDING), Nhắc NTD (chỉ hiện khi đủ điều kiện) & Nhắn tin */}
                         <div className="flex items-center gap-2">
+                          {app.status === 'PENDING' ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWithdrawModalApp(app);
+                                setWithdrawReason('');
+                              }}
+                              title="Hủy đơn ứng tuyển này (khi hồ sơ còn ở trạng thái Chờ xử lý)"
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 px-3 py-1.5 text-xs font-bold text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors cursor-pointer active:scale-95 shadow-xs"
+                            >
+                              <MinusCircle className="h-3.5 w-3.5" />
+                              <span>Hủy đơn</span>
+                            </button>
+                          ) : app.status === 'WITHDRAWN' ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/60 px-3 py-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                              <MinusCircle className="h-3.5 w-3.5" />
+                              <span>Đã hủy đơn</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled
+                              title="Chỉ có thể hủy đơn khi hồ sơ ở trạng thái Chờ xử lý (PENDING). Nhà tuyển dụng đã tiếp nhận hoặc đang xét duyệt hồ sơ này."
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-100/70 dark:bg-slate-800/40 px-3 py-1.5 text-xs font-medium text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-60"
+                            >
+                              <MinusCircle className="h-3.5 w-3.5" />
+                              <span>Hủy đơn</span>
+                            </button>
+                          )}
+
                           {/* "Nhắc NTD" Button - Chỉ hiển thị nếu sau 7 ngày mà CV chưa được chuyển trạng thái bất cứ lần nào */}
                           {canNudge && (
                             <button
@@ -556,16 +721,182 @@ export default function AppliedJobsPage() {
                         </div>
                       </div>
 
+                      {/* Associated Interview Rounds Banner */}
+                      {interviews.filter((iv) => iv.applicationId === app._id || (iv.application as any)?._id === app._id).length > 0 && (
+                        <div className="mt-3 space-y-2.5">
+                          {interviews
+                            .filter((iv) => iv.applicationId === app._id || (iv.application as any)?._id === app._id)
+                            .map((iv) => {
+                              const isPending = iv.status === 'PENDING_CONFIRMATION';
+                              const isConfirmed = iv.status === 'CONFIRMED';
+                              const isInProgress = iv.status === 'IN_PROGRESS';
+                              const isCompleted = iv.status === 'COMPLETED';
+                              const isDeclined = iv.status === 'DECLINED';
+                              const isCancelled = iv.status === 'CANCELLED';
+
+                              return (
+                                <div
+                                  key={iv._id}
+                                  className={`rounded-xl border p-4 transition-all ${
+                                    isPending
+                                      ? 'border-amber-300 bg-amber-50/60 dark:border-amber-800/80 dark:bg-amber-950/20 shadow-xs'
+                                      : isInProgress
+                                      ? 'border-primary/50 bg-primary/5 dark:border-primary/60 dark:bg-primary/10 shadow-xs'
+                                      : isConfirmed
+                                      ? 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/50 dark:bg-emerald-950/20'
+                                      : 'border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-800/40'
+                                  }`}
+                                >
+                                  {/* Header */}
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2.5">
+                                      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+                                        iv.isOnline
+                                          ? 'bg-primary/10 text-primary dark:bg-primary/20'
+                                          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                                      }`}>
+                                        {iv.isOnline ? <Video className="h-4 w-4" /> : <Building2 className="h-4 w-4" />}
+                                      </span>
+                                      <div>
+                                        <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                                          {iv.title}
+                                        </h4>
+                                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                          {iv.roundNumber ? `Vòng ${iv.roundNumber} • ` : ''}
+                                          {iv.isOnline ? 'Phỏng vấn trực tuyến (WebRTC Video HD)' : 'Phỏng vấn trực tiếp'} • {iv.durationMinutes} phút
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    {/* Badge */}
+                                    <span className={`inline-flex items-center gap-1 rounded-md px-2.5 py-0.5 text-xs font-bold ${
+                                      isPending
+                                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                                        : isConfirmed
+                                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                                        : isInProgress
+                                        ? 'bg-primary text-white shadow-xs animate-pulse'
+                                        : isDeclined
+                                        ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300'
+                                        : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                                    }`}>
+                                      {isPending && 'Chờ bạn xác nhận'}
+                                      {isConfirmed && 'Đã xác nhận tham gia'}
+                                      {isInProgress && 'Đang diễn ra'}
+                                      {isCompleted && 'Đã hoàn thành'}
+                                      {isDeclined && 'Đã từ chối'}
+                                      {isCancelled && 'Đã hủy'}
+                                    </span>
+                                  </div>
+
+                                  {/* Time & Location */}
+                                  <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-300">
+                                    <div className="flex items-center gap-1.5">
+                                      <Clock className="h-3.5 w-3.5 text-primary" />
+                                      <span>Thời gian: <strong className="text-slate-900 dark:text-white">{formatDateTime(iv.scheduledAt)} - {formatDateTime(iv.scheduledEndAt)}</strong></span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                                      <span>Địa điểm: <strong className="text-slate-900 dark:text-white">{iv.isOnline ? 'Phòng họp trực tuyến TalentPulse' : (iv.location || 'Văn phòng công ty')}</strong></span>
+                                    </div>
+                                  </div>
+
+                                  {iv.description && (
+                                    <p className="mt-2 text-xs text-slate-600 dark:text-slate-300 bg-white/70 dark:bg-slate-900/50 rounded-lg p-2 border border-slate-100 dark:border-slate-800">
+                                      <span className="font-semibold text-slate-800 dark:text-slate-200">Ghi chú từ NTD: </span>
+                                      {iv.description}
+                                    </p>
+                                  )}
+
+                                  {/* Action Row */}
+                                  <div className="mt-3 pt-2.5 border-t border-slate-200/60 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                                    {isPending && (
+                                      <>
+                                        <p className="text-xs text-amber-800 dark:text-amber-300 font-medium">
+                                          Vui lòng xác nhận để lịch phỏng vấn được kích hoạt trên hệ thống.
+                                        </p>
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleConfirmInterview(iv._id)}
+                                            disabled={isConfirmingRoundId === iv._id}
+                                            className="inline-flex items-center gap-1.5 rounded-lg bg-primary hover:bg-primary-dark px-3.5 py-1.5 text-xs font-bold text-white shadow-xs transition-all cursor-pointer active:scale-95 disabled:opacity-50"
+                                          >
+                                            {isConfirmingRoundId === iv._id ? (
+                                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                            ) : (
+                                              <CheckCircle2 className="h-3.5 w-3.5" />
+                                            )}
+                                            <span>Đồng ý tham gia</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setDeclineModalRound(iv);
+                                              setDeclineReason('');
+                                            }}
+                                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                                          >
+                                            <X className="h-3.5 w-3.5" />
+                                            <span>Từ chối</span>
+                                          </button>
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {(isConfirmed || isInProgress) && iv.isOnline && (
+                                      <div className="w-full flex flex-wrap items-center justify-between gap-2">
+                                        <p className="text-xs text-slate-600 dark:text-slate-300">
+                                          {isInProgress || iv.inviteSentAt
+                                            ? 'Phòng họp trực tuyến đã sẵn sàng. Bạn có thể tham gia ngay bây giờ.'
+                                            : 'Phòng họp trực tuyến sẽ mở khi đến giờ hẹn hoặc khi NTD gửi lời mời.'}
+                                        </p>
+                                        <Link
+                                          to={`/interview-room/${iv.roomId}`}
+                                          className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-bold text-white shadow-xs transition-all cursor-pointer active:scale-95 ${
+                                            isInProgress || iv.inviteSentAt
+                                              ? 'bg-primary hover:bg-primary-dark shadow-primary/20'
+                                              : 'bg-primary/80 hover:bg-primary'
+                                          }`}
+                                        >
+                                          <Video className="h-4 w-4" />
+                                          <span>Vào phòng phỏng vấn</span>
+                                        </Link>
+                                      </div>
+                                    )}
+
+                                    {isCompleted && (
+                                      <div className="w-full text-xs text-slate-600 dark:text-slate-400">
+                                        <span>Kết quả phỏng vấn: </span>
+                                        <strong className={
+                                          iv.result === 'PASSED'
+                                            ? 'text-emerald-600 font-bold'
+                                            : iv.result === 'FAILED'
+                                            ? 'text-rose-600 font-bold'
+                                            : 'text-slate-700 font-bold'
+                                        }>
+                                          {iv.result === 'PASSED' ? 'Đạt yêu cầu' : iv.result === 'FAILED' ? 'Chưa đạt yêu cầu' : 'Đang chờ cập nhật'}
+                                        </strong>
+                                        {iv.feedback && <p className="mt-1 text-slate-500">{iv.feedback}</p>}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      )}
+
                       {/* 5-Step Horizontal Stepper (Tiến trình ứng tuyển) */}
                       <div className="mt-5 px-1 sm:px-4">
                         <div className="relative flex items-center justify-between">
                           {/* Stepper Steps Definition */}
                           {[
-                            { step: 1, label: 'UV nộp CV' },
-                            { step: 2, label: 'Tiếp nhận CV' },
-                            { step: 3, label: 'NTD xem CV' },
-                            { step: 4, label: 'Xử lý CV' },
-                            { step: 5, label: 'NTD phản hồi' },
+                            { step: 1, label: 'Nộp hồ sơ' },
+                            { step: 2, label: 'Tiếp nhận' },
+                            { step: 3, label: 'Đã xem' },
+                            { step: 4, label: 'Phỏng vấn' },
+                            { step: 5, label: 'Kết quả' },
                           ].map((item, idx, arr) => {
                             const isCompleted = stepperStep >= item.step;
 
@@ -661,10 +992,14 @@ export default function AppliedJobsPage() {
                                             ? 'NTD đã xem hồ sơ ứng tuyển'
                                             : h.status === 'CONSIDERING'
                                             ? 'NTD chuyển hồ sơ sang Cân nhắc'
-                                            : h.status === 'APPROVED'
+                                            : h.status === 'INTERVIEWING'
+                                            ? 'NTD chuyển hồ sơ sang Phỏng vấn'
+                                            : h.status === 'SUITABLE' || h.status === 'APPROVED'
                                             ? 'NTD đánh giá hồ sơ Phù hợp'
                                             : h.status === 'REJECTED'
                                             ? 'NTD đánh giá Chưa phù hợp'
+                                            : h.status === 'WITHDRAWN'
+                                            ? 'Ứng viên đã hủy đơn ứng tuyển'
                                             : 'NTD đã tiếp nhận hồ sơ'}
                                         </p>
                                       </div>
@@ -894,6 +1229,163 @@ export default function AppliedJobsPage() {
             </div>
           </div>
         </div>
+
+        {/* Modal Xác nhận rút hồ sơ ứng tuyển */}
+        <AnimatePresence>
+          {withdrawModalApp && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 p-6 shadow-2xl border border-slate-200 dark:border-slate-800"
+              >
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Hủy đơn ứng tuyển
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setWithdrawModalApp(null)}
+                    className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div className="mt-4 space-y-3 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+                  <p>
+                    Bạn đang yêu cầu hủy đơn ứng tuyển cho vị trí{' '}
+                    <strong className="text-slate-900 dark:text-white">
+                      {withdrawModalApp.job?.name || withdrawModalApp.jobId?.name || 'Vị trí này'}
+                    </strong>{' '}
+                    tại{' '}
+                    <strong className="text-slate-900 dark:text-white">
+                      {withdrawModalApp.company?.name || withdrawModalApp.companyId?.name || 'Nhà tuyển dụng'}
+                    </strong>.
+                  </p>
+                  <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 p-3 border border-amber-200 dark:border-amber-900/50 text-xs text-amber-800 dark:text-amber-300">
+                    Lưu ý: Chỉ đơn ứng tuyển ở trạng thái <strong>Chờ xử lý (PENDING)</strong> mới có thể hủy. Sau khi hủy, đơn ứng tuyển sẽ được đóng lại vĩnh viễn.
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Lý do hủy đơn (không bắt buộc)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={withdrawReason}
+                      onChange={(e) => setWithdrawReason(e.target.value)}
+                      placeholder="Nhập lý do của bạn..."
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-2.5 text-xs text-slate-900 dark:text-white focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setWithdrawModalApp(null)}
+                    disabled={isSubmittingWithdraw}
+                    className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    Đóng
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleWithdrawApplication()}
+                    disabled={isSubmittingWithdraw}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 px-4 py-2 text-xs font-bold text-white shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmittingWithdraw ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <MinusCircle className="h-4 w-4" />
+                    )}
+                    <span>Xác nhận hủy đơn</span>
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Modal Từ chối lịch phỏng vấn */}
+        <AnimatePresence>
+          {declineModalRound && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 p-6 shadow-2xl border border-slate-200 dark:border-slate-800"
+              >
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Từ chối lịch phỏng vấn
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setDeclineModalRound(null)}
+                    className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div className="mt-4 space-y-3 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+                  <p>
+                    Bạn đang từ chối lịch phỏng vấn{' '}
+                    <strong className="text-slate-900 dark:text-white">
+                      {declineModalRound.title}
+                    </strong>{' '}
+                    vào lúc{' '}
+                    <strong className="text-slate-900 dark:text-white">
+                      {formatDateTime(declineModalRound.scheduledAt)}
+                    </strong>.
+                  </p>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Lý do từ chối (không bắt buộc)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={declineReason}
+                      onChange={(e) => setDeclineReason(e.target.value)}
+                      placeholder="Nhập lý do hoặc mong muốn dời lịch..."
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-2.5 text-xs text-slate-900 dark:text-white focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setDeclineModalRound(null)}
+                    disabled={isSubmittingDecline}
+                    className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    Quay lại
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeclineInterview()}
+                    disabled={isSubmittingDecline}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600 px-4 py-2 text-xs font-bold text-white shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmittingDecline ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <X className="h-4 w-4" />
+                    )}
+                    <span>Xác nhận từ chối</span>
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </main>
 
       <Footer />

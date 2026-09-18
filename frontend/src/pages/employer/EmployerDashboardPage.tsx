@@ -17,9 +17,10 @@ import {
   Sparkles,
   ChevronRight,
   Loader2,
-  Crown,
   Receipt,
   MessageSquare,
+  Calendar,
+  Crown,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -37,6 +38,7 @@ import { DashboardOverviewTab } from './tabs/DashboardOverviewTab';
 import { CompanyProfileTab } from './tabs/CompanyProfileTab';
 import { JobManagementTab } from './tabs/JobManagementTab';
 import { CandidateManagementTab } from './tabs/CandidateManagementTab';
+import { InterviewCalendarTab } from './tabs/InterviewCalendarTab';
 import { CVSearchTab } from './tabs/CVSearchTab';
 import { HrAccountTab } from './tabs/HrAccountTab';
 import { NotificationsTab } from './tabs/NotificationsTab';
@@ -48,6 +50,7 @@ export type EmployerTabType =
   | 'dashboard'
   | 'jobs'
   | 'candidates'
+  | 'calendar'
   | 'search-cv'
   | 'company'
   | 'account'
@@ -313,6 +316,12 @@ export default function EmployerDashboardPage() {
       label: t('employer.sidebar.menuCandidates', 'Quản lý CV & Ứng viên'),
       icon: Users,
       badge: statsData?.stats?.pendingApplications ? `${statsData.stats.pendingApplications}` : null,
+    },
+    {
+      id: 'calendar',
+      label: 'Lịch phỏng vấn',
+      icon: Calendar,
+      badge: null,
     },
     {
       id: 'messages',
@@ -694,6 +703,15 @@ export default function EmployerDashboardPage() {
                     selectedApplicationId={tabExtraData.selectedApplicationId}
                     onNavigateTab={handleNavigateTab}
                     onRefreshStats={refreshAll}
+                  />
+                )}
+
+                {activeTab === 'calendar' && (
+                  <InterviewCalendarTab
+                    company={statsData?.company ?? null}
+                    hasCompany={statsData?.hasCompany ?? false}
+                    accessToken={accessToken || ''}
+                    onNavigateTab={handleNavigateTab}
                   />
                 )}
 

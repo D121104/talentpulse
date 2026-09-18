@@ -49,12 +49,23 @@ export class MailService {
     });
   }
 
-  // Send interview invitation email with custom HTML content
+  // Send interview invitation email with custom content
   async sendInterviewInvite(email: string, subject: string, content: string) {
+    const frontendUrl = (
+      process.env.URL_FRONTEND || 'http://localhost:5173'
+    ).replace(/\/$/, '');
+    const emailSubject = subject || 'Thư mời phỏng vấn - TalentPulse';
+
     await this.mailerService.sendMail({
       to: email,
-      subject: subject || 'Thư mời phỏng vấn',
-      html: content,
+      subject: emailSubject,
+      template: 'interview-invite',
+      context: {
+        candidateName: 'Ứng viên',
+        content: content.replace(/\n/g, '<br/>'),
+        myCvLink: `${frontendUrl}/applied-jobs`,
+        customSubject: emailSubject,
+      },
     });
   }
 
@@ -87,7 +98,7 @@ export class MailService {
     });
   }
 
-  // Send application status notification email (Suitable, Considering, Unsuitable)
+  // Send application status notification email
   async sendApplicationStatusEmail(data: {
     candidateEmail: string;
     candidateName: string;
@@ -95,16 +106,47 @@ export class MailService {
     companyName: string;
     status: ApplicationStatus;
     note?: string;
+    customSubject?: string;
+    customContent?: string;
   }) {
-    const isApproved = data.status === ApplicationStatus.APPROVED;
+    const frontendUrl = (
+      process.env.URL_FRONTEND || 'http://localhost:5173'
+    ).replace(/\/$/, '');
+
+    if (data.customContent) {
+      const subject =
+        data.customSubject ||
+        `[TalentPulse] Thông báo ứng tuyển vị trí ${data.jobTitle} - ${data.companyName}`;
+      await this.mailerService.sendMail({
+        to: data.candidateEmail,
+        subject,
+        template: 'interview-invite',
+        context: {
+          candidateName: data.candidateName || 'Bạn',
+          jobTitle: data.jobTitle,
+          companyName: data.companyName,
+          content: data.customContent.replace(/\n/g, '<br/>'),
+          note: data.note,
+          myCvLink: `${frontendUrl}/applied-jobs`,
+          customSubject: subject,
+        },
+      });
+      return;
+    }
+
+    const isSuitable =
+      data.status === ApplicationStatus.SUITABLE ||
+      data.status === ApplicationStatus.APPROVED;
+    const isInterviewing = data.status === ApplicationStatus.INTERVIEWING;
     const isConsidering = data.status === ApplicationStatus.CONSIDERING;
     const isRejected = data.status === ApplicationStatus.REJECTED;
 
     let statusText = 'Phù hợp';
     if (isConsidering) statusText = 'Cân nhắc';
+    if (isInterviewing) statusText = 'Mời phỏng vấn';
     if (isRejected) statusText = 'Chưa phù hợp';
 
-    const subject = `[TalentPulse] Thông báo kết quả tuyển dụng vị trí ${data.jobTitle} - ${data.companyName}`;
+    const subject = `[TalentPulse] Thông báo kết quả hồ sơ vị trí ${data.jobTitle} - ${data.companyName}`;
 
     await this.mailerService.sendMail({
       to: data.candidateEmail,
@@ -115,11 +157,12 @@ export class MailService {
         jobTitle: data.jobTitle,
         companyName: data.companyName,
         statusText,
-        isApproved,
+        isApproved: isSuitable,
         isConsidering,
+        isInterviewing,
         isRejected,
         note: data.note,
-        myCvLink: `${process.env.URL_FRONTEND || 'http://localhost:5173'}/cv`,
+        myCvLink: `${frontendUrl}/applied-jobs`,
       },
     });
   }
@@ -229,14 +272,23 @@ export class MailService {
     );
 
     if (jobs.length > 0) {
+      const frontendUrl = (
+        process.env.URL_FRONTEND || 'http://localhost:5173'
+      ).replace(/\/$/, '');
+      const jobsWithUrl = jobs.map((job) => ({
+        ...job,
+        jobUrl: `${frontendUrl}/jobs/${job._id}`,
+      }));
+
       await this.mailerService.sendMail({
         to: subscriber.email,
         subject: `${jobs.length} việc làm mới phù hợp với kỹ năng của bạn`,
         template: 'job-notification',
         context: {
-          jobs,
+          jobs: jobsWithUrl,
           subscriberEmail: subscriber.email,
           skillNames: skillNames.join(', '),
+          portalUrl: `${frontendUrl}/jobs`,
         },
       });
     }
@@ -274,14 +326,23 @@ export class MailService {
       const jobs = await queryBuilder.getMany();
 
       if (jobs.length > 0) {
+        const frontendUrl = (
+          process.env.URL_FRONTEND || 'http://localhost:5173'
+        ).replace(/\/$/, '');
+        const jobsWithUrl = jobs.map((job) => ({
+          ...job,
+          jobUrl: `${frontendUrl}/jobs/${job._id}`,
+        }));
+
         await this.mailerService.sendMail({
           to: subscriber.email,
           subject: `${jobs.length} việc làm mới phù hợp với kỹ năng của bạn`,
           template: 'job-notification',
           context: {
-            jobs,
+            jobs: jobsWithUrl,
             subscriberEmail: subscriber.email,
             skillNames: skillNames.join(', '),
+            portalUrl: `${frontendUrl}/jobs`,
           },
         });
       }

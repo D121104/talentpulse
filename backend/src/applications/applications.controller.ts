@@ -11,7 +11,10 @@ import {
 } from '@nestjs/common';
 import { ApplicationsService } from './applications.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
-import { UpdateApplicationStatusDto } from './dto/update-application.dto';
+import {
+  UpdateApplicationStatusDto,
+  WithdrawApplicationDto,
+} from './dto/update-application.dto';
 import { User, Roles, Role, ResponseMessage } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
@@ -131,6 +134,18 @@ export class ApplicationsController {
   @ResponseMessage('Đã gửi lời nhắc tới Nhà tuyển dụng')
   remindHR(@Param('id') id: string, @User() user: IUser) {
     return this.applicationsService.remindHR(id, user);
+  }
+
+  // Candidate withdraws application when in PENDING status
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/withdraw')
+  @ResponseMessage('Rút đơn ứng tuyển thành công')
+  withdraw(
+    @Param('id') id: string,
+    @Body() withdrawDto: WithdrawApplicationDto,
+    @User() user: IUser,
+  ) {
+    return this.applicationsService.withdraw(id, withdrawDto, user);
   }
 
   // Withdraw application (soft delete + remove AI match result)

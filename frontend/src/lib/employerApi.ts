@@ -138,9 +138,127 @@ export interface HrJobItem {
   createdAt: string;
 }
 
+export type ApplicationStatusType =
+  | 'PENDING'
+  | 'REVIEWING'
+  | 'CONSIDERING'
+  | 'INTERVIEWING'
+  | 'SUITABLE'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'WITHDRAWN';
+
+export type InterviewRoundType = 'TECHNICAL' | 'HR' | 'CULTURE' | 'FINAL';
+
+export type InterviewRoundStatus =
+  | 'PENDING_CONFIRMATION'
+  | 'CONFIRMED'
+  | 'DECLINED'
+  | 'RESCHEDULED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'CANCELLED'
+  | 'NO_SHOW';
+
+export type InterviewResult = 'PENDING' | 'PASSED' | 'FAILED' | 'ON_HOLD';
+
+export interface InterviewParticipantItem {
+  _id: string;
+  roundId: string;
+  userId: string;
+  role: 'INTERVIEWER' | 'CANDIDATE' | 'OBSERVER';
+  joinedAt?: string;
+  leftAt?: string;
+  feedback?: string;
+  rating?: number;
+  user?: {
+    _id: string;
+    name: string;
+    email: string;
+    avatar?: string;
+  };
+}
+
+export interface InterviewRoundItem {
+  _id: string;
+  applicationId: string;
+  companyId: string;
+  roundNumber: number;
+  title: string;
+  roundType: InterviewRoundType;
+  status: InterviewRoundStatus;
+  scheduledAt: string;
+  scheduledEndAt: string;
+  durationMinutes: number;
+  roomId: string;
+  roomPassword?: string;
+  meetingLink?: string;
+  location?: string;
+  isOnline: boolean;
+  notes?: string;
+  description?: string;
+  result: InterviewResult;
+  candidateFeedback?: string;
+  interviewerFeedback?: string;
+  feedback?: string;
+  score?: number;
+  inviteSentAt?: string;
+  confirmedAt?: string;
+  declinedAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  version: number;
+  company?: {
+    _id: string;
+    name?: string;
+    logo?: string;
+  };
+  application?: {
+    _id: string;
+    status: ApplicationStatusType;
+    company?: {
+      _id: string;
+      name?: string;
+      logo?: string;
+    };
+    job?: {
+      _id: string;
+      name: string;
+      salary?: number;
+      level?: string;
+      location?: string;
+    };
+    user?: {
+      _id: string;
+      name: string;
+      email: string;
+      avatar?: string;
+      address?: string;
+    };
+  };
+  participants?: InterviewParticipantItem[];
+}
+
+export interface CreateInterviewRoundPayload {
+  applicationId: string;
+  title: string;
+  roundType?: InterviewRoundType;
+  roundNumber?: number;
+  scheduledAt: string;
+  scheduledEndAt: string;
+  isOnline?: boolean;
+  location?: string;
+  notes?: string;
+  interviewerIds?: string[];
+  sendEmailInvite?: boolean;
+}
+
 export interface ApplicationItem {
   _id: string;
-  status: 'PENDING' | 'REVIEWING' | 'CONSIDERING' | 'APPROVED' | 'REJECTED';
+  status: ApplicationStatusType;
+  version?: number;
+  withdrawnAt?: string;
+  withdrawReason?: string;
   coverLetter?: string;
   createdAt: string;
   updatedAt?: string;
@@ -148,6 +266,8 @@ export interface ApplicationItem {
     status: string;
     updatedAt: string;
     updatedBy: { _id: string; email: string };
+    reason?: string;
+    note?: string;
   }[];
   jobId: {
     _id: string;
@@ -435,6 +555,10 @@ export const employerApi = {
     return apiRequest<{ meta: any; result: ApplicationItem[] }>(`/applications?${qs.toString()}`, { accessToken });
   },
 
+  getApplicationsByCompany: (params: { current?: number; pageSize?: number; status?: string } = {}, accessToken: string) => {
+    return employerApi.getApplications(params, accessToken);
+  },
+
   getApplicationsByJob: (jobId: string, params: { current?: number; pageSize?: number; status?: string } = {}, accessToken: string) => {
     const qs = new URLSearchParams();
     if (params.current) qs.append('current', String(params.current));
@@ -454,12 +578,31 @@ export const employerApi = {
 
   updateApplicationStatus: (
     id: string,
-    status: 'PENDING' | 'REVIEWING' | 'CONSIDERING' | 'APPROVED' | 'REJECTED',
+    status: ApplicationStatusType,
     accessToken: string,
+    options?: {
+      note?: string;
+      reason?: string;
+      sendEmail?: boolean;
+      customEmailSubject?: string;
+      customEmailContent?: string;
+      expectedVersion?: number;
+    },
   ) =>
     apiRequest<ApplicationItem>(`/applications/${id}/status`, {
       method: 'PATCH',
-      body: { status },
+      body: { status, ...options },
+      accessToken,
+    }),
+
+  withdrawApplication: (
+    id: string,
+    accessToken: string,
+    options?: { reason?: string; expectedVersion?: number },
+  ) =>
+    apiRequest<ApplicationItem>(`/applications/${id}/withdraw`, {
+      method: 'POST',
+      body: options || {},
       accessToken,
     }),
 
@@ -584,4 +727,94 @@ export const employerApi = {
       accessToken,
     });
   },
+
+  // 11. Interview Management & Calendar APIs
+  getCalendarInterviews: (
+    params: { startDate?: string; endDate?: string } = {},
+    accessToken: string,
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.startDate) qs.append('startDate', params.startDate);
+    if (params.endDate) qs.append('endDate', params.endDate);
+    return apiRequest<InterviewRoundItem[]>(`/interviews/calendar?${qs.toString()}`, {
+      accessToken,
+    });
+  },
+
+  getInterviews: (
+    params: {
+      applicationId?: string;
+      status?: string;
+      startDate?: string;
+      endDate?: string;
+    } = {},
+    accessToken: string,
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.applicationId) qs.append('applicationId', params.applicationId);
+    if (params.status) qs.append('status', params.status);
+    if (params.startDate) qs.append('startDate', params.startDate);
+    if (params.endDate) qs.append('endDate', params.endDate);
+    return apiRequest<InterviewRoundItem[]>(`/interviews?${qs.toString()}`, {
+      accessToken,
+    });
+  },
+
+  getInterviewDetail: (id: string, accessToken: string) =>
+    apiRequest<InterviewRoundItem>(`/interviews/${id}`, { accessToken }),
+
+  getInterviewRoom: (roomId: string, accessToken: string) =>
+    apiRequest<{ round: InterviewRoundItem; userRoleInRoom: 'INTERVIEWER' | 'CANDIDATE' }>(
+      `/interviews/room/${roomId}`,
+      { accessToken },
+    ),
+
+  endInterviewRoom: (roomId: string, accessToken: string) =>
+    apiRequest<{ success: boolean; message: string }>(
+      `/interviews/room/${roomId}/end`,
+      { method: 'POST', accessToken },
+    ),
+
+  createInterviewRound: (
+    data: CreateInterviewRoundPayload,
+    accessToken: string,
+  ) =>
+    apiRequest<InterviewRoundItem>('/interviews', {
+      method: 'POST',
+      body: data,
+      accessToken,
+    }),
+
+  updateInterviewRound: (
+    id: string,
+    data: Partial<InterviewRoundItem> & { expectedVersion?: number },
+    accessToken: string,
+  ) =>
+    apiRequest<InterviewRoundItem>(`/interviews/${id}`, {
+      method: 'PATCH',
+      body: data,
+      accessToken,
+    }),
+
+  confirmInterview: (
+    id: string,
+    data: { action: 'CONFIRM' | 'DECLINE'; feedback?: string },
+    accessToken: string,
+  ) =>
+    apiRequest<InterviewRoundItem>(`/interviews/${id}/confirm`, {
+      method: 'POST',
+      body: data,
+      accessToken,
+    }),
+
+  sendOnlineInterviewInvite: (
+    id: string,
+    customMessage: string | undefined,
+    accessToken: string,
+  ) =>
+    apiRequest<InterviewRoundItem>(`/interviews/${id}/send-online-invite`, {
+      method: 'POST',
+      body: { customMessage },
+      accessToken,
+    }),
 };

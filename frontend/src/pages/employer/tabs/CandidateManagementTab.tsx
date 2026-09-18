@@ -14,14 +14,16 @@ import {
   Loader2,
   X,
   FileText,
-  Send,
   Clock,
   CheckCircle2,
   Bookmark,
+  Calendar,
+  MinusCircle,
 } from 'lucide-react';
 import {
   employerApi,
   type ApplicationItem,
+  type ApplicationStatusType,
   type AIRankedCandidate,
   type HrJobItem,
   type CompanyInfo,
@@ -42,6 +44,7 @@ interface CandidateManagementTabProps {
 }
 
 export function CandidateManagementTab({
+  company,
   hasCompany,
   accessToken,
   filterJobId,
@@ -59,7 +62,9 @@ export function CandidateManagementTab({
 
   // Filters
   const [selectedJobId, setSelectedJobId] = useState<string>(filterJobId || 'ALL');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'REVIEWING' | 'CONSIDERING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<
+    'ALL' | 'PENDING' | 'REVIEWING' | 'CONSIDERING' | 'INTERVIEWING' | 'SUITABLE' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN'
+  >('ALL');
   const [searchName, setSearchName] = useState('');
 
   // Modals & Active items
@@ -76,15 +81,16 @@ export function CandidateManagementTab({
   } | null>(null);
   const [isLoadingAiRank, setIsLoadingAiRank] = useState(false);
 
-  // Interview Modal
+  // Interview & Email Modal
   const [interviewApp, setInterviewApp] = useState<ApplicationItem | null>(null);
   const [isInterviewModalOpen, setIsInterviewModalOpen] = useState(false);
   const [interviewForm, setInterviewForm] = useState({
-    dateTime: '',
-    meetingLink: '',
-    interviewerName: '',
-    notes: '',
+    sendEmail: true,
+    customSubject: '',
+    customContent: '',
+    note: '',
   });
+  const [isSubmittingInterview, setIsSubmittingInterview] = useState(false);
 
   const fetchJobs = async () => {
     if (!accessToken || !hasCompany) return;
@@ -170,20 +176,35 @@ export function CandidateManagementTab({
 
   const handleUpdateStatus = async (
     applicationId: string,
-    newStatus: 'PENDING' | 'REVIEWING' | 'CONSIDERING' | 'APPROVED' | 'REJECTED',
+    newStatus: ApplicationStatusType,
+    options?: {
+      note?: string;
+      reason?: string;
+      sendEmail?: boolean;
+      customEmailSubject?: string;
+      customEmailContent?: string;
+      expectedVersion?: number;
+    },
   ) => {
     if (!accessToken) return;
     try {
-      await employerApi.updateApplicationStatus(applicationId, newStatus, accessToken);
-      success(
-        newStatus === 'APPROVED'
-          ? 'Đã đánh giá hồ sơ: PHÙ HỢP (Đã gửi Realtime Socket & Email)'
-          : newStatus === 'CONSIDERING'
-          ? 'Đã đánh giá hồ sơ: CÂN NHẮC (Đã gửi Realtime Socket & Email)'
-          : newStatus === 'REJECTED'
-          ? 'Đã đánh giá hồ sơ: CHƯA PHÙ HỢP (Đã gửi Realtime Socket & Email)'
-          : 'Cập nhật trạng thái ứng viên thành công!',
+      await employerApi.updateApplicationStatus(
+        applicationId,
+        newStatus,
+        accessToken,
+        options,
       );
+      const label =
+        newStatus === 'SUITABLE' || newStatus === 'APPROVED'
+          ? 'PHÙ HỢP'
+          : newStatus === 'CONSIDERING'
+          ? 'CÂN NHẮC'
+          : newStatus === 'INTERVIEWING'
+          ? 'PHỎNG VẤN'
+          : newStatus === 'REJECTED'
+          ? 'CHƯA PHÙ HỢP'
+          : newStatus;
+      success(`Đã cập nhật trạng thái hồ sơ: ${label}`);
       await fetchApplications();
       await onRefreshStats();
       if (viewingApp?._id === applicationId) {
@@ -211,30 +232,39 @@ export function CandidateManagementTab({
 
   const handleOpenInterview = (app: ApplicationItem) => {
     setInterviewApp(app);
+    const candidateName = app.userId?.name || 'Ứng viên';
+    const jobName = app.jobId?.name || 'Vị trí tuyển dụng';
+    const companyName = company?.name || 'Doanh nghiệp';
+
     setInterviewForm({
-      dateTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
-      meetingLink: 'https://meet.google.com/abc-defg-hij',
-      interviewerName: '',
-      notes: 'Thân mời bạn tham gia buổi phỏng vấn trực tuyến với đại diện công ty chúng tôi.',
+      sendEmail: true,
+      customSubject: `[TalentPulse] Thông báo phỏng vấn vị trí ${jobName} - ${companyName}`,
+      customContent: `Xin chào ${candidateName},\n\nCông ty ${companyName} xin thông báo hồ sơ của bạn cho vị trí ${jobName} đã được đánh giá phù hợp và chuyển sang giai đoạn phỏng vấn.\n\nBộ phận tuyển dụng sẽ sớm gửi lịch phỏng vấn chi tiết để bạn xác nhận thời gian tham gia.\n\nTrân trọng.`,
+      note: 'Chuyển sang giai đoạn phỏng vấn',
     });
     setIsInterviewModalOpen(true);
   };
 
-  const handleSendInterview = async (e: React.FormEvent) => {
+  const handleConfirmInterviewStatus = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!interviewApp || !accessToken) return;
 
+    setIsSubmittingInterview(true);
     try {
-      await employerApi.updateApplicationStatus(interviewApp._id, 'APPROVED', accessToken);
-      success(t('employer.candidatesTab.sendInterviewBtn', 'Đã gửi thư mời phỏng vấn tới ứng viên!'));
+      await handleUpdateStatus(interviewApp._id, 'INTERVIEWING', {
+        sendEmail: interviewForm.sendEmail,
+        customEmailSubject: interviewForm.sendEmail
+          ? interviewForm.customSubject.trim()
+          : undefined,
+        customEmailContent: interviewForm.sendEmail
+          ? interviewForm.customContent.trim()
+          : undefined,
+        note: interviewForm.note.trim() || undefined,
+        expectedVersion: interviewApp.version,
+      });
       setIsInterviewModalOpen(false);
-      await fetchApplications();
-      await onRefreshStats();
-      if (viewingApp?._id === interviewApp._id) {
-        setViewingApp((prev) => (prev ? { ...prev, status: 'APPROVED' } : null));
-      }
-    } catch (err: any) {
-      error(err.message || 'Gửi thư mời phỏng vấn thất bại');
+    } finally {
+      setIsSubmittingInterview(false);
     }
   };
 
@@ -268,11 +298,19 @@ export function CandidateManagementTab({
 
   const renderStatusBadge = (status: string) => {
     switch (status) {
+      case 'SUITABLE':
       case 'APPROVED':
         return (
           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/80">
             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>{t('employer.dashboardTab.statusApproved')}</span>
+            <span>Phù hợp</span>
+          </span>
+        );
+      case 'INTERVIEWING':
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary border border-primary/30 dark:bg-primary/20 dark:text-primary-light">
+            <Calendar className="h-3.5 w-3.5 text-primary" />
+            <span>Phỏng vấn</span>
           </span>
         );
       case 'CONSIDERING':
@@ -294,6 +332,13 @@ export function CandidateManagementTab({
           <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700 border border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800/80">
             <XCircle className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
             <span>{t('employer.dashboardTab.statusRejected')}</span>
+          </span>
+        );
+      case 'WITHDRAWN':
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700">
+            <MinusCircle className="h-3.5 w-3.5 text-slate-500" />
+            <span>Đã rút đơn</span>
           </span>
         );
       case 'PENDING':
@@ -396,12 +441,14 @@ export function CandidateManagementTab({
             onChange={(e) => setStatusFilter(e.target.value as any)}
             className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white"
           >
-            <option value="ALL">{t('employer.jobsTab.filterAll')} ({applications.length})</option>
-            <option value="PENDING">{t('employer.dashboardTab.statusPending')}</option>
-            <option value="REVIEWING">{t('employer.dashboardTab.statusReviewing')}</option>
-            <option value="CONSIDERING">{t('employer.dashboardTab.statusConsidering')}</option>
-            <option value="APPROVED">{t('employer.dashboardTab.statusApproved')}</option>
-            <option value="REJECTED">{t('employer.dashboardTab.statusRejected')}</option>
+            <option value="ALL">Tất cả trạng thái ({applications.length})</option>
+            <option value="PENDING">Chờ xử lý</option>
+            <option value="REVIEWING">Đã xem CV</option>
+            <option value="CONSIDERING">Cân nhắc</option>
+            <option value="INTERVIEWING">Phỏng vấn</option>
+            <option value="SUITABLE">Phù hợp</option>
+            <option value="REJECTED">Chưa phù hợp</option>
+            <option value="WITHDRAWN">Đã rút đơn</option>
           </select>
         </div>
       </div>
@@ -480,16 +527,25 @@ export function CandidateManagementTab({
                           type="button"
                           onClick={() => handleUpdateStatus(app._id, 'CONSIDERING')}
                           className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50 transition dark:hover:bg-amber-950/40 cursor-pointer"
-                          title={t('employer.candidatesTab.btnConsider')}
+                          title="Đánh giá cân nhắc"
                         >
                           <Bookmark className="h-4 w-4" />
                         </button>
 
                         <button
                           type="button"
-                          onClick={() => handleUpdateStatus(app._id, 'APPROVED')}
+                          onClick={() => handleOpenInterview(app)}
+                          className="rounded-lg p-1.5 text-primary hover:bg-primary/10 transition cursor-pointer"
+                          title="Chuyển sang phỏng vấn & gửi email"
+                        >
+                          <Calendar className="h-4 w-4" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateStatus(app._id, 'SUITABLE')}
                           className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50 transition dark:hover:bg-emerald-950/40 cursor-pointer"
-                          title={t('employer.candidatesTab.btnApprove')}
+                          title="Đánh giá phù hợp"
                         >
                           <CheckCircle2 className="h-4 w-4" />
                         </button>
@@ -498,7 +554,7 @@ export function CandidateManagementTab({
                           type="button"
                           onClick={() => handleUpdateStatus(app._id, 'REJECTED')}
                           className="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 transition dark:hover:bg-rose-950/40 cursor-pointer"
-                          title={t('employer.candidatesTab.btnReject')}
+                          title="Đánh giá chưa phù hợp"
                         >
                           <XCircle className="h-4 w-4" />
                         </button>
@@ -643,15 +699,28 @@ export function CandidateManagementTab({
 
                     <button
                       type="button"
-                      onClick={() => handleUpdateStatus(viewingApp._id, 'APPROVED')}
+                      onClick={() => handleOpenInterview(viewingApp)}
                       className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-xs cursor-pointer ${
-                        viewingApp.status === 'APPROVED'
+                        viewingApp.status === 'INTERVIEWING'
+                          ? 'bg-primary text-white shadow-primary/20'
+                          : 'border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
+                      }`}
+                    >
+                      <Calendar className="h-4 w-4" />
+                      <span>Phỏng vấn & Gửi email</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateStatus(viewingApp._id, 'SUITABLE')}
+                      className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition shadow-xs cursor-pointer ${
+                        viewingApp.status === 'SUITABLE' || viewingApp.status === 'APPROVED'
                           ? 'bg-emerald-600 text-white shadow-emerald-600/20'
                           : 'border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
                       }`}
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      <span>{t('employer.candidatesTab.btnApprove')}</span>
+                      <span>Phù hợp</span>
                     </button>
 
                     <button
@@ -664,7 +733,7 @@ export function CandidateManagementTab({
                       }`}
                     >
                       <XCircle className="h-4 w-4" />
-                      <span>{t('employer.candidatesTab.btnReject')}</span>
+                      <span>Chưa phù hợp</span>
                     </button>
                   </div>
 
@@ -828,15 +897,15 @@ export function CandidateManagementTab({
             >
               <div className="flex items-center justify-between border-b border-slate-100 pb-4 dark:border-slate-800">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                    <Video className="h-5 w-5" />
+                  <div className="p-2 rounded-xl bg-primary/10 text-primary dark:bg-primary/20">
+                    <Calendar className="h-5 w-5" />
                   </div>
                   <div>
                     <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                      {t('employer.candidatesTab.modalInterviewTitle')}
+                      Chuyển sang giai đoạn Phỏng vấn
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {interviewApp.userId?.name} ({interviewApp.userId?.email})
+                      {interviewApp.userId?.name} ({interviewApp.userId?.email}) • {interviewApp.jobId?.name}
                     </p>
                   </div>
                 </div>
@@ -850,61 +919,121 @@ export function CandidateManagementTab({
                 </button>
               </div>
 
-              <form onSubmit={handleSendInterview} className="space-y-4">
+              <form onSubmit={handleConfirmInterviewStatus} className="space-y-4 text-xs">
+                {/* Email toggle */}
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40">
+                  <label className="flex items-center gap-2.5 font-bold text-slate-800 dark:text-slate-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={interviewForm.sendEmail}
+                      onChange={(e) =>
+                        setInterviewForm((prev) => ({
+                          ...prev,
+                          sendEmail: e.target.checked,
+                        }))
+                      }
+                      className="rounded text-primary focus:ring-primary h-4 w-4"
+                    />
+                    <span>Gửi email thông báo mời phỏng vấn đến ứng viên</span>
+                  </label>
+
+                  {interviewForm.sendEmail && (
+                    <div className="mt-3 space-y-3 pt-3 border-t border-slate-200/80 dark:border-slate-700/80">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                          Tiêu đề email
+                        </label>
+                        <input
+                          type="text"
+                          required={interviewForm.sendEmail}
+                          value={interviewForm.customSubject}
+                          onChange={(e) =>
+                            setInterviewForm((prev) => ({
+                              ...prev,
+                              customSubject: e.target.value,
+                            }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs text-slate-900 focus:border-primary focus:outline-hidden dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                          Nội dung email
+                        </label>
+                        <textarea
+                          rows={4}
+                          required={interviewForm.sendEmail}
+                          value={interviewForm.customContent}
+                          onChange={(e) =>
+                            setInterviewForm((prev) => ({
+                              ...prev,
+                              customContent: e.target.value,
+                            }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-900 focus:border-primary focus:outline-hidden dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {t('employer.candidatesTab.interviewDateLabel')}
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Ghi chú nội bộ
                   </label>
                   <input
-                    type="datetime-local"
-                    required
-                    value={interviewForm.dateTime}
-                    onChange={(e) => setInterviewForm((prev) => ({ ...prev, dateTime: e.target.value }))}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    type="text"
+                    value={interviewForm.note}
+                    onChange={(e) =>
+                      setInterviewForm((prev) => ({
+                        ...prev,
+                        note: e.target.value,
+                      }))
+                    }
+                    placeholder="Ghi chú đánh giá vòng hồ sơ..."
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs text-slate-900 focus:border-primary focus:outline-hidden dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {t('employer.candidatesTab.interviewMeetingLabel')}
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    value={interviewForm.meetingLink}
-                    onChange={(e) => setInterviewForm((prev) => ({ ...prev, meetingLink: e.target.value }))}
-                    placeholder="https://meet.google.com/..."
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  />
-                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  {onNavigateTab && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsInterviewModalOpen(false);
+                        onNavigateTab('calendar');
+                      }}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold text-primary hover:underline cursor-pointer"
+                    >
+                      <Calendar className="h-4 w-4" />
+                      <span>Mở Lịch phỏng vấn</span>
+                    </button>
+                  )}
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {t('employer.candidatesTab.interviewNotesLabel')}
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={interviewForm.notes}
-                    onChange={(e) => setInterviewForm((prev) => ({ ...prev, notes: e.target.value }))}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-3">
-                  <button
-                    type="button"
-                    onClick={() => setIsInterviewModalOpen(false)}
-                    className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white cursor-pointer"
-                  >
-                    {t('employer.jobsTab.cancelBtn')}
-                  </button>
-                  <button
-                    type="submit"
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition cursor-pointer"
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                    <span>{t('employer.candidatesTab.sendInterviewBtn')}</span>
-                  </button>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => setIsInterviewModalOpen(false)}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingInterview}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-bold text-white shadow-md shadow-primary/25 hover:bg-primary-dark transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingInterview ? (
+                        <span>Đang xử lý...</span>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          <span>Xác nhận chuyển trạng thái</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </form>
             </motion.div>

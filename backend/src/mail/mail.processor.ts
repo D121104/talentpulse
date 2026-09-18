@@ -11,6 +11,8 @@ export interface ApplicationStatusEmailJobData {
   companyName: string;
   status: ApplicationStatus;
   note?: string;
+  customSubject?: string;
+  customContent?: string;
 }
 
 export interface PremiumSuccessEmailJobData {
