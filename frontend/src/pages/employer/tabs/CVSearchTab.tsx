@@ -241,11 +241,11 @@ export function CVSearchTab({
                     Lượt mở khóa hôm nay:
                   </span>
                   <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-black text-primary">
-                    {quota?.usedToday ?? 0}/5 CV
+                    {quota?.usedToday ?? 0}/{quota?.limit ?? 5} CV
                   </span>
                 </div>
                 <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Còn lại <strong className="text-emerald-600 dark:text-emerald-400">{quota?.remaining ?? 5} lượt</strong> (Reset 00:00 UTC+7)
+                  Còn lại <strong className="text-emerald-600 dark:text-emerald-400">{quota?.remaining ?? (quota?.limit ?? 5)} lượt</strong> (Reset 00:00 UTC+7)
                 </div>
               </div>
               <button
@@ -627,7 +627,7 @@ export function CVSearchTab({
                         <strong className="text-amber-600 dark:text-amber-400">Không giới hạn (HR Premium)</strong>
                       ) : (
                         <>
-                          Đã dùng <strong className="text-slate-900 dark:text-white">{quota?.usedToday ?? 0}/5</strong> (Còn lại <strong className="text-emerald-600 dark:text-emerald-400">{quota?.remaining ?? 5} lượt</strong>)
+                          Đã dùng <strong className="text-slate-900 dark:text-white">{quota?.usedToday ?? 0}/{quota?.limit ?? 5}</strong> (Còn lại <strong className="text-emerald-600 dark:text-emerald-400">{quota?.remaining ?? (quota?.limit ?? 5)} lượt</strong>)
                         </>
                       )}
                     </span>
@@ -635,7 +635,7 @@ export function CVSearchTab({
                   <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700 text-slate-500 dark:text-slate-400">
                     {quota?.isUnlimited
                       ? 'Bạn sở hữu gói HR Premium nên có thể mở khóa thông tin không giới hạn.'
-                      : 'Thao tác này sẽ trừ 1 lượt mở khóa trong hạn mức 5 CV/ngày của tài khoản.'}
+                      : `Thao tác này sẽ trừ 1 lượt mở khóa trong hạn mức ${quota?.limit ?? 5} CV/ngày của tài khoản.`}
                   </div>
                 </div>
 

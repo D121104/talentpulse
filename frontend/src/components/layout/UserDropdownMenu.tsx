@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Bell,
   MessageSquare,
   ChevronDown,
   Briefcase,
@@ -14,7 +13,6 @@ import {
   LogOut,
   Send,
   Sparkles,
-  SlidersHorizontal,
   FileCheck,
   Eye,
   UserCog,
@@ -22,22 +20,29 @@ import {
   Settings2,
   Receipt,
   Clock,
+  Heart,
+  ChevronRight,
+  LayoutDashboard,
 } from 'lucide-react';
 import { formatDate, parseDate } from '../../lib/dateUtils';
 import { useAuth } from '../../auth/AuthContext';
 import { UserAvatar } from '../common/UserAvatar';
+import { NotificationDropdown } from '../notifications/NotificationDropdown';
+import { useChat } from '../../context/ChatContext';
 
 export function UserDropdownMenu() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
+  const { unreadCount: chatUnreadCount } = useChat();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [isOpen, setIsOpen] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     jobs: true,
     cv: true,
     notifications: false,
-    security: false,
+    security: location.pathname.startsWith('/settings'),
     upgrade: false,
   });
 
@@ -88,27 +93,23 @@ export function UserDropdownMenu() {
 
   return (
     <div className="flex items-center gap-1.5 sm:gap-2.5">
-      {/* Quick Action: Notifications Icon */}
-      <button
-        type="button"
-        className="relative flex h-10 w-10 items-center justify-center rounded-full bg-slate-100/80 text-slate-600 transition hover:bg-primary/10 hover:text-primary dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-primary/20 dark:hover:text-primary-light cursor-pointer"
-        aria-label={t('userMenu.notifications')}
-        title={t('userMenu.notifications')}
-      >
-        <Bell className="h-5 w-5" />
-        {/* Subtle unread badge dot in Primary Blue */}
-        <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-primary ring-2 ring-white dark:ring-slate-900" />
-      </button>
+      {/* Quick Action: Notifications Dropdown (Candidate & HR) */}
+      <NotificationDropdown />
 
       {/* Quick Action: Messages Icon */}
-      <button
-        type="button"
+      <Link
+        to="/messages"
         className="relative flex h-10 w-10 items-center justify-center rounded-full bg-slate-100/80 text-slate-600 transition hover:bg-primary/10 hover:text-primary dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-primary/20 dark:hover:text-primary-light cursor-pointer"
-        aria-label={t('userMenu.messages')}
-        title={t('userMenu.messages')}
+        aria-label={t('userMenu.messages', 'Tin nhắn')}
+        title={t('userMenu.messages', 'Tin nhắn')}
       >
         <MessageSquare className="h-5 w-5" />
-      </button>
+        {chatUnreadCount > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-black text-white shadow-sm ring-2 ring-white dark:ring-slate-900 animate-pulse">
+            {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+          </span>
+        )}
+      </Link>
 
       {/* Avatar Dropdown Wrapper */}
       <div
@@ -214,6 +215,28 @@ export function UserDropdownMenu() {
                 </div>
               </div>
 
+              {/* Admin Portal Shortcut if user is ADMIN */}
+              {user.role === 'ADMIN' && (
+                <div className="px-3 pt-3 pb-1">
+                  <Link
+                    to="/admin/dashboard"
+                    onClick={() => setIsOpen(false)}
+                    className="group relative flex items-center justify-between overflow-hidden rounded-xl bg-gradient-to-r from-violet-600 via-indigo-600 to-purple-600 p-3 text-white shadow-md shadow-indigo-500/20 transition-all duration-200 hover:shadow-lg hover:shadow-indigo-500/30 hover:scale-[1.01]"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/20 backdrop-blur-sm">
+                        <LayoutDashboard className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="text-left">
+                        <p className="text-[13px] font-bold tracking-tight">Cổng Quản Trị Hệ Thống</p>
+                        <p className="text-[11px] text-indigo-100">Bảng điều khiển & quản trị TalentPulse</p>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-white/80 transition-transform group-hover:translate-x-0.5" />
+                  </Link>
+                </div>
+              )}
+
               {/* 2. Menu Sections */}
               <div className="py-3 space-y-1">
                 {/* Section 1: Quản lý tìm việc */}
@@ -256,12 +279,12 @@ export function UserDropdownMenu() {
                         <span>{t('userMenu.matchingJobs')}</span>
                       </Link>
                       <Link
-                        to="/job-alerts"
+                        to="/saved-jobs"
                         onClick={() => setIsOpen(false)}
                         className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
                       >
-                        <SlidersHorizontal className="h-4 w-4 text-slate-400" />
-                        <span>{t('userMenu.jobAlertSettings')}</span>
+                        <Heart className="h-4 w-4 text-rose-500" />
+                        <span>{t('userMenu.savedJobs')}</span>
                       </Link>
                     </div>
                   )}
@@ -368,17 +391,25 @@ export function UserDropdownMenu() {
                       <Link
                         to="/settings/profile"
                         onClick={() => setIsOpen(false)}
-                        className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
+                        className={`flex items-center gap-2.5 py-2 transition-colors ${
+                          location.pathname === '/settings/profile'
+                            ? 'text-primary font-bold dark:text-primary-light'
+                            : 'text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light'
+                        }`}
                       >
-                        <UserCog className="h-4 w-4 text-slate-400" />
+                        <UserCog className={`h-4 w-4 ${location.pathname === '/settings/profile' ? 'text-primary dark:text-primary-light' : 'text-slate-400'}`} />
                         <span>{t('userMenu.updateProfile')}</span>
                       </Link>
                       <Link
                         to="/settings/password"
                         onClick={() => setIsOpen(false)}
-                        className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
+                        className={`flex items-center gap-2.5 py-2 transition-colors ${
+                          location.pathname === '/settings/password'
+                            ? 'text-primary font-bold dark:text-primary-light'
+                            : 'text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light'
+                        }`}
                       >
-                        <KeyRound className="h-4 w-4 text-slate-400" />
+                        <KeyRound className={`h-4 w-4 ${location.pathname === '/settings/password' ? 'text-primary dark:text-primary-light' : 'text-slate-400'}`} />
                         <span>{t('userMenu.changePassword')}</span>
                       </Link>
                     </div>

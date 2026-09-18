@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
   OnModuleInit,
   Logger,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import { UpdateApplicationStatusDto } from './dto/update-application.dto';
 import { UsersService } from 'src/users/users.service';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
 import { CVParseStatus } from 'src/usercvs/cv-parse-status';
+import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
 import { Role } from 'src/decorator/customize';
 import aqp from 'api-query-params';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -68,6 +70,9 @@ export class ApplicationsService implements OnModuleInit {
 
     @InjectQueue('mail-queue')
     private readonly mailQueue: Queue,
+
+    @Optional()
+    private readonly onlineCVsService?: OnlineCVsService,
   ) {}
 
   async onModuleInit() {
@@ -80,14 +85,48 @@ export class ApplicationsService implements OnModuleInit {
     }
   }
 
-  // User applies for a job with selected CV
+  // User applies for a job with selected CV (supports both UserCV & OnlineCV)
   async create(createApplicationDto: CreateApplicationDto, user: IUser) {
     const { cvId, jobId, companyId, coverLetter, aiRankingConsent } =
       createApplicationDto;
 
-    const cv = await this.userCVsService.findOne(cvId, user);
-    if (!cv) {
-      throw new BadRequestException('CV không tồn tại hoặc không thuộc về bạn');
+    // 1. Resolve CV: check if cvId belongs to uploaded UserCV or OnlineCV
+    let userCv: any = null;
+
+    try {
+      userCv = await this.userCVsService.findOne(cvId, user);
+    } catch {
+      userCv = null;
+    }
+
+    if (!userCv && this.onlineCVsService) {
+      try {
+        const onlineCv = await this.onlineCVsService.findOne(cvId, user);
+        if (onlineCv) {
+          // Bridge online CV to a UserCV record to satisfy DB foreign key & prep rich parsedText
+          userCv = await this.userCVsService.findOrCreateForOnlineCv(
+            onlineCv,
+            user,
+          );
+
+          // If online CV does not have exported pdfUrl yet, trigger background export
+          if (!onlineCv.pdfUrl) {
+            this.onlineCVsService
+              .exportToPdf(onlineCv._id, user)
+              .catch((err) =>
+                this.logger.warn(
+                  `Background PDF generation on apply failed: ${err?.message}`,
+                ),
+              );
+          }
+        }
+      } catch {
+        userCv = null;
+      }
+    }
+
+    if (!userCv) {
+      throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
     }
 
     const job = await this.jobsService.findOne(jobId);
@@ -103,7 +142,7 @@ export class ApplicationsService implements OnModuleInit {
     }
 
     const application = this.applicationRepo.create({
-      cvId,
+      cvId: userCv._id,
       userId: user._id,
       jobId,
       companyId: canonicalCompanyId,
@@ -163,8 +202,8 @@ export class ApplicationsService implements OnModuleInit {
     // all CV, application and job content from canonical PostgreSQL records.
     if (
       aiRankingConsent === true &&
-      cv.parseStatus === CVParseStatus.READY &&
-      Boolean(cv.contentHash)
+      userCv.parseStatus === CVParseStatus.READY &&
+      Boolean(userCv.contentHash)
     ) {
       try {
         const company = job.company?._id
@@ -183,11 +222,11 @@ export class ApplicationsService implements OnModuleInit {
           );
           const jobSourceVersion = getJobSourceVersion(job, company);
           await this.cvProcessingService.queueCVProcessing({
-            cvId: cv._id.toString(),
+            cvId: userCv._id.toString(),
             userId: user._id,
             applicationId: savedApplication._id.toString(),
-            cvContentVersion: cv.contentVersion,
-            contentHash: cv.contentHash || '',
+            cvContentVersion: userCv.contentVersion,
+            contentHash: userCv.contentHash || '',
             jobId: job._id.toString(),
             jobSourceVersion,
             aiRankingConsentGranted: true,
@@ -195,12 +234,12 @@ export class ApplicationsService implements OnModuleInit {
             aiRankingConsentPolicyHash: policy.policyHash,
             consentIdempotencyKey: consentIdempotencyKey(
               savedApplication._id.toString(),
-              cv.contentVersion,
+              userCv.contentVersion,
               jobSourceVersion,
             ),
           });
         }
-      } catch (error) {
+      } catch {
         this.logger.warn(
           `Failed to queue CV processing for application ${savedApplication._id}`,
         );
@@ -212,30 +251,43 @@ export class ApplicationsService implements OnModuleInit {
       relations: ['job', 'company', 'user'],
     });
 
-    if (applicationInDb && applicationInDb.companyId) {
-      const hrs = await this.usersService.findAllByCompanyId(
-        applicationInDb.companyId,
-      );
+    if (applicationInDb) {
+      const recipientUserIds = new Set<string>();
 
-      if (hrs && hrs.length > 0) {
-        for (const hr of hrs) {
-          const notiObj: CreateNotificationDto = {
-            userId: hr._id.toString(),
-            title: 'Đơn ứng tuyển mới',
-            content: `Bạn có một đơn ứng tuyển mới cho công việc ${
-              applicationInDb.job?.name || ''
-            } từ ứng viên ${applicationInDb.user?.name || ''}.`,
-            type: NotificationType.RESUME,
-            targetType: NotificationTargetType.APPLICATION,
-            targetId: savedApplication._id.toString(),
-            data: {
-              applicationId: savedApplication._id.toString(),
-              jobId: applicationInDb.jobId.toString(),
-            },
-          };
-
-          this.notificationsService.create(notiObj);
+      if (applicationInDb.companyId) {
+        const hrs = await this.usersService.findAllByCompanyId(
+          applicationInDb.companyId,
+        );
+        if (hrs && hrs.length > 0) {
+          hrs.forEach((hr: any) => {
+            if (hr?._id) recipientUserIds.add(hr._id.toString());
+          });
         }
+      }
+
+      if (applicationInDb.job?.createdBy?._id) {
+        recipientUserIds.add(applicationInDb.job.createdBy._id.toString());
+      }
+
+      for (const hrUserId of recipientUserIds) {
+        const notiObj: CreateNotificationDto = {
+          userId: hrUserId,
+          title: 'Đơn ứng tuyển mới',
+          content: `Ứng viên ${
+            applicationInDb.user?.name || 'mới'
+          } vừa nộp hồ sơ ứng tuyển vào vị trí "${
+            applicationInDb.job?.name || ''
+          }".`,
+          type: NotificationType.RESUME,
+          targetType: NotificationTargetType.APPLICATION,
+          targetId: savedApplication._id.toString(),
+          data: {
+            applicationId: savedApplication._id.toString(),
+            jobId: applicationInDb.jobId.toString(),
+          },
+        };
+
+        await this.notificationsService.create(notiObj);
       }
     }
 
@@ -312,7 +364,13 @@ export class ApplicationsService implements OnModuleInit {
     const formatted = applications.map((app) => ({
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       userId: app.user
         ? {
@@ -401,7 +459,13 @@ export class ApplicationsService implements OnModuleInit {
     const formatted = applications.map((app) => ({
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       userId: app.user
         ? {
@@ -436,7 +500,13 @@ export class ApplicationsService implements OnModuleInit {
     return applications.map((app) => ({
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       companyId: app.company
         ? {
@@ -471,7 +541,13 @@ export class ApplicationsService implements OnModuleInit {
     return {
       ...app,
       cvId: app.cv
-        ? { _id: app.cv._id, url: app.cv.url, title: app.cv.title }
+        ? {
+            _id: app.cv._id,
+            url: app.cv.url,
+            title: app.cv.title,
+            fileType: app.cv.fileType,
+            onlineCvId: app.cv.onlineCvId,
+          }
         : app.cvId,
       userId: app.user
         ? {
@@ -1088,6 +1164,62 @@ export class ApplicationsService implements OnModuleInit {
     return {
       total: enrichedResults.length,
       result: enrichedResults,
+    };
+  }
+
+  // Candidate nudges/reminds HR about their application
+  async remindHR(id: string, user: IUser) {
+    const application = await this.applicationRepo.findOne({
+      where: { _id: id, userId: user._id, isDeleted: false },
+      relations: ['job', 'company'],
+    });
+
+    if (!application) {
+      throw new NotFoundException(
+        'Đơn ứng tuyển không tồn tại hoặc không thuộc quyền sở hữu của bạn',
+      );
+    }
+
+    const recipientUserIds = new Set<string>();
+    if (application.companyId) {
+      const hrs = await this.usersService.findAllByCompanyId(
+        application.companyId,
+      );
+      if (hrs && hrs.length > 0) {
+        hrs.forEach((hr: any) => {
+          if (hr?._id) recipientUserIds.add(hr._id.toString());
+        });
+      }
+    }
+
+    if (application.job?.createdBy?._id) {
+      recipientUserIds.add(application.job.createdBy._id.toString());
+    }
+
+    const candidateName = user.name || 'Ứng viên';
+    const jobName = application.job?.name || 'vị trí tuyển dụng';
+    const companyName = application.company?.name || 'Doanh nghiệp';
+
+    for (const hrUserId of recipientUserIds) {
+      await this.notificationsService.create({
+        userId: hrUserId,
+        title: 'Lời nhắc phản hồi hồ sơ từ ứng viên',
+        content: `Ứng viên ${candidateName} vừa gửi lời nhắc phản hồi cho hồ sơ ứng tuyển vị trí "${jobName}" tại ${companyName}.`,
+        type: NotificationType.RESUME,
+        targetType: NotificationTargetType.APPLICATION,
+        targetId: application._id,
+        data: {
+          applicationId: application._id,
+          jobId: application.jobId,
+          isReminder: true,
+          remindedAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    return {
+      success: true,
+      message: 'Đã gửi lời nhắc chuyên nghiệp tới Nhà tuyển dụng',
     };
   }
 }

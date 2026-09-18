@@ -22,7 +22,9 @@ export default function GoogleCallbackPage() {
     void completeGoogleLogin(code)
       .then((session) => {
         navigate(
-          session.user.role === 'HR'
+          session.user.role === 'ADMIN'
+            ? '/admin/dashboard'
+            : session.user.role === 'HR'
             ? (!session.user.isApproved ? '/pending-approval' : '/dashboard')
             : '/',
           { replace: true },

@@ -12,6 +12,7 @@ import { RegisterUserDto } from './dto/create-user.dto';
 import { UpdateUserDto, UpdateUserPasswordDto } from './dto/update-user.dto';
 import { User, PremiumPlan } from './entities/user.entity';
 import { Company } from 'src/companies/entities/company.entity';
+import { PremiumPackage } from 'src/payments/entities/premium-package.entity';
 import * as bcrypt from 'bcryptjs';
 import aqp from 'api-query-params';
 import { IUser } from './users.interface';
@@ -26,6 +27,8 @@ export class UsersService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(Company)
     private readonly companyRepo: Repository<Company>,
+    @InjectRepository(PremiumPackage)
+    private readonly packageRepo: Repository<PremiumPackage>,
     @Inject(forwardRef(() => OtpsService))
     private readonly otpService: OtpsService,
     private readonly mailService: MailService,
@@ -218,28 +221,51 @@ export class UsersService {
   updatePassword = async (id: string, updateUserDto: UpdateUserPasswordDto) => {
     const user = await this.userRepo.findOne({ where: { _id: id } });
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException('Người dùng không tồn tại');
     }
 
-    if (!this.checkPassword(updateUserDto.oldPassword, user.password)) {
-      throw new BadRequestException('Current password is incorrect');
+    const oldPass = updateUserDto.oldPassword || updateUserDto.currentPassword;
+    if (!oldPass) {
+      throw new BadRequestException('Mật khẩu hiện tại không được để trống');
     }
 
-    return await this.userRepo.update(id, {
+    if (!this.checkPassword(oldPass, user.password)) {
+      throw new BadRequestException('Mật khẩu hiện tại không chính xác');
+    }
+
+    if (!updateUserDto.newPassword || updateUserDto.newPassword.length < 6) {
+      throw new BadRequestException('Mật khẩu mới phải có ít nhất 6 ký tự');
+    }
+
+    await this.userRepo.update(id, {
       password: this.hashPassword(updateUserDto.newPassword),
     });
+
+    return { message: 'Đổi mật khẩu thành công' };
   };
+
+  async requestForgotPasswordOtp(email: string) {
+    return await this.otpService.create({ email });
+  }
 
   async forgotPassword(token: string) {
     const otpUser = await this.otpService.checkToken(token);
 
-    if (!otpUser) {
-      throw new BadRequestException('Token not found!');
+    if (!otpUser || !otpUser.email) {
+      throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
     }
 
     await this.otpService.remove(token);
 
-    return await this.userRepo.findOne({ where: { email: otpUser.email } });
+    const user = await this.userRepo.findOne({
+      where: { email: otpUser.email, isDeleted: false },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Không tìm thấy tài khoản người dùng');
+    }
+
+    return user;
   }
 
   async countUser() {
@@ -520,9 +546,18 @@ export class UsersService {
   isUserPremium(user: User | IUser | any): boolean {
     if (!user) return false;
     if (user.role === Role.ADMIN) return true;
-    if (!user.isPremium) return false;
+    const isPrem =
+      user.isPremium === true ||
+      user.isPremium === 'true' ||
+      user.isPremium === 1 ||
+      (user.premiumPlan && user.premiumPlan !== PremiumPlan.FREE);
+    if (!isPrem) return false;
     if (!user.premiumExpiresAt) return true; // Gói vĩnh viễn hoặc chưa hết hạn
-    return new Date(user.premiumExpiresAt) > new Date();
+    try {
+      return new Date(user.premiumExpiresAt).getTime() > Date.now();
+    } catch {
+      return true;
+    }
   }
 
   /**
@@ -532,7 +567,7 @@ export class UsersService {
     if (!user) return false;
     if (user.role === Role.ADMIN) return true;
     if (!this.isUserPremium(user)) return false;
-    return user.premiumPlan === PremiumPlan.HR_PREMIUM;
+    return user.premiumPlan === PremiumPlan.HR_PREMIUM || user.role === Role.HR;
   }
 
   /**
@@ -542,7 +577,96 @@ export class UsersService {
     if (!user) return false;
     if (user.role === Role.ADMIN) return true;
     if (!this.isUserPremium(user)) return false;
-    return user.premiumPlan === PremiumPlan.CANDIDATE_PREMIUM;
+    if (user.premiumPlan === PremiumPlan.CANDIDATE_PREMIUM) return true;
+    if (user.role === Role.USER) return true;
+    if (
+      user.premiumPlan &&
+      String(user.premiumPlan).toUpperCase().includes('CANDIDATE')
+    ) {
+      return true;
+    }
+    return user.role !== Role.HR;
+  }
+
+  /**
+   * Tra cứu gói Premium tương ứng từ cơ sở dữ liệu (premium_packages)
+   */
+  async getUserPackage(
+    user: User | IUser | any,
+  ): Promise<PremiumPackage | null> {
+    if (!user) return null;
+
+    let packageId = user.premiumPackageId;
+    let plan = user.premiumPlan;
+
+    if (!packageId && user._id) {
+      const dbUser = await this.userRepo.findOne({
+        where: { _id: user._id, isDeleted: false },
+      });
+      if (dbUser) {
+        packageId = dbUser.premiumPackageId;
+        plan = dbUser.premiumPlan;
+      }
+    }
+
+    if (packageId) {
+      const pkg = await this.packageRepo.findOne({
+        where: { _id: packageId, isDeleted: false },
+      });
+      if (pkg) return pkg;
+    }
+
+    if (plan && plan !== PremiumPlan.FREE) {
+      const pkg = await this.packageRepo.findOne({
+        where: { planType: plan, isActive: true, isDeleted: false },
+        order: { price: 'DESC' },
+      });
+      if (pkg) return pkg;
+    }
+
+    return null;
+  }
+
+  /**
+   * Giới hạn số lượng tin HOT cùng lúc được phép (áp dụng cho HR)
+   * - Admin: 999999
+   * - HR Standard: 1
+   * - HR Premium: Đọc trực tiếp từ premium_packages.hot_job_limit (ví dụ 3, 5, 10...)
+   */
+  async getUserHotJobLimit(user: User | IUser | any): Promise<number> {
+    if (!user) return 1;
+    if (user.role === Role.ADMIN) return 999999;
+    if (!this.isHrPremium(user)) return 1;
+
+    const pkg = await this.getUserPackage(user);
+    if (pkg && typeof pkg.hotJobLimit === 'number' && pkg.hotJobLimit > 0) {
+      return pkg.hotJobLimit;
+    }
+
+    return 5;
+  }
+
+  /**
+   * Giới hạn số lượt tìm kiếm / mở khóa CV ứng viên hàng ngày (áp dụng cho HR)
+   * - Admin: 999999
+   * - HR Standard: 5
+   * - HR Premium: Đọc trực tiếp từ premium_packages.candidate_search_limit (ví dụ 50, 100, 999999...)
+   */
+  async getUserCandidateSearchLimit(user: User | IUser | any): Promise<number> {
+    if (!user) return 5;
+    if (user.role === Role.ADMIN) return 999999;
+    if (!this.isHrPremium(user)) return 5;
+
+    const pkg = await this.getUserPackage(user);
+    if (
+      pkg &&
+      typeof pkg.candidateSearchLimit === 'number' &&
+      pkg.candidateSearchLimit > 0
+    ) {
+      return pkg.candidateSearchLimit;
+    }
+
+    return 50;
   }
 
   /**
@@ -552,7 +676,7 @@ export class UsersService {
    */
   getUserMaxActiveJobs(user: User | IUser | any): number {
     if (!user) return 6;
-    if (this.isHrPremium(user)) {
+    if (user.role === Role.ADMIN || this.isHrPremium(user)) {
       return 999999;
     }
     return 6;
@@ -563,12 +687,124 @@ export class UsersService {
   }
 
   /**
-   * Nâng cấp gói Premium cho người dùng
+   * Giới hạn số lượng Online CV tối đa của ứng viên
+   * - Admin / Candidate Premium: 9999 (không giới hạn)
+   * - Đã xác thực (Verified): 6
+   * - Thường (Free): 3
+   */
+  getUserMaxCvLimit(user: User | IUser | any): number {
+    if (!user) return 3;
+    if (user.role === Role.ADMIN || this.isCandidatePremium(user)) {
+      return 9999;
+    }
+    if (user.isVerified) {
+      return 6;
+    }
+    return 3;
+  }
+
+  /**
+   * Giới hạn số lượt xem số lượng người ứng tuyển công việc hàng tuần cho ứng viên
+   * - Admin: 999999
+   * - Candidate Premium Annual: 999999 (không giới hạn)
+   * - Candidate Premium Semi-Annual: 20 lượt/tuần
+   * - Candidate Premium Monthly: 5 lượt/tuần
+   * - Free: 0
+   */
+  async getUserCandidateWeeklyApplicantLimit(
+    user: User | IUser | any,
+  ): Promise<number> {
+    if (!user) return 0;
+    if (user.role === Role.ADMIN) return 999999;
+    if (!this.isCandidatePremium(user)) return 0;
+
+    const pkg = await this.getUserPackage(user);
+    if (!pkg) return 5;
+    if (pkg.code === 'CANDIDATE_ANNUAL' || pkg.billingCycle === 'annual') {
+      return 999999;
+    }
+    if (
+      pkg.code === 'CANDIDATE_SEMI_ANNUAL' ||
+      pkg.billingCycle === 'semi_annual'
+    ) {
+      return 20;
+    }
+    return 5;
+  }
+
+  /**
+   * Lấy chi tiết toàn bộ quyền lợi (entitlements) động từ database cho tài khoản
+   */
+  async getUserEntitlements(userIdOrUser: string | User | IUser | any) {
+    let user: User | null = null;
+    if (typeof userIdOrUser === 'string') {
+      user = await this.userRepo.findOne({
+        where: { _id: userIdOrUser, isDeleted: false },
+      });
+    } else if (userIdOrUser?._id) {
+      user = await this.userRepo.findOne({
+        where: { _id: userIdOrUser._id, isDeleted: false },
+      });
+    }
+    if (!user) {
+      user = userIdOrUser;
+    }
+
+    const isPremium = this.isUserPremium(user);
+    const isHr = this.isHrPremium(user);
+    const isCandidate = this.isCandidatePremium(user);
+    const pkg = await this.getUserPackage(user);
+
+    const hotJobLimit = await this.getUserHotJobLimit(user);
+    const candidateSearchLimit = await this.getUserCandidateSearchLimit(user);
+    const maxActiveJobs = this.getUserMaxActiveJobs(user);
+    const maxCvLimit = this.getUserMaxCvLimit(user);
+
+    return {
+      userId: user?._id,
+      email: user?.email,
+      role: user?.role,
+      isPremium,
+      premiumPlan: user?.premiumPlan || PremiumPlan.FREE,
+      premiumExpiresAt: user?.premiumExpiresAt || null,
+      package: pkg
+        ? {
+            id: pkg._id,
+            code: pkg.code,
+            name: pkg.name,
+            billingCycle: pkg.billingCycle,
+            features: pkg.features,
+            hotJobLimit: pkg.hotJobLimit,
+            candidateSearchLimit: pkg.candidateSearchLimit,
+            aiQuota: pkg.aiQuota,
+          }
+        : null,
+      aiQuotaRemaining: user?.aiQuotaRemaining ?? (pkg ? pkg.aiQuota : 0),
+      limits: {
+        hotJobLimit,
+        candidateSearchLimit,
+        maxActiveJobs,
+        maxCvLimit,
+        canUsePremiumTemplates: isCandidate || user?.role === Role.ADMIN,
+        boostCooldownMs: isCandidate
+          ? 24 * 60 * 60 * 1000
+          : 30 * 24 * 60 * 60 * 1000,
+        canViewApplicantCount: isCandidate || user?.role === Role.ADMIN,
+        weeklyApplicantCountLimit:
+          await this.getUserCandidateWeeklyApplicantLimit(user),
+      },
+    };
+  }
+
+  /**
+   * Nâng cấp gói Premium cho người dùng (hỗ trợ liên kết packageId và nạp aiQuota)
    */
   async upgradePremiumPlan(
     userId: string,
     plan: string,
     durationDays: number,
+    packageId?: string,
+    aiQuota?: number,
   ): Promise<any> {
     const user = await this.userRepo.findOne({ where: { _id: userId } });
     if (!user) {
@@ -588,6 +824,26 @@ export class UsersService {
     user.isPremium = true;
     user.premiumPlan = plan as any;
     user.premiumExpiresAt = newExpiry;
+
+    if (packageId) {
+      user.premiumPackageId = packageId;
+    } else {
+      // Auto resolve package if not provided
+      const resolvedPkg = await this.packageRepo.findOne({
+        where: { planType: plan as any, isActive: true, isDeleted: false },
+        order: { price: 'DESC' },
+      });
+      if (resolvedPkg) {
+        user.premiumPackageId = resolvedPkg._id;
+        if (typeof aiQuota !== 'number') {
+          aiQuota = resolvedPkg.aiQuota;
+        }
+      }
+    }
+
+    if (typeof aiQuota === 'number') {
+      user.aiQuotaRemaining = (user.aiQuotaRemaining || 0) + aiQuota;
+    }
 
     const savedUser = await this.userRepo.save(user);
 

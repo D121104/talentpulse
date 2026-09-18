@@ -27,6 +27,9 @@ export class Job {
     name: string;
     logo?: string;
     isActive?: boolean;
+    scale?: string;
+    address?: string;
+    industry?: string;
   };
 
   @Column({ type: 'numeric', nullable: true })
@@ -34,6 +37,18 @@ export class Job {
 
   @Column({ nullable: true })
   level: string;
+
+  @Column({ nullable: true, default: 'Làm việc tại văn phòng / Onsite' })
+  workingModel: string;
+
+  @Column({ nullable: true, default: 'Đại học trở lên' })
+  education: string;
+
+  @Column({ type: 'text', array: true, default: '{}' })
+  benefits: string[];
+
+  @Column({ type: 'text', array: true, default: '{}' })
+  categories: string[];
 
   @Column({ type: 'timestamptz', nullable: true })
   startDate: Date;
@@ -53,8 +68,11 @@ export class Job {
   @Column({ default: false })
   isHot: boolean;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   boostedAt: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  boostExpiresAt: Date;
 
   @Column({ default: false })
   isFeatured: boolean;

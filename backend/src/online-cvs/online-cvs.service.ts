@@ -18,6 +18,8 @@ import * as Handlebars from 'handlebars';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
+import { RedisService } from 'src/redis/redis.service';
+
 // Dynamic import for puppeteer
 let puppeteer: any;
 
@@ -193,8 +195,19 @@ export class OnlineCVsService {
     private readonly userRepo: Repository<User>,
     private readonly usersService: UsersService,
     private readonly filesService: FilesService,
+    private readonly redisService: RedisService,
   ) {
     this.loadPuppeteer();
+  }
+
+  private async invalidateUserCvSkillsCache(userId: string) {
+    try {
+      if (userId) {
+        await this.redisService.deleteValue(`user:${userId}:primary-cv-skills`);
+      }
+    } catch {
+      // Ignore cache deletion error
+    }
   }
 
   private async loadPuppeteer() {
@@ -216,7 +229,7 @@ export class OnlineCVsService {
     const isVerified = userInDb.isVerified || false;
 
     // 1. Enforce max CV limits: Thường (3), Đã xác thực (6), Premium (Không giới hạn)
-    const maxLimit = isPremium ? 9999 : isVerified ? 6 : 3;
+    const maxLimit = this.usersService.getUserMaxCvLimit(userInDb);
     const currentCount = await this.onlineCVRepo.count({
       where: { userId: user._id, isDeleted: false },
     });
@@ -264,6 +277,7 @@ export class OnlineCVsService {
     });
 
     const savedCV = await this.onlineCVRepo.save(newCV);
+    await this.invalidateUserCvSkillsCache(user._id);
 
     // If htmlContent is provided, generate PDF & upload to Cloudinary
     try {
@@ -333,6 +347,8 @@ export class OnlineCVsService {
       },
     });
 
+    await this.invalidateUserCvSkillsCache(user._id);
+
     // Auto update PDF & upload to Cloudinary
     try {
       await this.exportToPdf(id, user, htmlContent);
@@ -355,6 +371,8 @@ export class OnlineCVsService {
         email: user.email,
       },
     });
+
+    await this.invalidateUserCvSkillsCache(user._id);
 
     return await this.onlineCVRepo.softDelete(id);
   }
@@ -398,6 +416,8 @@ export class OnlineCVsService {
         email: user.email,
       },
     });
+
+    await this.invalidateUserCvSkillsCache(user._id);
 
     return {
       _id: cv._id,
@@ -562,6 +582,16 @@ export class OnlineCVsService {
         pdfUrl: uploadResult.url,
         ...(contentToUse ? { htmlContent: contentToUse } : {}),
       });
+
+      // Also sync pdfUrl to linked UserCV records if present
+      try {
+        await this.onlineCVRepo.query(
+          'UPDATE user_cvs SET url = $1 WHERE "onlineCvId" = $2',
+          [uploadResult.url, id],
+        );
+      } catch {
+        // Ignore if not present
+      }
 
       return {
         _id: cv._id,

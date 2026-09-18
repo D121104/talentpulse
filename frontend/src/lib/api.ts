@@ -149,6 +149,21 @@ export const authApi = {
       method: "POST",
       body: data,
     }),
+  forgotPassword: (email: string) =>
+    apiRequest<{ message: string; email: string }>('/auth/forgot-password', {
+      method: 'POST',
+      body: { email },
+    }),
+  verifyOtp: (otp: string) =>
+    apiRequest<{ message: string; email: string; token: string }>('/otps/verify-otp', {
+      method: 'POST',
+      body: { otp },
+    }),
+  resetPassword: (data: { token: string; password: string }) =>
+    apiRequest<{ message: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: data,
+    }),
 };
 
 export function getGoogleLoginUrl() {

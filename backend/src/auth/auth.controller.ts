@@ -21,6 +21,7 @@ import { Public, User } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { CreateHrDto } from 'src/users/dto/create-hr.dto';
+import { ForgotPasswordDto } from 'src/users/dto/forgot-password.dto';
 
 @Controller('auth')
 @ApiTags('Auth Controller')
@@ -122,6 +123,13 @@ export class AuthController {
       throw new BadRequestException('Refresh token không tồn tại');
     }
     return this.authService.generateNewToken(refreshToken, response);
+  }
+
+  @Public()
+  @ApiOperation({ summary: 'Request password reset OTP / email' })
+  @Post('forgot-password')
+  handleForgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
   }
 
   @Public()

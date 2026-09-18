@@ -23,6 +23,7 @@ import {
   NotificationTargetType,
 } from 'src/notifications/entities/notification.entity';
 import { IUser } from 'src/users/users.interface';
+import { Role } from 'src/decorator/customize';
 import { SearchCandidatesDto } from './dto/search-candidate.dto';
 import { UnlockCandidateDto } from './dto/unlock-candidate.dto';
 
@@ -938,8 +939,11 @@ export class CandidateAccessService {
         });
 
         const isHrPremium = this.usersService.isHrPremium(hrUserRecord);
+        const searchLimit = await this.usersService.getUserCandidateSearchLimit(
+          hrUserRecord,
+        );
 
-        if (!isHrPremium) {
+        if (hrUser.role !== Role.ADMIN) {
           const { startOfDay, endOfDay } = this.getUtc7DayRange();
 
           const todayUnlocksCount = await manager.count(CandidateAccess, {
@@ -949,10 +953,16 @@ export class CandidateAccessService {
             },
           });
 
-          if (todayUnlocksCount >= FREE_HR_DAILY_CV_LIMIT) {
-            throw new ForbiddenException(
-              `Bạn đã sử dụng hết hạn mức ${FREE_HR_DAILY_CV_LIMIT} lượt mở khóa/tải CV miễn phí trong ngày hôm nay (theo giờ Việt Nam UTC+7). Hãy nâng cấp tài khoản lên HR Premium để mở khóa không giới hạn!`,
-            );
+          if (todayUnlocksCount >= searchLimit) {
+            if (!isHrPremium) {
+              throw new ForbiddenException(
+                `Bạn đã sử dụng hết hạn mức ${searchLimit} lượt mở khóa/tải CV miễn phí trong ngày hôm nay (theo giờ Việt Nam UTC+7). Hãy nâng cấp tài khoản lên HR Premium để mở rộng giới hạn tìm kiếm ứng viên!`,
+              );
+            } else {
+              throw new ForbiddenException(
+                `Bạn đã sử dụng hết hạn mức ${searchLimit} lượt mở khóa CV theo gói Premium hiện tại trong ngày hôm nay. Vui lòng quay lại vào ngày mai hoặc nâng cấp gói cao hơn!`,
+              );
+            }
           }
         }
 
@@ -1083,16 +1093,9 @@ export class CandidateAccessService {
     });
 
     const isHrPremium = this.usersService.isHrPremium(hrUserRecord);
-
-    if (isHrPremium) {
-      return {
-        usedToday: 0,
-        limit: 999999,
-        remaining: 999999,
-        isUnlimited: true,
-        timezone: 'Asia/Ho_Chi_Minh (UTC+7)',
-      };
-    }
+    const limit = await this.usersService.getUserCandidateSearchLimit(
+      hrUserRecord,
+    );
 
     const { startOfDay, endOfDay } = this.getUtc7DayRange();
 
@@ -1103,14 +1106,15 @@ export class CandidateAccessService {
       },
     });
 
-    const limit = FREE_HR_DAILY_CV_LIMIT;
-    const remaining = Math.max(0, limit - usedToday);
+    const isUnlimited = limit >= 999999;
+    const remaining = isUnlimited ? 999999 : Math.max(0, limit - usedToday);
 
     return {
       usedToday,
       limit,
       remaining,
-      isUnlimited: false,
+      isUnlimited,
+      isHrPremium,
       timezone: 'Asia/Ho_Chi_Minh (UTC+7)',
     };
   }

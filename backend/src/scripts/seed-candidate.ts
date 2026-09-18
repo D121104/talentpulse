@@ -5,6 +5,7 @@ import * as dotenv from 'dotenv';
 import { User, PremiumPlan } from '../users/entities/user.entity';
 import { OnlineCV } from '../online-cvs/entities/online-cv.entity';
 import { UserCV } from '../usercvs/entities/usercv.entity';
+import { PremiumPackage } from '../payments/entities/premium-package.entity';
 import { Role } from '../decorator/customize';
 
 dotenv.config();
@@ -16,7 +17,7 @@ const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres123',
   database: process.env.DB_DATABASE || 'recruitment_db',
-  entities: [User, OnlineCV, UserCV],
+  entities: [User, OnlineCV, UserCV, PremiumPackage],
   synchronize: false,
 });
 
@@ -31,6 +32,11 @@ async function runCandidateSeed() {
   const userRepo = AppDataSource.getRepository(User);
   const onlineCvRepo = AppDataSource.getRepository(OnlineCV);
   const userCvRepo = AppDataSource.getRepository(UserCV);
+  const packageRepo = AppDataSource.getRepository(PremiumPackage);
+
+  const candPackage = await packageRepo.findOne({
+    where: { code: 'CANDIDATE_ANNUAL', isDeleted: false },
+  });
 
   const hashedPassword = bcrypt.hashSync('12345678', bcrypt.genSaltSync(10));
   const oneYearLater = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
@@ -55,6 +61,8 @@ async function runCandidateSeed() {
     isDeleted: false,
     isPremium: true,
     premiumPlan: PremiumPlan.CANDIDATE_PREMIUM,
+    premiumPackageId: candPackage ? candPackage._id : null,
+    aiQuotaRemaining: candPackage ? candPackage.aiQuota : 500,
     premiumExpiresAt: oneYearLater,
     isJobSeeking: true,
     isJobRecommendation: true,

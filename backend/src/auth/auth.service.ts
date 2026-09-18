@@ -57,10 +57,33 @@ export class AuthService {
     return this.serializeUser(user);
   }
 
+  async forgotPassword(email: string) {
+    const cleanEmail = email?.trim().toLowerCase();
+    if (!cleanEmail) {
+      throw new BadRequestException('Vui lòng nhập địa chỉ email');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { email: cleanEmail, isDeleted: false },
+    });
+
+    if (!user) {
+      throw new BadRequestException(
+        'Không tìm thấy tài khoản với địa chỉ email này',
+      );
+    }
+
+    return await this.usersService.requestForgotPasswordOtp(cleanEmail);
+  }
+
   async resetPassword(token: string, password: string) {
+    if (!password || password.length < 8) {
+      throw new BadRequestException('Mật khẩu mới phải có tối thiểu 8 ký tự');
+    }
+
     const user = await this.usersService.forgotPassword(token);
     if (!user) {
-      throw new BadRequestException('Invalid token');
+      throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
     }
 
     await this.userRepo.update(user._id, {
@@ -68,7 +91,9 @@ export class AuthService {
       refreshToken: null as any,
     });
 
-    return { message: 'Password reset successfully' };
+    return {
+      message: 'Đặt lại mật khẩu thành công! Bạn có thể đăng nhập ngay.',
+    };
   }
 
   async login(user: IUser, response: Response) {
@@ -454,6 +479,8 @@ export class AuthService {
       isPremium: user.isPremium || false,
       premiumPlan: user.premiumPlan || 'FREE',
       premiumExpiresAt: user.premiumExpiresAt || undefined,
+      premiumPackageId: user.premiumPackageId || undefined,
+      aiQuotaRemaining: user.aiQuotaRemaining ?? 0,
       isVerified: user.isVerified || false,
       verifiedAt: user.verifiedAt || undefined,
       lastBoostedAt: user.lastBoostedAt || undefined,

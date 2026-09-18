@@ -4,11 +4,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
   Briefcase,
+  Building2,
   Calendar,
   Check,
   CheckCircle2,
   Database,
   DollarSign,
+  Gift,
+  GraduationCap,
   Layers,
   Loader2,
   MapPin,
@@ -36,6 +39,10 @@ export interface JobFormData {
   salary: number;
   quantity: number;
   level: string;
+  workingModel: string;
+  education: string;
+  benefits: string[];
+  categories: string[];
   description: string;
   location: string;
   startDate: string;
@@ -60,6 +67,43 @@ const JOB_LEVELS = [
   { value: 'SENIOR', label: 'Senior (4+ năm)' },
   { value: 'LEAD', label: 'Trưởng nhóm (Lead)' },
   { value: 'MANAGER', label: 'Quản lý (Manager)' },
+];
+
+const WORKING_MODELS = [
+  { value: 'Làm việc tại văn phòng / Onsite', label: 'Tại văn phòng / Onsite' },
+  { value: 'Linh hoạt / Hybrid', label: 'Linh hoạt / Hybrid' },
+  { value: 'Làm từ xa / Remote', label: 'Làm từ xa / Remote' },
+];
+
+const EDUCATION_LEVELS = [
+  { value: 'Không yêu cầu', label: 'Không yêu cầu' },
+  { value: 'Trung cấp', label: 'Trung cấp' },
+  { value: 'Cao đẳng', label: 'Cao đẳng' },
+  { value: 'Đại học trở lên', label: 'Đại học trở lên' },
+  { value: 'Thạc sĩ / Tiến sĩ', label: 'Thạc sĩ / Tiến sĩ' },
+];
+
+const SUGGESTED_BENEFITS = [
+  'Bảo hiểm xã hội',
+  'Du lịch hàng năm',
+  'Thưởng tháng 13',
+  'Khám sức khỏe định kỳ',
+  'Phụ cấp ăn trưa',
+  'Laptop / Thiết bị làm việc',
+  'Review lương 2 lần/năm',
+  'Đào tạo nâng cao',
+];
+
+const SUGGESTED_CATEGORIES = [
+  'Công nghệ Thông tin',
+  'Software Engineering',
+  'Frontend Developer',
+  'Backend Developer',
+  'Fullstack Developer',
+  'Mobile Developer',
+  'DevOps / Cloud',
+  'AI / Machine Learning',
+  'QA / Tester',
 ];
 
 const QUICK_LOCATIONS = [
@@ -109,6 +153,16 @@ export function JobEditorView({
       salary: editingJob?.salary || 15000000,
       quantity: editingJob?.quantity || 1,
       level: editingJob?.level || 'MIDDLE',
+      workingModel: editingJob?.workingModel || 'Làm việc tại văn phòng / Onsite',
+      education: editingJob?.education || 'Đại học trở lên',
+      benefits:
+        editingJob?.benefits && editingJob.benefits.length > 0
+          ? editingJob.benefits
+          : ['Bảo hiểm xã hội', 'Du lịch hàng năm', 'Thưởng tháng 13'],
+      categories:
+        editingJob?.categories && editingJob.categories.length > 0
+          ? editingJob.categories
+          : ['Công nghệ Thông tin', 'Software Engineering'],
       description: editingJob?.description || '',
       location: editingJob?.location || company?.address || 'Hà Nội',
       startDate: editingJob?.startDate
@@ -120,6 +174,41 @@ export function JobEditorView({
       isActive: editingJob ? editingJob.isActive !== false : true,
     },
   );
+
+  const [benefitInput, setBenefitInput] = useState('');
+  const [categoryInput, setCategoryInput] = useState('');
+
+  const handleAddBenefit = (b: string) => {
+    const trimmed = b.trim();
+    if (!trimmed) return;
+    if (!formData.benefits.some((item) => item.toLowerCase() === trimmed.toLowerCase())) {
+      setFormData((prev) => ({ ...prev, benefits: [...prev.benefits, trimmed] }));
+    }
+    setBenefitInput('');
+  };
+
+  const handleRemoveBenefit = (b: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      benefits: prev.benefits.filter((item) => item !== b),
+    }));
+  };
+
+  const handleAddCategory = (c: string) => {
+    const trimmed = c.trim();
+    if (!trimmed) return;
+    if (!formData.categories.some((item) => item.toLowerCase() === trimmed.toLowerCase())) {
+      setFormData((prev) => ({ ...prev, categories: [...prev.categories, trimmed] }));
+    }
+    setCategoryInput('');
+  };
+
+  const handleRemoveCategory = (c: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      categories: prev.categories.filter((item) => item !== c),
+    }));
+  };
 
   // =========================================================================
   // SKILLS FROM DATABASE & DEBOUNCE SEARCH STATE
@@ -518,6 +607,64 @@ export function JobEditorView({
                     })}
                   </div>
                 </div>
+
+                {/* Working Model Quick Select */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1.5">
+                    <Building2 className="h-3.5 w-3.5 text-primary" />
+                    <span>Hình thức làm việc</span>
+                    <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {WORKING_MODELS.map((model) => {
+                      const isSelected = formData.workingModel === model.value;
+                      return (
+                        <button
+                          key={model.value}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, workingModel: model.value })}
+                          className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition active:scale-95 cursor-pointer ${
+                            isSelected
+                              ? 'bg-primary text-white shadow-md shadow-primary/20'
+                              : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          {isSelected && <Check className="h-3.5 w-3.5" />}
+                          <span>{model.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Education Level Quick Select */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1.5">
+                    <GraduationCap className="h-3.5 w-3.5 text-primary" />
+                    <span>Yêu cầu học vấn</span>
+                    <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {EDUCATION_LEVELS.map((edu) => {
+                      const isSelected = formData.education === edu.value;
+                      return (
+                        <button
+                          key={edu.value}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, education: edu.value })}
+                          className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition active:scale-95 cursor-pointer ${
+                            isSelected
+                              ? 'bg-primary text-white shadow-md shadow-primary/20'
+                              : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          {isSelected && <Check className="h-3.5 w-3.5" />}
+                          <span>{edu.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -759,7 +906,116 @@ export function JobEditorView({
               </div>
             </div>
 
-            {/* Card 3: Word-like TipTap Rich Text Description */}
+            {/* Card 3: Benefits & Perks Builder */}
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-500/10 text-purple-600 dark:bg-purple-500/20 dark:text-purple-400">
+                    <Gift className="h-4.5 w-4.5" />
+                  </span>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <span>3. Quyền lợi & Chế độ đãi ngộ</span>
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Các chính sách phúc lợi hấp dẫn giúp tin tuyển dụng thu hút nhiều ứng viên tiềm năng hơn
+                    </p>
+                  </div>
+                </div>
+
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-extrabold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  {formData.benefits.length} quyền lợi
+                </span>
+              </div>
+
+              <div className="space-y-4">
+                {/* Input + Add */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={benefitInput}
+                    onChange={(e) => setBenefitInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddBenefit(benefitInput);
+                      }
+                    }}
+                    placeholder="Nhập quyền lợi (vd: Thưởng dự án, Cấp MacBook Pro, Du lịch Châu Âu)..."
+                    className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/10 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddBenefit(benefitInput)}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white hover:bg-slate-800 active:scale-95 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 transition cursor-pointer shrink-0"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Thêm</span>
+                  </button>
+                </div>
+
+                {/* Selected Benefits Badges */}
+                {formData.benefits.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <AnimatePresence>
+                      {formData.benefits.map((benefit) => (
+                        <motion.span
+                          key={benefit}
+                          initial={{ opacity: 0, scale: 0.8 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.8 }}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-purple-50 px-3 py-1.5 text-xs font-bold text-purple-700 border border-purple-200/80 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-300 shadow-2xs"
+                        >
+                          <span>{benefit}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveBenefit(benefit)}
+                            className="rounded-full p-0.5 hover:bg-purple-200/60 dark:hover:bg-purple-800 transition cursor-pointer"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </motion.span>
+                      ))}
+                    </AnimatePresence>
+                  </div>
+                ) : (
+                  <p className="text-xs italic text-amber-600 dark:text-amber-400">
+                    Chưa có quyền lợi nào được thêm. Hãy chọn các gợi ý bên dưới hoặc tự nhập.
+                  </p>
+                )}
+
+                {/* Suggested Benefits */}
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2">
+                    Gợi ý quyền lợi phổ biến:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {SUGGESTED_BENEFITS.map((sb) => {
+                      const isAdded = formData.benefits.some(
+                        (b) => b.toLowerCase() === sb.toLowerCase(),
+                      );
+                      return (
+                        <button
+                          key={sb}
+                          type="button"
+                          disabled={isAdded}
+                          onClick={() => handleAddBenefit(sb)}
+                          className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition cursor-pointer ${
+                            isAdded
+                              ? 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-800 dark:text-slate-600 cursor-default'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900 active:scale-95 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          {isAdded ? `✓ ${sb}` : `+ ${sb}`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 4: Word-like TipTap Rich Text Description */}
             <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-xs dark:border-slate-800 dark:bg-slate-900">
               <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
                 <div className="flex items-center gap-2.5">
@@ -768,7 +1024,7 @@ export function JobEditorView({
                   </span>
                   <div>
                     <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                      3. Mô tả chi tiết, Yêu cầu & Quyền lợi ứng viên
+                      4. Mô tả chi tiết, Yêu cầu & Trách nhiệm
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
                       Soạn thảo trực tiếp với đầy đủ phông chữ, cỡ chữ, bảng biểu, màu sắc và gạch đầu dòng chuẩn Microsoft Word
@@ -851,6 +1107,94 @@ export function JobEditorView({
                       className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                     />
                     <span className="text-xs font-bold text-slate-500 shrink-0">ứng viên</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Card: Categories / Danh mục nghề liên quan */}
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Tag className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Danh mục nghề liên quan
+                  </h3>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  {formData.categories.length}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={categoryInput}
+                    onChange={(e) => setCategoryInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddCategory(categoryInput);
+                      }
+                    }}
+                    placeholder="VD: Mobile Developer..."
+                    className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddCategory(categoryInput)}
+                    className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
+
+                {formData.categories.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {formData.categories.map((cat) => (
+                      <span
+                        key={cat}
+                        className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                      >
+                        <span>{cat}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCategory(cat)}
+                          className="text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
+                    Gợi ý danh mục:
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {SUGGESTED_CATEGORIES.map((cat) => {
+                      const isAdded = formData.categories.some(
+                        (c) => c.toLowerCase() === cat.toLowerCase(),
+                      );
+                      return (
+                        <button
+                          key={cat}
+                          type="button"
+                          disabled={isAdded}
+                          onClick={() => handleAddCategory(cat)}
+                          className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition cursor-pointer ${
+                            isAdded
+                              ? 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-800 dark:text-slate-600'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                          }`}
+                        >
+                          {isAdded ? `✓ ${cat}` : `+ ${cat}`}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </div>

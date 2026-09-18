@@ -60,6 +60,12 @@ export class User {
   @Column({ type: 'timestamp', nullable: true })
   premiumExpiresAt: Date;
 
+  @Column({ nullable: true })
+  premiumPackageId: string;
+
+  @Column({ type: 'int', default: 0 })
+  aiQuotaRemaining: number;
+
   @Column({ default: false })
   isVerified: boolean;
 

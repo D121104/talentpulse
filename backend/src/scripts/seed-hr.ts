@@ -11,6 +11,7 @@ import {
 } from '../applications/entities/application.entity';
 import { UserCV } from '../usercvs/entities/usercv.entity';
 import { Skill } from '../skills/entities/skill.entity';
+import { PremiumPackage } from '../payments/entities/premium-package.entity';
 import { Role } from '../decorator/customize';
 
 dotenv.config();
@@ -22,7 +23,7 @@ const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres123',
   database: process.env.DB_DATABASE || 'recruitment_db',
-  entities: [User, Company, Job, Application, UserCV, Skill],
+  entities: [User, Company, Job, Application, UserCV, Skill, PremiumPackage],
   synchronize: false,
 });
 
@@ -37,6 +38,14 @@ async function runSeed() {
   const cvRepo = AppDataSource.getRepository(UserCV);
   const appRepo = AppDataSource.getRepository(Application);
   const skillRepo = AppDataSource.getRepository(Skill);
+  const packageRepo = AppDataSource.getRepository(PremiumPackage);
+
+  const hrPackage = await packageRepo.findOne({
+    where: { code: 'HR_ANNUAL', isDeleted: false },
+  });
+  const candPackage = await packageRepo.findOne({
+    where: { code: 'CANDIDATE_ANNUAL', isDeleted: false },
+  });
 
   const hashedPassword = bcrypt.hashSync('12345678', bcrypt.genSaltSync(10));
 
@@ -62,6 +71,8 @@ async function runSeed() {
       isDeleted: false,
       isPremium: true,
       premiumPlan: PremiumPlan.HR_PREMIUM,
+      premiumPackageId: hrPackage ? hrPackage._id : null,
+      aiQuotaRemaining: hrPackage ? hrPackage.aiQuota : 1500,
       premiumExpiresAt: oneYearLater,
       createdBy: { _id: 'system', email: 'system@talentpulse.com' },
     });
@@ -75,6 +86,8 @@ async function runSeed() {
     hrUser.isDeleted = false;
     hrUser.isPremium = true;
     hrUser.premiumPlan = PremiumPlan.HR_PREMIUM;
+    hrUser.premiumPackageId = hrPackage ? hrPackage._id : null;
+    hrUser.aiQuotaRemaining = hrPackage ? hrPackage.aiQuota : 1500;
     hrUser.premiumExpiresAt = oneYearLater;
     hrUser.avatar =
       'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80';
@@ -175,6 +188,9 @@ async function runSeed() {
       taxCode: '0109988776',
       scale: '100-500 nhân sự',
       address: 'Keangnam Landmark 72, Phạm Hùng, Cầu Giấy, Hà Nội',
+      lat: 21.0173,
+      lon: 105.7838,
+      website: 'https://talentpulse.vn',
       description:
         'Tập đoàn công nghệ và giải pháp tuyển dụng nhân sự ứng dụng trí tuệ nhân tạo hàng đầu Việt Nam.',
       logo: 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=200&auto=format&fit=crop&q=60',
@@ -190,6 +206,9 @@ async function runSeed() {
     company.taxCode = '0109988776';
     company.scale = '100-500 nhân sự';
     company.address = 'Keangnam Landmark 72, Phạm Hùng, Cầu Giấy, Hà Nội';
+    company.lat = 21.0173;
+    company.lon = 105.7838;
+    company.website = 'https://talentpulse.vn';
     company.description =
       'Tập đoàn công nghệ và giải pháp tuyển dụng nhân sự ứng dụng trí tuệ nhân tạo hàng đầu Việt Nam.';
     company.logo =
@@ -484,6 +503,9 @@ async function runSeed() {
         premiumPlan: isCandPremium
           ? PremiumPlan.CANDIDATE_PREMIUM
           : PremiumPlan.FREE,
+        premiumPackageId: isCandPremium && candPackage ? candPackage._id : null,
+        aiQuotaRemaining:
+          isCandPremium && candPackage ? candPackage.aiQuota : 0,
         premiumExpiresAt: isCandPremium ? oneYearLater : (null as any),
         createdBy: { _id: 'system', email: 'system@talentpulse.com' },
       });
@@ -493,6 +515,10 @@ async function runSeed() {
       candidateUser.premiumPlan = isCandPremium
         ? PremiumPlan.CANDIDATE_PREMIUM
         : PremiumPlan.FREE;
+      candidateUser.premiumPackageId =
+        isCandPremium && candPackage ? candPackage._id : null;
+      candidateUser.aiQuotaRemaining =
+        isCandPremium && candPackage ? candPackage.aiQuota : 0;
       candidateUser.premiumExpiresAt = isCandPremium
         ? oneYearLater
         : (null as any);

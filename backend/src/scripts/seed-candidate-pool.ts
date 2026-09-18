@@ -8,6 +8,7 @@ import { Job } from '../jobs/entities/job.entity';
 import { OnlineCV } from '../online-cvs/entities/online-cv.entity';
 import { UserCV } from '../usercvs/entities/usercv.entity';
 import { Skill } from '../skills/entities/skill.entity';
+import { PremiumPackage } from '../payments/entities/premium-package.entity';
 import { Role } from '../decorator/customize';
 
 dotenv.config();
@@ -19,7 +20,7 @@ const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres123',
   database: process.env.DB_DATABASE || 'recruitment_db',
-  entities: [User, Company, Job, OnlineCV, UserCV, Skill],
+  entities: [User, Company, Job, OnlineCV, UserCV, Skill, PremiumPackage],
   synchronize: false,
 });
 
@@ -921,6 +922,14 @@ async function runSeed() {
   const jobRepo = AppDataSource.getRepository(Job);
   const onlineCvRepo = AppDataSource.getRepository(OnlineCV);
   const userCvRepo = AppDataSource.getRepository(UserCV);
+  const packageRepo = AppDataSource.getRepository(PremiumPackage);
+
+  const hrPackage = await packageRepo.findOne({
+    where: { code: 'HR_ANNUAL', isDeleted: false },
+  });
+  const candPackage = await packageRepo.findOne({
+    where: { code: 'CANDIDATE_ANNUAL', isDeleted: false },
+  });
 
   const hashedPassword = bcrypt.hashSync('12345678', bcrypt.genSaltSync(10));
   const oneYearLater = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
@@ -941,8 +950,11 @@ async function runSeed() {
       taxCode: '0109988776',
       scale: '100-500 nhân sự',
       address: 'Keangnam Landmark 72, Phạm Hùng, Cầu Giấy, Hà Nội',
+      lat: 21.0173,
+      lon: 105.7838,
+      website: 'https://talentpulse.vn',
       description:
-        'Tập đoàn công nghệ và giải pháp phần mềm SaaS, Cloud Computing và trí tuệ nhân tạo AI hàng đầu Việt Nam.',
+        'Tập đoàn công nghệ và giải pháp phần mềm SaaS, Cloud Computing và trí tuệ nhân tạo AI hàng đầu Việt Nam',
       logo: 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=200&auto=format&fit=crop&q=60',
       isActive: true,
       isPremium: true,
@@ -971,6 +983,8 @@ async function runSeed() {
     isDeleted: false,
     isPremium: true,
     premiumPlan: PremiumPlan.HR_PREMIUM,
+    premiumPackageId: hrPackage ? hrPackage._id : null,
+    aiQuotaRemaining: hrPackage ? hrPackage.aiQuota : 1500,
     premiumExpiresAt: oneYearLater,
     company: { _id: compTech._id, name: compTech.name, isActive: true },
   };
@@ -992,6 +1006,9 @@ async function runSeed() {
       taxCode: '0315889922',
       scale: '500-1000 nhân sự',
       address: 'Bitexco Financial Tower, Quận 1, TP. Hồ Chí Minh',
+      lat: 10.7716,
+      lon: 106.7044,
+      website: 'https://grandland.vn',
       description:
         'Tập đoàn phát triển bất động sản nghỉ dưỡng, thương mại dịch vụ cao cấp và phân phối dự án BĐS hàng đầu.',
       logo: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=200&auto=format&fit=crop&q=60',
@@ -1043,6 +1060,9 @@ async function runSeed() {
       taxCode: '0108776655',
       scale: '50-100 nhân sự',
       address: 'Tòa nhà Charmvit, Trần Duy Hưng, Cầu Giấy, Hà Nội',
+      lat: 21.0084,
+      lon: 105.7972,
+      website: 'https://creativepulse.vn',
       description:
         'Agency chuyên sâu về giải pháp tiếp thị kỹ thuật số Digital Marketing, sáng tạo nội dung viral, quản lý nhãn hàng và thiết kế trải nghiệm thương hiệu.',
       logo: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=200&auto=format&fit=crop&q=60',
@@ -1312,6 +1332,8 @@ async function runSeed() {
       premiumPlan: cand.isPremium
         ? PremiumPlan.CANDIDATE_PREMIUM
         : PremiumPlan.FREE,
+      premiumPackageId: cand.isPremium && candPackage ? candPackage._id : null,
+      aiQuotaRemaining: cand.isPremium && candPackage ? candPackage.aiQuota : 0,
       premiumExpiresAt: cand.isPremium ? oneYearLater : null,
       boostExpiresAt: cand.isBoosted ? boostExpireDate : null,
       isJobSeeking: true,

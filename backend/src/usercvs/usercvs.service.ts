@@ -255,6 +255,132 @@ export class UserCVsService {
     });
   }
 
+  async findOrCreateForOnlineCv(onlineCv: any, user: IUser): Promise<UserCV> {
+    const skills = (onlineCv.skills || [])
+      .map((s: any) => (typeof s === 'string' ? s : s?.name))
+      .filter(Boolean);
+
+    const education = (onlineCv.education || [])
+      .map((e: any) =>
+        typeof e === 'string'
+          ? e
+          : `${e?.schoolName || ''}${e?.major ? ` - ${e.major}` : ''}${
+              e?.description ? `: ${e.description}` : ''
+            }`.trim(),
+      )
+      .filter(Boolean);
+
+    const experience = (onlineCv.workExperience || [])
+      .map((w: any) =>
+        typeof w === 'string'
+          ? w
+          : `${w?.companyName || ''}${w?.position ? ` - ${w.position}` : ''}${
+              w?.description ? `: ${w.description}` : ''
+            }`.trim(),
+      )
+      .filter(Boolean);
+
+    const certificates = (onlineCv.certificates || [])
+      .map((c: any) => (typeof c === 'string' ? c : c?.name))
+      .filter(Boolean);
+
+    const textBlocks = [
+      onlineCv.fullName ? `Họ và tên: ${onlineCv.fullName}` : '',
+      onlineCv.position ? `Vị trí: ${onlineCv.position}` : '',
+      onlineCv.careerObjective
+        ? `Mục tiêu nghề nghiệp: ${onlineCv.careerObjective}`
+        : '',
+      skills.length ? `Kỹ năng: ${skills.join(', ')}` : '',
+      experience.length
+        ? `Kinh nghiệm làm việc:\n${experience.join('\n')}`
+        : '',
+      education.length ? `Học vấn:\n${education.join('\n')}` : '',
+      certificates.length ? `Chứng chỉ: ${certificates.join(', ')}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const contentHash = createHash('sha256')
+      .update(textBlocks, 'utf8')
+      .digest('hex');
+    const title = onlineCv.title || onlineCv.fullName || 'Online CV';
+    const url = onlineCv.pdfUrl || '';
+
+    const existingCv = await this.userCVRepo.findOne({
+      where: { onlineCvId: onlineCv._id, userId: user._id, isDeleted: false },
+    });
+
+    if (existingCv) {
+      await this.userCVRepo.update(existingCv._id, {
+        title,
+        url: url || existingCv.url,
+        skills,
+        education,
+        experience,
+        certificates,
+        parsedText: textBlocks,
+        contentHash,
+        parseStatus: CVParseStatus.READY,
+        parsedAt: new Date(),
+        updatedBy: { _id: user._id, email: user.email },
+      });
+      return (await this.userCVRepo.findOne({
+        where: { _id: existingCv._id },
+      }))!;
+    }
+
+    const newCv = this.userCVRepo.create({
+      userId: user._id,
+      onlineCvId: onlineCv._id,
+      title,
+      url,
+      fileType: 'online',
+      skills,
+      education,
+      experience,
+      certificates,
+      parsedText: textBlocks,
+      parseStatus: CVParseStatus.READY,
+      parsedAt: new Date(),
+      contentHash,
+      contentVersion: randomUUID(),
+      isPrimary: false,
+      isSearchable: onlineCv.isSearchable ?? true,
+      createdBy: { _id: user._id, email: user.email },
+    });
+
+    return await this.userCVRepo.save(newCv);
+  }
+
+  async updateParsedData(
+    cvId: string,
+    data: {
+      parsedText: string;
+      skills?: string[];
+      education?: string[];
+      experience?: string[];
+      certificates?: string[];
+      parseStatus?: CVParseStatus;
+    },
+  ) {
+    const updatePayload: Partial<UserCV> = {
+      parsedText: data.parsedText,
+      parseStatus: data.parseStatus || CVParseStatus.READY,
+      parsedAt: new Date(),
+    };
+    if (data.skills) updatePayload.skills = data.skills;
+    if (data.education) updatePayload.education = data.education;
+    if (data.experience) updatePayload.experience = data.experience;
+    if (data.certificates) updatePayload.certificates = data.certificates;
+    if (data.parsedText) {
+      updatePayload.contentHash = createHash('sha256')
+        .update(data.parsedText, 'utf8')
+        .digest('hex');
+    }
+
+    await this.userCVRepo.update(cvId, updatePayload);
+  }
+
   async findByUser(user: IUser) {
     return this.userCVRepo.find({
       where: { userId: user._id, isDeleted: false },

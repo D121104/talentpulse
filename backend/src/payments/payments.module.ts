@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentOrder } from './entities/payment-order.entity';
+import { PremiumPackage } from './entities/premium-package.entity';
 import { User } from '../users/entities/user.entity';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
@@ -15,7 +16,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PaymentOrder, User]),
+    TypeOrmModule.forFeature([PaymentOrder, User, PremiumPackage]),
     UsersModule,
     RedisModule,
     MailModule,

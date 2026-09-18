@@ -51,11 +51,16 @@ export const PremiumCheckoutModal: React.FC<PremiumCheckoutModalProps> = ({
   if (!isOpen || !planInfo) return null;
 
   const isHr = planInfo.planType === 'HR_PREMIUM';
+  const discountPercent =
+    planInfo.originalPrice && planInfo.originalPrice > planInfo.price
+      ? Math.round((1 - planInfo.price / planInfo.originalPrice) * 100)
+      : 0;
+
   const cycleText =
     planInfo.billingCycle === 'annual'
-      ? 'Gói 1 Năm (Tiết kiệm 33%)'
+      ? `Gói 1 Năm${discountPercent > 0 ? ` (Tiết kiệm ${discountPercent}%)` : ''}`
       : planInfo.billingCycle === 'semi_annual'
-      ? 'Gói 6 Tháng (Tiết kiệm 15%)'
+      ? `Gói 6 Tháng${discountPercent > 0 ? ` (Tiết kiệm ${discountPercent}%)` : ''}`
       : 'Gói 1 Tháng';
 
   const discountAmount =

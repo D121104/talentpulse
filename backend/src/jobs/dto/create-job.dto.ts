@@ -38,6 +38,24 @@ export class CreateJobDto {
   @IsNotEmpty()
   level: string;
 
+  @IsString()
+  @IsOptional()
+  workingModel?: string;
+
+  @IsString()
+  @IsOptional()
+  education?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  benefits?: string[];
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  categories?: string[];
+
   @IsDate()
   @Transform(({ value }) => new Date(value))
   @IsNotEmpty()

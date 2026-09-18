@@ -244,4 +244,15 @@ export class UsersController {
   ) {
     return this.usersService.updateCandidateSettings(user._id, settings);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary:
+      'Get current user real-time dynamic premium entitlements and limits',
+  })
+  @ApiBearerAuth()
+  @Get('/me/entitlements')
+  getMyEntitlements(@User() user: IUser) {
+    return this.usersService.getUserEntitlements(user);
+  }
 }

@@ -7,6 +7,9 @@ import { ApiError, getGoogleLoginUrl } from '../../lib/api';
 import { useAuth } from '../../auth/AuthContext';
 
 function getDestination(user: { role: string; isApproved?: boolean }) {
+  if (user.role === 'ADMIN') {
+    return '/admin/dashboard';
+  }
   if (user.role === 'HR') {
     return !user.isApproved ? '/pending-approval' : '/dashboard';
   }
@@ -123,7 +126,12 @@ export default function LoginPage() {
           <label className="block">
             <span className="mb-1.5 flex items-center justify-between text-sm font-semibold text-slate-700 dark:text-slate-200">
               <span>{t('auth.passwordLabel')}</span>
-              <span className="text-xs font-medium text-slate-400">{t('auth.passwordMinLength')}</span>
+              <Link
+                to="/forgot-password"
+                className="text-xs font-semibold text-primary hover:text-primary-dark transition-colors"
+              >
+                {t('auth.forgotPasswordLink') || 'Quên mật khẩu?'}
+              </Link>
             </span>
             <span className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3.5 shadow-sm transition focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10 dark:border-slate-700 dark:bg-slate-800">
               <LockKeyhole className="h-4 w-4 shrink-0 text-slate-400" />

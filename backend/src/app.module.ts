@@ -32,6 +32,10 @@ import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 import { PaymentsModule } from './payments/payments.module';
 import { CandidateAccessModule } from './candidate-access/candidate-access.module';
 import { CandidateAssistantModule } from './candidate-assistant/candidate-assistant.module';
+import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
+import { SavedJobsModule } from './saved-jobs/saved-jobs.module';
+import { ChatModule } from './chat/chat.module';
+import { AdminModule } from './admin/admin.module';
 import { areQueueWorkersEnabled } from './config/runtime-flags';
 import { createRedisConnectionOptions } from './redis/redis.module';
 import { createPostgresSslOptions } from './database/postgres-ssl';
@@ -123,6 +127,10 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     CandidateAccessModule,
     CandidateAssistantModule,
     JobIndexingModule,
+    ElasticsearchModule,
+    SavedJobsModule,
+    ChatModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

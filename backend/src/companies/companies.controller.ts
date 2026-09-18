@@ -45,6 +45,13 @@ export class CompaniesController {
     return this.companiesService.getHrDashboardStats(user);
   }
 
+  @Get('top-hiring')
+  getTopHiringCompanies(@Query('limit') limit?: string) {
+    return this.companiesService.getTopHiringCompanies(
+      limit ? parseInt(limit, 10) : 10,
+    );
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.companiesService.findOne(id);

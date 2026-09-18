@@ -125,6 +125,14 @@ export class ApplicationsController {
     return this.applicationsService.updateStatus(id, updateDto, user);
   }
 
+  // Candidate nudges/reminds HR about their application
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/remind')
+  @ResponseMessage('Đã gửi lời nhắc tới Nhà tuyển dụng')
+  remindHR(@Param('id') id: string, @User() user: IUser) {
+    return this.applicationsService.remindHR(id, user);
+  }
+
   // Withdraw application (soft delete + remove AI match result)
   @UseGuards(JwtAuthGuard)
   @Delete(':id')

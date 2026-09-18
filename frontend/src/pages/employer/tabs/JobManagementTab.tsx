@@ -16,6 +16,9 @@ import {
   Zap,
   ArrowRight,
   X,
+  Clock,
+  XCircle,
+  RefreshCw,
 } from 'lucide-react';
 import {
   employerApi,
@@ -26,6 +29,67 @@ import { useToast } from '../../../context/ToastContext';
 import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate } from '../../../lib/dateUtils';
 
+export const isJobHotActive = (job: HrJobItem): boolean => {
+  if (!job.isHot || !job.boostExpiresAt) return false;
+  return new Date(job.boostExpiresAt).getTime() > Date.now();
+};
+
+function HotCountdownTimer({
+  expiresAt,
+  onExpire,
+}: {
+  expiresAt: string;
+  onExpire?: () => void;
+}) {
+  const calculateRemaining = () => {
+    const diff = new Date(expiresAt).getTime() - Date.now();
+    if (diff <= 0) {
+      return { hours: 0, minutes: 0, seconds: 0, isExpired: true };
+    }
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+    return { hours, minutes, seconds, isExpired: false };
+  };
+
+  const [timeLeft, setTimeLeft] = useState(calculateRemaining);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const remaining = calculateRemaining();
+      setTimeLeft(remaining);
+      if (remaining.isExpired) {
+        clearInterval(timer);
+        onExpire?.();
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [expiresAt, onExpire]);
+
+  if (timeLeft.isExpired) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-600 border border-rose-200 dark:bg-rose-950/40 dark:border-rose-900/50 dark:text-rose-400">
+        Hết hạn HOT
+      </span>
+    );
+  }
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-mono font-extrabold text-amber-700 dark:text-amber-300 border border-amber-500/30 shadow-2xs"
+      title={`Hết hạn lúc: ${new Date(expiresAt).toLocaleString('vi-VN')}`}
+    >
+      <Clock className="h-3 w-3 text-amber-600 dark:text-amber-400 shrink-0" />
+      <span>
+        {pad(timeLeft.hours)}:{pad(timeLeft.minutes)}:{pad(timeLeft.seconds)}
+      </span>
+    </span>
+  );
+}
+
 interface JobManagementTabProps {
   company: CompanyInfo | null;
   hasCompany: boolean;
@@ -33,6 +97,10 @@ interface JobManagementTabProps {
   accessToken: string | null;
   todayPostedCount: number;
   maxDailyJobs: number;
+  maxActiveJobsProp?: number;
+  hotJobLimit?: number;
+  isPremium?: boolean;
+  packageName?: string;
   onNavigateTab: (tab: string, extraData?: any) => void;
   onRefreshStats: () => Promise<void>;
 }
@@ -43,6 +111,10 @@ export function JobManagementTab({
   isProfileComplete,
   accessToken,
   maxDailyJobs,
+  maxActiveJobsProp,
+  hotJobLimit,
+  isPremium: isPremiumProp,
+  packageName,
   onNavigateTab,
   onRefreshStats,
 }: JobManagementTabProps) {
@@ -50,15 +122,18 @@ export function JobManagementTab({
   const navigate = useNavigate();
   const { success, error, info } = useToast();
 
+  const effectiveHotJobLimit = typeof hotJobLimit === 'number' && hotJobLimit > 0 ? hotJobLimit : 5;
+
   const [jobs, setJobs] = useState<HrJobItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'EXPIRED' | 'HOT'>('ALL');
   const [boostingJobId, setBoostingJobId] = useState<string | null>(null);
+  const [unboostingJobId, setUnboostingJobId] = useState<string | null>(null);
   const [showPremiumModal, setShowPremiumModal] = useState(false);
 
-  const isPremium = maxDailyJobs >= 999;
-  const maxActiveJobs = isPremium ? 999999 : 6;
+  const isPremium = isPremiumProp !== undefined ? isPremiumProp : maxDailyJobs >= 999;
+  const maxActiveJobs = maxActiveJobsProp ?? (isPremium ? 999999 : 6);
 
   const fetchJobs = async () => {
     if (!accessToken || !hasCompany) {
@@ -89,7 +164,9 @@ export function JobManagementTab({
   const activeJobs = jobs.filter((j) => j.isActive !== false && new Date(j.endDate) >= new Date());
   const activeCount = activeJobs.length;
   const expiredCount = jobs.filter((j) => new Date(j.endDate) < new Date()).length;
-  const hotJobsCount = jobs.filter((j) => j.isHot && j.isActive !== false && new Date(j.endDate) >= new Date()).length;
+  const hotJobsCount = jobs.filter(
+    (j) => isJobHotActive(j) && j.isActive !== false && new Date(j.endDate) >= new Date(),
+  ).length;
 
   const handleOpenCreate = () => {
     if (!hasCompany || !isProfileComplete) {
@@ -126,11 +203,14 @@ export function JobManagementTab({
     }
   };
 
-  // Handle Boosting Job to TOP (Premium Perk)
+  // Handle Boosting Job to TOP (HOT 24h)
   const handleBoostJob = async (job: HrJobItem) => {
     if (!accessToken) return;
 
-    if (!isPremium) {
+    if (!isPremium && hotJobsCount >= 1) {
+      error(
+        'Tài khoản HR Thường chỉ được đẩy HOT 1 tin trong 1 tháng (bạn đã sử dụng lượt của tháng này). Vui lòng nâng cấp HR Premium để đẩy HOT đồng thời nhiều tin tuyển dụng và tự do đổi tin!',
+      );
       setShowPremiumModal(true);
       return;
     }
@@ -138,21 +218,47 @@ export function JobManagementTab({
     setBoostingJobId(job._id);
     try {
       const res = await employerApi.boostJob(job._id, accessToken);
-      success(res.message || '🚀 Đã đẩy TOP tin tuyển dụng thành công! Tin sẽ hiển thị đầu trang với nhãn HOT.');
+      success(
+        res.message ||
+          '🚀 Đã đẩy TOP tin tuyển dụng thành công (hiệu lực 24 giờ)! Tin sẽ hiển thị đầu trang với nhãn HOT.',
+      );
       await fetchJobs();
       await onRefreshStats();
     } catch (err: any) {
       console.error('Failed to boost job', err);
-      error(err?.response?.data?.message || 'Không thể đẩy TOP tin tuyển dụng');
+      const errMsg =
+        err?.response?.data?.message || err?.message || 'Không thể đẩy TOP tin tuyển dụng';
+      error(errMsg);
+      if (!isPremium && (errMsg.includes('HR Standard') || errMsg.includes('1 tháng'))) {
+        setShowPremiumModal(true);
+      }
     } finally {
       setBoostingJobId(null);
+    }
+  };
+
+  // Handle Unboosting Job (Free up HOT slot - Premium only)
+  const handleUnboostJob = async (job: HrJobItem) => {
+    if (!accessToken) return;
+
+    setUnboostingJobId(job._id);
+    try {
+      const res = await employerApi.unboostJob(job._id, accessToken);
+      success(res.message || 'Đã gỡ nhãn HOT của tin tuyển dụng thành công! Đã giải phóng 1 slot đẩy HOT.');
+      await fetchJobs();
+      await onRefreshStats();
+    } catch (err: any) {
+      console.error('Failed to unboost job', err);
+      error(err?.response?.data?.message || err?.message || 'Không thể gỡ nhãn HOT');
+    } finally {
+      setUnboostingJobId(null);
     }
   };
 
   // Filter Jobs
   const filteredJobs = jobs.filter((job) => {
     if (statusFilter === 'HOT') {
-      return job.isHot === true;
+      return isJobHotActive(job);
     }
     if (statusFilter === 'ACTIVE') {
       return job.isActive !== false && new Date(job.endDate) >= new Date();
@@ -214,11 +320,11 @@ export function JobManagementTab({
               <span>
                 {isPremium ? (
                   <>
-                    Gói tài khoản: <strong className="text-amber-600 dark:text-amber-400 font-extrabold">HR Premium (Không giới hạn tin & Đẩy TOP HOT)</strong>
+                    Gói tài khoản: <strong className="text-amber-600 dark:text-amber-400 font-extrabold">{packageName || 'HR Premium'}</strong> &bull; Đang đẩy HOT: <strong className={`font-black ${hotJobsCount >= effectiveHotJobLimit ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'}`}>{hotJobsCount}/{effectiveHotJobLimit} tin</strong> (Hạn 24h/tin)
                   </>
                 ) : (
                   <>
-                    Tin đang hoạt động:{' '}
+                    Tin hoạt động:{' '}
                     <strong
                       className={`font-black ${
                         activeCount >= maxActiveJobs ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'
@@ -226,7 +332,7 @@ export function JobManagementTab({
                     >
                       {activeCount}/{maxActiveJobs}
                     </strong>{' '}
-                    tin ({activeCount >= maxActiveJobs ? 'Đã đạt giới hạn' : `Còn lại ${maxActiveJobs - activeCount}`})
+                    tin &bull; Đẩy HOT: <strong className="text-amber-600 dark:text-amber-400 font-bold">{hotJobsCount > 0 ? `${hotJobsCount} tin đang HOT (24h)` : '1 lần/tháng'}</strong>
                   </>
                 )}
               </span>
@@ -314,7 +420,7 @@ export function JobManagementTab({
             }`}
           >
             <Flame className="h-3.5 w-3.5" />
-            <span>HOT / TOP ({hotJobsCount})</span>
+            <span>HOT / TOP ({hotJobsCount}{isPremium ? `/${hotJobLimit}` : ''})</span>
           </button>
         </div>
       </div>
@@ -331,44 +437,54 @@ export function JobManagementTab({
             <table className="w-full text-left text-sm text-slate-700 dark:text-slate-300">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-400">
                 <tr>
-                  <th className="px-6 py-4">{t('employer.jobsTab.colJobName')}</th>
-                  <th className="px-6 py-4">{t('employer.jobsTab.colLevel')}</th>
-                  <th className="px-6 py-4">{t('employer.jobsTab.colDates')}</th>
-                  <th className="px-6 py-4 text-center">{t('employer.jobsTab.colApplications')}</th>
-                  <th className="px-6 py-4 text-center">{t('employer.jobsTab.colStatus')}</th>
-                  <th className="px-6 py-4 text-right">{t('employer.jobsTab.colActions')}</th>
+                  <th className="px-6 py-4 min-w-[260px]">{t('employer.jobsTab.colJobName')}</th>
+                  <th className="px-6 py-4 whitespace-nowrap">{t('employer.jobsTab.colLevel')}</th>
+                  <th className="px-6 py-4 whitespace-nowrap">{t('employer.jobsTab.colDates')}</th>
+                  <th className="px-6 py-4 text-center whitespace-nowrap">{t('employer.jobsTab.colApplications')}</th>
+                  <th className="px-6 py-4 text-center whitespace-nowrap">{t('employer.jobsTab.colStatus')}</th>
+                  <th className="px-6 py-4 text-right whitespace-nowrap">{t('employer.jobsTab.colActions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {filteredJobs.map((job) => {
                   const isExpired = new Date(job.endDate) < new Date();
                   const isVisible = job.isActive !== false;
+                  const isHot = isJobHotActive(job);
                   const isBoosting = boostingJobId === job._id;
+                  const isUnboosting = unboostingJobId === job._id;
 
                   return (
                     <tr
                       key={job._id}
                       className={`transition ${
-                        job.isHot
-                          ? 'bg-amber-50/25 hover:bg-amber-50/50 dark:bg-amber-950/10 dark:hover:bg-amber-950/20'
+                        isHot
+                          ? 'bg-amber-50/30 hover:bg-amber-50/50 dark:bg-amber-950/15 dark:hover:bg-amber-950/25'
                           : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
                       }`}
                     >
                       {/* Job Title, HOT Badge & Skills */}
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-4 min-w-[260px]">
                         <div className="font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
-                          <span className="text-sm sm:text-base">{job.name}</span>
+                          <span className="text-sm sm:text-base leading-snug">{job.name}</span>
 
-                          {/* HOT / TOP Badge */}
-                          {job.isHot && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-red-500 to-amber-500 text-white font-extrabold text-[10.5px] shadow-xs animate-pulse tracking-wide select-none">
-                              <Flame className="h-3 w-3 fill-white" />
-                              <span>HOT TOP</span>
-                            </span>
+                          {/* HOT / TOP Badge with Countdown */}
+                          {isHot && (
+                            <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-red-500 to-amber-500 text-white font-extrabold text-[10.5px] shadow-xs animate-pulse tracking-wide select-none whitespace-nowrap">
+                                <Flame className="h-3 w-3 fill-white shrink-0" />
+                                <span>HOT TOP</span>
+                              </span>
+                              {job.boostExpiresAt && (
+                                <HotCountdownTimer
+                                  expiresAt={job.boostExpiresAt}
+                                  onExpire={fetchJobs}
+                                />
+                              )}
+                            </div>
                           )}
 
                           {!isVisible && (
-                            <span className="rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                            <span className="rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300 whitespace-nowrap">
                               {t('employer.jobsTab.isActiveOff')}
                             </span>
                           )}
@@ -383,7 +499,7 @@ export function JobManagementTab({
                             </span>
                           ))}
                           {(job.skills || []).length > 4 && (
-                            <span className="text-[10px] text-slate-400 font-medium">
+                            <span className="text-[10px] text-slate-400 font-medium self-center">
                               +{(job.skills || []).length - 4}
                             </span>
                           )}
@@ -391,93 +507,152 @@ export function JobManagementTab({
                       </td>
 
                       {/* Salary & Level */}
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-emerald-600 dark:text-emerald-400">
-                          {job.salary ? `${job.salary.toLocaleString('vi-VN')} ₫` : 'Thương lượng'}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">
+                          {job.salary ? `${Number(job.salary).toLocaleString('vi-VN')} ₫` : 'Thương lượng'}
                         </div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 whitespace-nowrap">
                           {job.level} &bull; {job.location}
                         </div>
                       </td>
 
                       {/* Dates */}
-                      <td className="px-6 py-4 text-xs text-slate-500 dark:text-slate-400">
-                        <div>
-                          Hết hạn:{' '}
-                          <strong className={isExpired ? 'text-rose-500' : 'text-slate-700 dark:text-slate-300'}>
-                            {formatDate(job.endDate)}
+                      <td className="px-6 py-4 whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">
+                        <div className="flex items-center gap-1.5">
+                          <span>Hết hạn:</span>
+                          <strong className={isExpired ? 'text-rose-500 font-bold' : 'text-slate-800 dark:text-slate-200 font-bold'}>
+                            {job.endDate ? formatDate(job.endDate) : '--'}
                           </strong>
                         </div>
                         <div className="text-[11px] text-slate-400 mt-0.5">
-                          Tạo: {formatDate(job.createdAt)}
+                          Tạo: {job.createdAt ? formatDate(job.createdAt) : '--'}
                         </div>
+                        {isHot && job.boostExpiresAt && (
+                          <div className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold mt-1 flex items-center gap-1">
+                            <Flame className="h-3 w-3 shrink-0 fill-amber-500 text-amber-500" />
+                            <span>HOT đến: {new Date(job.boostExpiresAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} {formatDate(job.boostExpiresAt)}</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Applications count & Candidate shortcut */}
-                      <td className="px-6 py-4 text-center">
+                      <td className="px-6 py-4 text-center whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => onNavigateTab('candidates', { filterJobId: job._id })}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-1 text-xs font-bold text-primary hover:bg-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:hover:bg-blue-900 transition cursor-pointer"
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-1.5 text-xs font-bold text-primary hover:bg-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:hover:bg-blue-900 transition cursor-pointer whitespace-nowrap shadow-2xs"
                         >
-                          <Users className="h-3.5 w-3.5" />
+                          <Users className="h-3.5 w-3.5 shrink-0" />
                           <span>{job.applicationsCount || 0} hồ sơ</span>
                         </button>
                       </td>
 
                       {/* Status */}
-                      <td className="px-6 py-4 text-center">
+                      <td className="px-6 py-4 text-center whitespace-nowrap">
                         {isExpired ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-xs font-bold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 whitespace-nowrap">
                             {t('employer.jobsTab.statusExpired')}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 whitespace-nowrap">
                             {t('employer.jobsTab.statusActive')}
                           </span>
                         )}
                       </td>
 
                       {/* Actions */}
-                      <td className="px-6 py-4 text-right">
+                      <td className="px-6 py-4 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-2">
-                          {/* Boost to TOP Button */}
-                          <button
-                            type="button"
-                            disabled={isBoosting || isExpired}
-                            onClick={() => handleBoostJob(job)}
-                            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold transition shadow-2xs cursor-pointer ${
-                              job.isHot
-                                ? 'border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
-                                : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-xs'
-                            } disabled:opacity-50 disabled:cursor-not-allowed`}
-                            title={job.isHot ? 'Đã ở TOP, nhấn để làm mới vị trí' : 'Đẩy tin lên đầu trang tìm kiếm với nhãn HOT'}
-                          >
-                            {isBoosting ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          {/* Boost to TOP or Unboost Actions */}
+                          {isHot ? (
+                            isPremium ? (
+                              <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                {/* Nút Gỡ HOT cho Premium */}
+                                <button
+                                  type="button"
+                                  disabled={isUnboosting}
+                                  onClick={() => handleUnboostJob(job)}
+                                  className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300 transition shadow-2xs cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                                  title="Gỡ nhãn HOT để nhường slot đẩy cho tin khác (Đặc quyền Premium)"
+                                >
+                                  {isUnboosting ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-600 shrink-0" />
+                                  ) : (
+                                    <XCircle className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                                  )}
+                                  <span>Gỡ HOT</span>
+                                </button>
+
+                                {/* Nút Gia hạn HOT (24h) cho Premium */}
+                                <button
+                                  type="button"
+                                  disabled={isBoosting || isExpired}
+                                  onClick={() => handleBoostJob(job)}
+                                  className="inline-flex items-center gap-1 rounded-xl border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300 transition shadow-2xs cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                                  title="Gia hạn thêm 24h đẩy HOT cho tin này"
+                                >
+                                  {isBoosting ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600 shrink-0" />
+                                  ) : (
+                                    <RefreshCw className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                                  )}
+                                  <span>Gia hạn HOT</span>
+                                </button>
+                              </div>
                             ) : (
-                              <Flame className={`h-3.5 w-3.5 ${job.isHot ? 'text-amber-600 dark:text-amber-400 fill-amber-500' : ''}`} />
-                            )}
-                            <span>{job.isHot ? 'Đẩy lại TOP' : 'Đẩy TOP'}</span>
-                          </button>
+                              /* HR Thường: Không có nút gỡ hay gia hạn, hiển thị badge Đang HOT */
+                              <div
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-600 dark:text-amber-400 text-xs font-bold whitespace-nowrap select-none"
+                                title="Tin đang được đẩy HOT (1 lượt/tháng). Tài khoản thường không thể gỡ thu hồi hay đổi sang tin khác."
+                              >
+                                <Flame className="h-3.5 w-3.5 fill-amber-500 text-amber-500 animate-pulse shrink-0" />
+                                <span>Đang HOT (24h)</span>
+                              </div>
+                            )
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={isBoosting || isExpired}
+                              onClick={() => handleBoostJob(job)}
+                              className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold text-white shadow-xs transition cursor-pointer whitespace-nowrap ${
+                                !isPremium && hotJobsCount >= 1
+                                  ? 'bg-slate-400 dark:bg-slate-700 hover:bg-slate-500 cursor-pointer'
+                                  : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600'
+                              } disabled:opacity-50 disabled:cursor-not-allowed`}
+                              title={
+                                isPremium
+                                  ? `Đẩy tin lên đầu trang với nhãn HOT trong 24h (Tối đa ${effectiveHotJobLimit} tin cùng lúc)`
+                                  : hotJobsCount >= 1
+                                  ? 'Bạn đã sử dụng lượt đẩy HOT của tháng này. Nâng cấp HR Premium để đẩy nhiều tin cùng lúc!'
+                                  : 'Đẩy tin lên đầu trang với nhãn HOT trong 24h (1 tin/tháng với tài khoản thường)'
+                              }
+                            >
+                              {isBoosting ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                              ) : (
+                                <Flame className="h-3.5 w-3.5 shrink-0" />
+                              )}
+                              <span>Đẩy TOP</span>
+                            </button>
+                          )}
 
                           <button
                             type="button"
                             onClick={() => handleOpenEdit(job)}
-                            className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:border-primary hover:text-primary transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-light cursor-pointer shadow-2xs"
+                            className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:border-primary hover:text-primary transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-light cursor-pointer shadow-2xs whitespace-nowrap"
                             title={t('employer.jobsTab.editJobBtn')}
                           >
-                            <Edit className="h-3.5 w-3.5" />
+                            <Edit className="h-3.5 w-3.5 shrink-0" />
                             <span>Sửa</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={() => handleDeleteJob(job._id)}
-                            className="rounded-xl p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition dark:hover:bg-rose-950/40 cursor-pointer"
+                            className="rounded-xl p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition dark:hover:bg-rose-950/40 cursor-pointer whitespace-nowrap"
                             title={t('employer.jobsTab.deleteJobBtn')}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="h-4 w-4 shrink-0" />
                           </button>
                         </div>
                       </td>
@@ -529,21 +704,21 @@ export function JobManagementTab({
                 Đặc Quyền HR Premium VIP
               </h3>
               <p className="mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                Tài khoản HR miễn phí chỉ có tối đa <strong>6 tin tuyển dụng hoạt động cùng lúc</strong> và không thể đẩy TOP. Nâng cấp ngay gói <strong>HR Premium</strong> để sở hữu toàn bộ đặc quyền:
+                Tài khoản HR miễn phí chỉ được đăng tối đa <strong>6 tin hoạt động</strong> và chỉ được <strong>đẩy HOT 1 tin trong 1 tháng</strong> (hiệu lực 24 giờ). Nâng cấp <strong>HR Premium</strong> để sở hữu toàn bộ đặc quyền bứt phá tuyển dụng:
               </p>
 
               <div className="mt-5 space-y-3 rounded-2xl bg-amber-50/70 p-4 border border-amber-200/70 dark:bg-amber-950/40 dark:border-amber-800/60">
                 <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
                   <Flame className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <span><strong>Đẩy TOP không giới hạn:</strong> Đưa tin tuyển dụng lên vị trí #1 trang tìm kiếm việc làm</span>
+                  <span><strong>Đẩy HOT đồng thời:</strong> Đẩy thoải mái không giới hạn lượt, tối đa lên đến 10 tin tùy gói dịch vụ. Mỗi tin hiệu lực 24h và có thể gỡ HOT bất kỳ lúc nào để nhường slot cho tin khác!</span>
                 </div>
                 <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
                   <Zap className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <span><strong>Gắn nhãn HOT nổi bật:</strong> Thu hút gấp 3 lần ứng viên xuất sắc ứng tuyển</span>
+                  <span><strong>Vị trí HOT TOP độc quyền:</strong> Đưa tin lên vị trí số #1 trang tìm kiếm việc làm, thu hút ứng viên xuất sắc nhất.</span>
                 </div>
                 <div className="flex items-start gap-2.5 text-xs text-amber-950 dark:text-amber-200">
                   <Sparkles className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <span><strong>Đăng tin không giới hạn:</strong> Mở rộng quy mô tuyển dụng không bị giới hạn 6 tin</span>
+                  <span><strong>Đăng tin không giới hạn:</strong> Thoải mái mở rộng quy mô tuyển dụng doanh nghiệp không lo chạm trần 6 tin.</span>
                 </div>
               </div>
 

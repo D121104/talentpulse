@@ -96,4 +96,10 @@ export const paymentApi = {
       },
     );
   },
+
+  getPublicPackages: async (): Promise<import('./adminApi').AdminPackageItem[]> => {
+    return apiRequest<import('./adminApi').AdminPackageItem[]>('/payments/packages', {
+      method: 'GET',
+    });
+  },
 };

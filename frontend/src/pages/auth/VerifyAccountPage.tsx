@@ -147,7 +147,7 @@ export default function VerifyAccountPage() {
 
                   <div className="flex flex-col sm:flex-row gap-3 pt-2">
                     <Link
-                      to="/cv/my-cv"
+                      to="/my-cv"
                       className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-primary hover:bg-primary-dark text-white font-extrabold text-xs sm:text-sm shadow-lg shadow-primary/25 transition cursor-pointer"
                     >
                       <FileText className="h-4 w-4" />

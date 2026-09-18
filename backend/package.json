@@ -27,10 +27,13 @@
     "seed:hr": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts",
     "seed:candidate": "ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts",
     "seed:local-jobs": "ts-node -r tsconfig-paths/register src/scripts/seed-local-jobs.ts",
-    "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts"
+    "seed:admin": "ts-node -r tsconfig-paths/register src/scripts/seed-admin.ts",
+    "seed:all": "ts-node -r tsconfig-paths/register src/scripts/seed-hr.ts && ts-node -r tsconfig-paths/register src/scripts/seed-candidate.ts && ts-node -r tsconfig-paths/register src/scripts/seed-admin.ts",
+    "sync:elasticsearch": "ts-node -r tsconfig-paths/register src/scripts/sync-jobs-elasticsearch.ts"
   },
   "dependencies": {
     "@codegenie/serverless-express": "^4.17.1",
+    "@elastic/elasticsearch": "^8.11.0",
     "@nestjs-modules/mailer": "^1.11.2",
     "@nestjs/bull": "^10.0.1",
     "@nestjs/cache-manager": "^2.2.2",
