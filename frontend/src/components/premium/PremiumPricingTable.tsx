@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Check,
   X as CloseIcon,
@@ -6,7 +6,10 @@ import {
   Sparkles,
   ShieldCheck,
   ArrowRight,
+  Bot,
 } from 'lucide-react';
+import { paymentApi } from '../../lib/paymentApi';
+import type { AdminPackageItem } from '../../lib/adminApi';
 
 export type BillingCycle = 'monthly' | 'semi_annual' | 'annual';
 export type PlanAudience = 'candidate' | 'hr';
@@ -30,9 +33,32 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
   onSelectPlan,
 }) => {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('annual');
+  const [packages, setPackages] = useState<AdminPackageItem[]>([]);
+  const [_isLoadingPackages, setIsLoadingPackages] = useState(false);
 
-  // Pricing configuration
-  const pricingData = {
+  useEffect(() => {
+    let mounted = true;
+    setIsLoadingPackages(true);
+    paymentApi
+      .getPublicPackages()
+      .then((data) => {
+        if (mounted && Array.isArray(data) && data.length > 0) {
+          setPackages(data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not fetch dynamic packages, using fallback defaults', err);
+      })
+      .finally(() => {
+        if (mounted) setIsLoadingPackages(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Default fallback pricing configuration if offline or before fetch
+  const defaultPricingData = {
     candidate: {
       free: {
         title: 'Tài khoản Thường',
@@ -84,8 +110,78 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
   };
 
   const isCandidate = audience === 'candidate';
-  const candPricing = pricingData.candidate.premium[billingCycle];
-  const hrPricing = pricingData.hr.premium[billingCycle];
+
+  // Find dynamic packages from DB
+  const dynamicCandPkg = packages.find(
+    (p) => p.planType === 'CANDIDATE_PREMIUM' && p.billingCycle === billingCycle,
+  );
+  const dynamicHrPkg = packages.find(
+    (p) => p.planType === 'HR_PREMIUM' && p.billingCycle === billingCycle,
+  );
+
+  const candFallback = defaultPricingData.candidate.premium[billingCycle];
+  const candPrice = dynamicCandPkg ? dynamicCandPkg.price : candFallback.price;
+  const candOriginal = dynamicCandPkg ? (dynamicCandPkg.originalPrice ?? candPrice) : candFallback.original;
+  const candPeriodText = billingCycle === 'monthly'
+    ? '/ tháng'
+    : billingCycle === 'semi_annual'
+    ? `/ 6 tháng (${Math.round(candPrice / 6).toLocaleString('vi-VN')}đ/tháng)`
+    : `/ 1 năm (${Math.round(candPrice / 12).toLocaleString('vi-VN')}đ/tháng)`;
+  const candDiscount = candOriginal > candPrice
+    ? `Tiết kiệm ${Math.round((1 - candPrice / candOriginal) * 100)}%`
+    : '';
+
+  const hrFallback = defaultPricingData.hr.premium[billingCycle];
+  const hrPrice = dynamicHrPkg ? dynamicHrPkg.price : hrFallback.price;
+  const hrOriginal = dynamicHrPkg ? (dynamicHrPkg.originalPrice ?? hrPrice) : hrFallback.original;
+  const hrPeriodText = billingCycle === 'monthly'
+    ? '/ tháng'
+    : billingCycle === 'semi_annual'
+    ? `/ 6 tháng (${Math.round(hrPrice / 6).toLocaleString('vi-VN')}đ/tháng)`
+    : `/ 1 năm (${Math.round(hrPrice / 12).toLocaleString('vi-VN')}đ/tháng)`;
+  const hrDiscount = hrOriginal > hrPrice
+    ? `Tiết kiệm ${Math.round((1 - hrPrice / hrOriginal) * 100)}%`
+    : '';
+
+  const candPricing = {
+    price: candPrice,
+    original: candOriginal,
+    periodText: candPeriodText,
+    discount: candDiscount,
+    badge: dynamicCandPkg?.badge || defaultPricingData.candidate.premium.badge,
+    aiQuota: dynamicCandPkg?.aiQuota ?? 20,
+    features: dynamicCandPkg?.features,
+  };
+
+  const hrPricing = {
+    price: hrPrice,
+    original: hrOriginal,
+    periodText: hrPeriodText,
+    discount: hrDiscount,
+    badge: dynamicHrPkg?.badge || defaultPricingData.hr.premium.badge,
+    aiQuota: dynamicHrPkg?.aiQuota ?? 60,
+    features: dynamicHrPkg?.features,
+  };
+
+  // Helper to calculate dynamic discount percentage for tabs
+  const getCycleDiscount = (cycle: BillingCycle): number => {
+    const targetPlan = isCandidate ? 'CANDIDATE_PREMIUM' : 'HR_PREMIUM';
+    const pkg = packages.find((p) => p.planType === targetPlan && p.billingCycle === cycle);
+    if (pkg && pkg.originalPrice && pkg.originalPrice > pkg.price) {
+      return Math.round((1 - pkg.price / pkg.originalPrice) * 100);
+    }
+    // Fallback based on default data
+    const fallback = isCandidate
+      ? defaultPricingData.candidate.premium[cycle]
+      : defaultPricingData.hr.premium[cycle];
+    if (fallback.original > fallback.price) {
+      return Math.round((1 - fallback.price / fallback.original) * 100);
+    }
+    return 0;
+  };
+
+  const semiAnnualDiscount = getCycleDiscount('semi_annual');
+  const annualDiscount = getCycleDiscount('annual');
 
   // Feature comparison matrix data (similar to the provided TopCV VIP reference image)
   const candidateMatrix = [
@@ -174,7 +270,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
         billingCycle,
         price: candPricing.price,
         originalPrice: candPricing.original,
-        title: 'Candidate Premium',
+        title: dynamicCandPkg?.name || 'Candidate Premium',
       });
     } else {
       onSelectPlan({
@@ -182,7 +278,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
         billingCycle,
         price: hrPricing.price,
         originalPrice: hrPricing.original,
-        title: 'HR Premium Enterprise',
+        title: dynamicHrPkg?.name || 'HR Premium Enterprise',
       });
     }
   };
@@ -216,9 +312,11 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
             }`}
           >
             6 Tháng
-            <span className="ml-1.5 inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400">
-              -15%
-            </span>
+            {semiAnnualDiscount > 0 && (
+              <span className="ml-1.5 inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400">
+                -{semiAnnualDiscount}%
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -230,9 +328,11 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
             }`}
           >
             1 Năm
-            <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-400 text-slate-950 px-2 py-0.5 text-[10px] font-extrabold shadow-2xs">
-              Tiết kiệm 33% ⭐
-            </span>
+            {annualDiscount > 0 && (
+              <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-400 text-slate-950 px-2 py-0.5 text-[10px] font-extrabold shadow-2xs">
+                Tiết kiệm {annualDiscount}% ⭐
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -381,6 +481,14 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
                   </span>
                 </div>
               )}
+            </div>
+
+            {/* AI Quota Highlight */}
+            <div className="mb-4 flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-500/10 via-indigo-500/10 to-primary/10 border border-violet-500/20 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
+              <Bot className="h-4 w-4 text-violet-500 shrink-0" />
+              <span>
+                Đã bao gồm <strong>{isCandidate ? candPricing.aiQuota : hrPricing.aiQuota} lượt AI</strong> {isCandidate ? 'chấm điểm & tối ưu CV' : 'sourcing & phân tích ứng viên'}
+              </span>
             </div>
 
             {/* Features Highlight */}

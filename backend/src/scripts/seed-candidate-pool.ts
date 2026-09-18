@@ -8,6 +8,7 @@ import { Job } from '../jobs/entities/job.entity';
 import { OnlineCV } from '../online-cvs/entities/online-cv.entity';
 import { UserCV } from '../usercvs/entities/usercv.entity';
 import { Skill } from '../skills/entities/skill.entity';
+import { PremiumPackage } from '../payments/entities/premium-package.entity';
 import { Role } from '../decorator/customize';
 
 dotenv.config();
@@ -19,7 +20,7 @@ const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres123',
   database: process.env.DB_DATABASE || 'recruitment_db',
-  entities: [User, Company, Job, OnlineCV, UserCV, Skill],
+  entities: [User, Company, Job, OnlineCV, UserCV, Skill, PremiumPackage],
   synchronize: false,
 });
 
@@ -395,6 +396,10 @@ async function runSeed() {
   const jobRepo = AppDataSource.getRepository(Job);
   const onlineCvRepo = AppDataSource.getRepository(OnlineCV);
   const userCvRepo = AppDataSource.getRepository(UserCV);
+  const packageRepo = AppDataSource.getRepository(PremiumPackage);
+
+  const hrPackage = await packageRepo.findOne({ where: { code: 'HR_ANNUAL', isDeleted: false } });
+  const candPackage = await packageRepo.findOne({ where: { code: 'CANDIDATE_ANNUAL', isDeleted: false } });
 
   const hashedPassword = bcrypt.hashSync('12345678', bcrypt.genSaltSync(10));
   const oneYearLater = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
@@ -442,6 +447,8 @@ async function runSeed() {
     isDeleted: false,
     isPremium: true,
     premiumPlan: PremiumPlan.HR_PREMIUM,
+    premiumPackageId: hrPackage ? hrPackage._id : null,
+    aiQuotaRemaining: hrPackage ? hrPackage.aiQuota : 1500,
     premiumExpiresAt: oneYearLater,
     company: { _id: compTech._id, name: compTech.name, isActive: true },
   };
@@ -688,6 +695,8 @@ async function runSeed() {
       isDeleted: false,
       isPremium: cand.isPremium,
       premiumPlan: cand.isPremium ? PremiumPlan.CANDIDATE_PREMIUM : PremiumPlan.FREE,
+      premiumPackageId: cand.isPremium && candPackage ? candPackage._id : null,
+      aiQuotaRemaining: cand.isPremium && candPackage ? candPackage.aiQuota : 0,
       premiumExpiresAt: cand.isPremium ? oneYearLater : null,
       boostExpiresAt: cand.isBoosted ? boostExpireDate : null,
       isJobSeeking: true,

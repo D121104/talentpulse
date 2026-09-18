@@ -40,6 +40,10 @@ export interface HrDashboardStats {
     maxActiveJobs?: number;
     todayJobsPostedCount: number;
     maxDailyJobs: number;
+    hotJobLimit?: number;
+    candidateSearchLimit?: number;
+    aiQuota?: number;
+    packageName?: string;
     totalApplications: number;
     pendingApplications: number;
     reviewingApplications: number;

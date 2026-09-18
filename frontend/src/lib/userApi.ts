@@ -136,4 +136,40 @@ export const userApi = {
     }
     return (json.data ?? json) as { fileName: string; url?: string };
   },
+
+  // 6. Lấy toàn bộ quyền lợi (entitlements) động từ database
+  getMyEntitlements: (accessToken?: string | null) =>
+    apiRequest<UserEntitlementsResult>('/users/me/entitlements', {
+      method: 'GET',
+      accessToken,
+    }),
 };
+
+export interface UserEntitlementsResult {
+  userId: string;
+  email: string;
+  role: string;
+  isPremium: boolean;
+  premiumPlan: string;
+  premiumExpiresAt: string | null;
+  package: {
+    id: string;
+    code: string;
+    name: string;
+    billingCycle: string;
+    features: string[];
+    hotJobLimit: number;
+    candidateSearchLimit: number;
+    aiQuota: number;
+  } | null;
+  aiQuotaRemaining: number;
+  limits: {
+    hotJobLimit: number;
+    candidateSearchLimit: number;
+    maxActiveJobs: number;
+    maxCvLimit: number;
+    canUsePremiumTemplates: boolean;
+    boostCooldownMs: number;
+    canViewApplicantCount: boolean;
+  };
+}

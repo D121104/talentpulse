@@ -32,6 +32,15 @@ import MessagesPage from './pages/messages/MessagesPage';
 import ProfileSettingsPage from './pages/settings/ProfileSettingsPage';
 import ChangePasswordPage from './pages/settings/ChangePasswordPage';
 import JobAlertSettingsPage from './pages/settings/JobAlertSettingsPage';
+import AdminLayout from './pages/admin/AdminLayout';
+import { OverviewTab } from './pages/admin/tabs/OverviewTab';
+import { PremiumPackagesTab } from './pages/admin/tabs/PremiumPackagesTab';
+import { SubscriptionsTab } from './pages/admin/tabs/SubscriptionsTab';
+import { PaymentsTab } from './pages/admin/tabs/PaymentsTab';
+import { UsersTab } from './pages/admin/tabs/UsersTab';
+import { CompaniesTab } from './pages/admin/tabs/CompaniesTab';
+import { JobsTab } from './pages/admin/tabs/JobsTab';
+import { SkillsTab } from './pages/admin/tabs/SkillsTab';
 import { ScrollToTop } from './components/common/ScrollToTop';
 
 function App() {
@@ -100,6 +109,22 @@ function App() {
               <Route path="/cv-editor/:id" element={<CVEditorPage />} />
               <Route path="/cv-editor/new" element={<CVEditorPage />} />
             </Route>
+
+            {/* Admin Management Routes */}
+            <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+              <Route path="/admin" element={<AdminLayout />}>
+                <Route index element={<Navigate to="dashboard" replace />} />
+                <Route path="dashboard" element={<OverviewTab />} />
+                <Route path="packages" element={<PremiumPackagesTab />} />
+                <Route path="subscriptions" element={<SubscriptionsTab />} />
+                <Route path="payments" element={<PaymentsTab />} />
+                <Route path="users" element={<UsersTab />} />
+                <Route path="companies" element={<CompaniesTab />} />
+                <Route path="jobs" element={<JobsTab />} />
+                <Route path="skills" element={<SkillsTab />} />
+              </Route>
+            </Route>
+
             <Route path="*" element={<Navigate to="/" replace />} />
 
           </Routes>
