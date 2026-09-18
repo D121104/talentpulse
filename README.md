@@ -235,7 +235,7 @@ BTL_Mobile/
 ├── backend/                    # Mã nguồn Backend NestJS
 │   ├── environment/            # Docker Compose & cấu hình Observability (Prometheus, Loki, Grafana)
 │   ├── src/                    # 14 modules nghiệp vụ (users, jobs, companies, applications, ai-matching,...)
-│   └── test/                   # E2E test suites
+│   └── tests/                  # Backend test suites organized by feature
 ├── frontend/                   # Mã nguồn Frontend React Vite
 │   ├── public/                 # Assets tĩnh & Logo SVGs (Dark/Light mode)
 │   └── src/
