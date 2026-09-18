@@ -149,9 +149,7 @@ describe('CandidateAssistantAiServiceClient', () => {
         trace_id: requestIds.traceId,
         client_message_id: requestIds.clientMessageId,
         answer_status: 'COMPLETE',
-        answer_blocks: [
-          { kind: 'ADVICE', text: 'The CV has relevant evidence.' },
-        ],
+        answer_blocks: [{ kind: 'ADVICE', text: 'CV có bằng chứng phù hợp.' }],
         claims: [],
         citation_keys: [`job:${selectedJob.id}`],
         referenced_job_ids: [selectedJob.id],
@@ -181,7 +179,11 @@ describe('CandidateAssistantAiServiceClient', () => {
         overall_score: 0.72,
       }),
     });
-    expect(response.blocks[0].text).toContain('72%');
+    expect(response.blocks[0]).not.toHaveProperty('text');
+    expect(response.blocks[1]).toMatchObject({
+      type: 'ADVICE',
+      text: 'CV có bằng chứng phù hợp.',
+    });
     expect(aiServiceClient.matchCv).toHaveBeenCalledWith({
       identity: {
         request_id: requestIds.requestId,

@@ -602,13 +602,8 @@ export class CandidateAssistantAiServiceClient
           },
         ]),
     );
-    const scorePercent = Math.round(match.overall_score * 100);
     return {
       type: 'MATCH_RESULT',
-      text: `Deterministic CV-job match score: ${scorePercent}%. ${match.explanation.slice(
-        0,
-        1000,
-      )}`,
       data: {
         cv_id: match.cv_id,
         job_id: match.job_id,

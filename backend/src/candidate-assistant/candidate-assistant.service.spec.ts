@@ -134,6 +134,48 @@ describe('CandidateAssistantService', () => {
     );
   });
 
+  it('persists only localized user-facing text for structured match evidence', async () => {
+    const { service, aiClient, messageRepo } = setup();
+    aiClient.generate.mockResolvedValue({
+      blocks: [
+        {
+          type: 'MATCH_RESULT',
+          data: { overall_score: 0.72, matched_skills: ['Node.js'] },
+        },
+        { type: 'ADVICE', text: 'CV có bằng chứng phù hợp.' },
+      ],
+      citations: [],
+      filterState: null,
+    });
+
+    await service.sendMessage(
+      'session-1',
+      {
+        content: 'find jobs',
+        clientMessageId: '33333333-3333-4333-8333-333333333333',
+      },
+      user,
+    );
+
+    expect(messageRepo.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        content: 'CV có bằng chứng phù hợp.',
+        blocks: [
+          {
+            type: 'MATCH_RESULT',
+            text: undefined,
+            data: { overall_score: 0.72, matched_skills: ['Node.js'] },
+          },
+          {
+            type: 'ADVICE',
+            text: 'CV có bằng chứng phù hợp.',
+            data: undefined,
+          },
+        ],
+      }),
+    );
+  });
+
   it('derives locale from Accept-Language when the body omits it', async () => {
     const { service, aiClient } = setup();
     (aiClient.generate as jest.Mock).mockResolvedValue({
