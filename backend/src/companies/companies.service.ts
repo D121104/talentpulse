@@ -935,7 +935,9 @@ export class CompaniesService {
       (app) => app.status === ApplicationStatus.CONSIDERING,
     ).length;
     const approvedApplications = applications.filter(
-      (app) => app.status === ApplicationStatus.APPROVED,
+      (app) =>
+        app.status === ApplicationStatus.APPROVED ||
+        app.status === ApplicationStatus.SUITABLE,
     ).length;
     const rejectedApplications = applications.filter(
       (app) => app.status === ApplicationStatus.REJECTED,

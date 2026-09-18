@@ -64,6 +64,24 @@
                   Hãy chuẩn bị sẵn sàng để nhận liên hệ từ NTD trong trường hợp bạn được lựa chọn đi tiếp vòng sau nhé!
                 </p>
               </div>
+              {{else if isInterviewing}}
+              <div style="background-color: #eff6ff; border-left: 4px solid #2563eb; border-radius: 0 14px 14px 0; padding: 18px 20px; margin: 0 0 22px;">
+                <p style="color: #1e40af; font-size: 15px; line-height: 1.7; margin: 0 0 10px;">
+                  Sau khi xem xét hồ sơ ứng tuyển của bạn, nhà tuyển dụng đã chuyển trạng thái hồ sơ sang: 
+                  <strong style="color: #2563eb; font-size: 17px; text-transform: uppercase; letter-spacing: 0.3px;">Mời phỏng vấn</strong>
+                </p>
+                <p style="color: #1e3a8a; font-size: 14px; line-height: 1.6; margin: 0 0 8px;">
+                  Lịch phỏng vấn chi tiết đã được nhà tuyển dụng thiết lập trên hệ thống. Vui lòng kiểm tra và xác nhận tham gia trên trang theo dõi ứng tuyển.
+                </p>
+                {{#if note}}
+                <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #bfdbfe; color: #1d4ed8; font-size: 13px;">
+                  <strong>Ghi chú từ NTD:</strong> {{note}}
+                </div>
+                {{/if}}
+                <p style="color: #1e40af; font-size: 14px; font-style: italic; font-weight: 600; margin: 10px 0 0;">
+                  Bạn vui lòng truy cập TalentPulse để xác nhận lịch phỏng vấn kịp thời.
+                </p>
+              </div>
               {{else if isConsidering}}
               <div style="background-color: #fffbeb; border-left: 4px solid #d97706; border-radius: 0 14px 14px 0; padding: 18px 20px; margin: 0 0 22px;">
                 <p style="color: #92400e; font-size: 15px; line-height: 1.7; margin: 0 0 10px;">
@@ -94,7 +112,7 @@
 
               <!-- Guidance Advice -->
               <p style="color: #475569; font-size: 14px; line-height: 1.7; margin: 0 0 28px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px;">
-                💡 <strong>Mẹo tìm việc:</strong> Bạn hãy luôn duy trì bật <span style="color: #2563eb; font-weight: 600;">Trạng thái tìm việc</span> và chế độ <span style="color: #2563eb; font-weight: 600;">Cho phép Nhà tuyển dụng tìm kiếm CV</span> trên TalentPulse để các nhà tuyển dụng hàng đầu có thể chủ động kết nối ngay nhé.
+                <strong style="color: #2563eb;">Gợi ý từ hệ thống:</strong> Bạn hãy luôn duy trì bật <span style="color: #2563eb; font-weight: 600;">Trạng thái tìm việc</span> và chế độ <span style="color: #2563eb; font-weight: 600;">Cho phép Nhà tuyển dụng tìm kiếm CV</span> trên TalentPulse để các nhà tuyển dụng hàng đầu có thể chủ động kết nối ngay nhé.
               </p>
 
               <!-- CTA Button -->
