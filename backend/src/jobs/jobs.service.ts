@@ -425,6 +425,18 @@ export class JobsService {
 
     const newJob = this.jobRepo.create({
       ...createJobDto,
+      lat:
+        createJobDto.lat != null
+          ? Number(createJobDto.lat)
+          : company.lat != null
+          ? Number(company.lat)
+          : undefined,
+      lon:
+        createJobDto.lon != null
+          ? Number(createJobDto.lon)
+          : company.lon != null
+          ? Number(company.lon)
+          : undefined,
       createdBy: {
         _id: user._id,
         email: user.email,
@@ -603,7 +615,14 @@ export class JobsService {
   }
 
   async findOne(id: string) {
-    const job = await this.activeJobQueryService.findActiveById(id);
+    let job = await this.activeJobQueryService.findActiveById(id);
+
+    if (!job) {
+      const nonDeleted = await this.activeJobQueryService.findNonDeletedById(id);
+      if (nonDeleted && nonDeleted.isActive) {
+        job = nonDeleted;
+      }
+    }
 
     if (!job) {
       throw new NotFoundException('Job not found');
@@ -1313,6 +1332,104 @@ export class JobsService {
       nextResetDate: nextWeekReset.toISOString(),
       isPremium: true,
       isAdminOrHr: false,
+    };
+  }
+
+  /**
+   * Tìm kiếm việc làm theo bán kính vị trí địa lý bằng PostGIS dành cho Candidate Premium
+   */
+  async searchJobsByLocation(
+    params: {
+      lat: number;
+      lon: number;
+      radiusKm: number;
+      query?: string;
+      page?: number;
+      limit?: number;
+    },
+    user?: IUser,
+  ) {
+    if (user && !this.usersService.isCandidatePremium(user)) {
+      throw new ForbiddenException(
+        'Chức năng tìm việc làm theo bản đồ chỉ dành riêng cho tài khoản Ứng viên Premium.',
+      );
+    }
+
+    const radiusMeters = (params.radiusKm || 10) * 1000;
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 30));
+    const skip = (page - 1) * limit;
+
+    const qb = this.jobRepo
+      .createQueryBuilder('job')
+      .leftJoin(Company, 'c', `c._id = (job.company->>'_id')::uuid`)
+      .where('job.isActive = :isActive', { isActive: true })
+      .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('(job.locationPoint IS NOT NULL OR c.location IS NOT NULL)')
+      .andWhere(
+        `ST_DWithin(
+          COALESCE(job.locationPoint, c.location)::geography,
+          ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+          :radiusMeters
+        )`,
+        { lon: params.lon, lat: params.lat, radiusMeters },
+      );
+
+    if (params.query && params.query.trim()) {
+      const q = `%${params.query.trim()}%`;
+      qb.andWhere(
+        '(job.name ILIKE :q OR job.description ILIKE :q OR job.company->>\'name\' ILIKE :q)',
+        { q },
+      );
+    }
+
+    qb.addSelect(
+      `ST_Distance(
+        COALESCE(job.locationPoint, c.location)::geography,
+        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+      ) / 1000.0`,
+      'distance_km',
+    );
+
+    qb.addSelect('COALESCE(job.lat, c.lat)', 'effective_lat');
+    qb.addSelect('COALESCE(job.lon, c.lon)', 'effective_lon');
+
+    qb.orderBy('distance_km', 'ASC');
+
+    const total = await qb.getCount();
+
+    qb.offset(skip).limit(limit);
+
+    const rawAndEntities = await qb.getRawAndEntities();
+
+    const result = rawAndEntities.entities.map((job, index) => {
+      const raw = rawAndEntities.raw[index];
+      const dist = raw?.distance_km != null ? parseFloat(raw.distance_km) : null;
+      const effectiveLat =
+        raw?.effective_lat != null
+          ? parseFloat(raw.effective_lat)
+          : job.lat;
+      const effectiveLon =
+        raw?.effective_lon != null
+          ? parseFloat(raw.effective_lon)
+          : job.lon;
+
+      return {
+        ...job,
+        lat: effectiveLat,
+        lon: effectiveLon,
+        distanceKm: dist != null ? Math.round(dist * 10) / 10 : null,
+      };
+    });
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: Math.ceil(total / limit) || 1,
+        total,
+      },
+      result,
     };
   }
 }

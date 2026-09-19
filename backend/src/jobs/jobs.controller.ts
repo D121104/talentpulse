@@ -9,6 +9,7 @@ import {
   UseGuards,
   Query,
   Req,
+  BadRequestException,
 } from '@nestjs/common';
 import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
@@ -97,6 +98,39 @@ export class JobsController {
       page: Number(page) || 1,
       limit: Number(limit) || 10,
     });
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('map-search')
+  @ResponseMessage('Tìm kiếm việc làm theo vị trí địa lý')
+  searchJobsByMap(
+    @Query('lat') lat: string,
+    @Query('lon') lon: string,
+    @Query('radius') radius: string,
+    @Query('query') query: string,
+    @Query('page') page: string,
+    @Query('limit') limit: string,
+    @User() user: IUser,
+  ) {
+    const parsedLat = parseFloat(lat);
+    const parsedLon = parseFloat(lon);
+    const parsedRadius = parseFloat(radius) || 10;
+
+    if (isNaN(parsedLat) || isNaN(parsedLon)) {
+      throw new BadRequestException('Tọa độ lat và lon không hợp lệ');
+    }
+
+    return this.jobsService.searchJobsByLocation(
+      {
+        lat: parsedLat,
+        lon: parsedLon,
+        radiusKm: parsedRadius,
+        query: query?.trim(),
+        page: Number(page) || 1,
+        limit: Number(limit) || 30,
+      },
+      user,
+    );
   }
 
   @Get('search-suggestions')

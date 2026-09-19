@@ -9,6 +9,7 @@ import {
   ChevronRight,
   RotateCcw,
   Inbox,
+  MapPin,
 } from 'lucide-react';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
@@ -17,6 +18,8 @@ import JobCardHorizontal from '../../components/jobs/JobCardHorizontal';
 import JobSidebarWidgets from '../../components/jobs/JobSidebarWidgets';
 import JobQuickPreview from '../../components/jobs/JobQuickPreview';
 import JobApplyModal from '../../components/jobs/JobApplyModal';
+import JobLocationSearchModal from '../../components/jobs/JobLocationSearchModal';
+import CandidatePremiumGateModal from '../../components/premium/CandidatePremiumGateModal';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -30,8 +33,28 @@ import {
 export default function JobSearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const { success, error, info } = useToast();
+
+  const isCandidatePremium = Boolean(
+    user?.role === 'ADMIN' ||
+    (user?.isPremium &&
+      (!user?.premiumExpiresAt || new Date(user.premiumExpiresAt).getTime() > Date.now()) &&
+      (user?.premiumPlan === 'CANDIDATE_PREMIUM' ||
+        String(user?.premiumPlan).toUpperCase().includes('CANDIDATE') ||
+        user?.role === 'USER')),
+  );
+
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
+  const [isPremiumGateOpen, setIsPremiumGateOpen] = useState(false);
+
+  const handleOpenLocationSearch = () => {
+    if (isCandidatePremium) {
+      setIsLocationModalOpen(true);
+    } else {
+      setIsPremiumGateOpen(true);
+    }
+  };
 
   // Read URL query params
   const paramQuery = searchParams.get('query') || '';
@@ -267,8 +290,22 @@ export default function JobSearchPage() {
                   </p>
                 </div>
 
-                {/* Sort Dropdown */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center flex-wrap sm:flex-nowrap gap-3">
+                  {/* Tìm theo vị trí Button (Candidate Premium) */}
+                  <button
+                    type="button"
+                    onClick={handleOpenLocationSearch}
+                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-600/25 hover:shadow-lg hover:shadow-blue-600/35 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+                  >
+                    <MapPin className="w-4 h-4 text-white shrink-0" />
+                    <span>Tìm theo vị trí</span>
+                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950">
+                      PRO
+                    </span>
+                  </button>
+
+                  {/* Sort Dropdown */}
+                  <div className="flex items-center gap-2">
                   <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap flex items-center gap-1">
                     <ArrowUpDown className="w-3.5 h-3.5" />
                     Ưu tiên:
@@ -291,6 +328,7 @@ export default function JobSearchPage() {
                   </select>
                 </div>
               </div>
+            </div>
 
               {/* QUICK FILTER CHIPS BAR */}
               <div className="flex items-center flex-wrap gap-2 text-xs">
@@ -509,6 +547,22 @@ export default function JobSearchPage() {
         onClose={() => setApplyingJob(null)}
         onSuccess={() => {
           // Can refresh or show congratulation
+        }}
+      />
+
+      {/* CANDIDATE PREMIUM GATE MODAL */}
+      <CandidatePremiumGateModal
+        isOpen={isPremiumGateOpen}
+        onClose={() => setIsPremiumGateOpen(false)}
+      />
+
+      {/* FULL-SCREEN LOCATION MAP SEARCH MODAL */}
+      <JobLocationSearchModal
+        isOpen={isLocationModalOpen}
+        onClose={() => setIsLocationModalOpen(false)}
+        accessToken={accessToken}
+        onSelectJob={(j) => {
+          setSelectedJob(j);
         }}
       />
 

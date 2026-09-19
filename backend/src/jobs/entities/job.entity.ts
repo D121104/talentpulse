@@ -5,6 +5,9 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  Index,
+  BeforeInsert,
+  BeforeUpdate,
 } from 'typeorm';
 
 @Entity('jobs')
@@ -58,6 +61,39 @@ export class Job {
 
   @Column({ nullable: true })
   location: string;
+
+  @Column({ type: 'double precision', nullable: true })
+  lat: number;
+
+  @Column({ type: 'double precision', nullable: true })
+  lon: number;
+
+  @Index({ spatial: true })
+  @Column({
+    type: 'geometry',
+    spatialFeatureType: 'Point',
+    srid: 4326,
+    nullable: true,
+  })
+  locationPoint: { type: string; coordinates: [number, number] } | null;
+
+  @BeforeInsert()
+  @BeforeUpdate()
+  syncLocation() {
+    if (
+      this.lat != null &&
+      this.lon != null &&
+      !isNaN(Number(this.lat)) &&
+      !isNaN(Number(this.lon))
+    ) {
+      this.locationPoint = {
+        type: 'Point',
+        coordinates: [Number(this.lon), Number(this.lat)],
+      };
+    } else {
+      this.locationPoint = null;
+    }
+  }
 
   @Column({ type: 'timestamptz', nullable: true })
   endDate: Date;

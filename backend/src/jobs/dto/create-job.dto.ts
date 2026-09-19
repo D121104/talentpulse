@@ -68,6 +68,14 @@ export class CreateJobDto {
   @IsNotEmpty()
   location: string;
 
+  @IsNumber()
+  @IsOptional()
+  lat?: number;
+
+  @IsNumber()
+  @IsOptional()
+  lon?: number;
+
   @Transform(({ value }) => new Date(value))
   @IsNotEmpty()
   endDate: Date;
