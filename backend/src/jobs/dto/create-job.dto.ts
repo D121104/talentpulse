@@ -9,6 +9,8 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Max,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Company } from 'src/users/dto/create-user.dto';
@@ -67,6 +69,18 @@ export class CreateJobDto {
 
   @IsNotEmpty()
   location: string;
+
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  @IsOptional()
+  lat?: number;
+
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  @IsOptional()
+  lon?: number;
 
   @Transform(({ value }) => new Date(value))
   @IsNotEmpty()

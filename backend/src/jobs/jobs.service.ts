@@ -425,6 +425,18 @@ export class JobsService {
 
     const newJob = this.jobRepo.create({
       ...createJobDto,
+      lat:
+        createJobDto.lat != null
+          ? Number(createJobDto.lat)
+          : company.lat != null
+          ? Number(company.lat)
+          : undefined,
+      lon:
+        createJobDto.lon != null
+          ? Number(createJobDto.lon)
+          : company.lon != null
+          ? Number(company.lon)
+          : undefined,
       createdBy: {
         _id: user._id,
         email: user.email,
@@ -667,6 +679,7 @@ export class JobsService {
       throw new NotFoundException('Job not found');
     }
 
+    let resolvedCompany: Company | null = null;
     if (updateJobDto.company?._id) {
       const company = await this.companyRepo.findOne({
         where: { _id: updateJobDto.company._id },
@@ -680,6 +693,7 @@ export class JobsService {
         throw new BadRequestException('Company is not active');
       }
 
+      resolvedCompany = company;
       updateJobDto.company = {
         _id: company._id,
         name: company.name,
@@ -694,15 +708,50 @@ export class JobsService {
       updateJobDto.description !== undefined &&
       updateJobDto.description !== currentJob.description;
 
-    await this.redisService.invalidateJobsCache();
-
-    const result = await this.jobRepo.update(id, {
+    const updatePayload: any = {
       ...updateJobDto,
       updatedBy: {
         _id: user._id,
         email: user.email,
       },
-    });
+    };
+
+    if (
+      updateJobDto.lat != null &&
+      updateJobDto.lon != null &&
+      Number.isFinite(Number(updateJobDto.lat)) &&
+      Number.isFinite(Number(updateJobDto.lon))
+    ) {
+      const nextLat = Number(updateJobDto.lat);
+      const nextLon = Number(updateJobDto.lon);
+      updatePayload.lat = nextLat;
+      updatePayload.lon = nextLon;
+      updatePayload.locationPoint = {
+        type: 'Point',
+        coordinates: [nextLon, nextLat],
+      };
+    } else if (
+      resolvedCompany &&
+      updateJobDto.lat === undefined &&
+      updateJobDto.lon === undefined &&
+      currentJob.lat == null &&
+      currentJob.lon == null &&
+      resolvedCompany.lat != null &&
+      resolvedCompany.lon != null
+    ) {
+      const nextLat = Number(resolvedCompany.lat);
+      const nextLon = Number(resolvedCompany.lon);
+      updatePayload.lat = nextLat;
+      updatePayload.lon = nextLon;
+      updatePayload.locationPoint = {
+        type: 'Point',
+        coordinates: [nextLon, nextLat],
+      };
+    }
+
+    await this.redisService.invalidateJobsCache();
+
+    const result = await this.jobRepo.update(id, updatePayload);
 
     await this.jobIndexingService.enqueue(id);
     // Sync to Elasticsearch
@@ -1313,6 +1362,109 @@ export class JobsService {
       nextResetDate: nextWeekReset.toISOString(),
       isPremium: true,
       isAdminOrHr: false,
+    };
+  }
+
+  /**
+   * Tìm kiếm việc làm theo bán kính vị trí địa lý bằng PostGIS dành cho Candidate Premium
+   */
+  async searchJobsByLocation(
+    params: {
+      lat: number;
+      lon: number;
+      radiusKm: number;
+      query?: string;
+      page?: number;
+      limit?: number;
+    },
+    user?: IUser,
+  ) {
+    if (user && !this.usersService.isCandidatePremium(user)) {
+      throw new ForbiddenException(
+        'Chức năng tìm việc làm theo bản đồ chỉ dành riêng cho tài khoản Ứng viên Premium.',
+      );
+    }
+
+    if (
+      !Number.isFinite(params.lat) ||
+      !Number.isFinite(params.lon) ||
+      params.lat < -90 ||
+      params.lat > 90 ||
+      params.lon < -180 ||
+      params.lon > 180
+    ) {
+      throw new BadRequestException('Tọa độ lat và lon không hợp lệ');
+    }
+
+    const radiusKm = Math.min(200, Math.max(1, Number(params.radiusKm) || 10));
+    const radiusMeters = radiusKm * 1000;
+    const page = Math.max(1, Number(params.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(params.limit) || 30));
+    const skip = (page - 1) * limit;
+
+    const qb = this.activeJobQueryService
+      .createActiveQuery()
+      .andWhere(
+        '(job."locationPoint" IS NOT NULL OR "canonicalCompany"."location" IS NOT NULL)',
+      )
+      .andWhere(
+        `ST_DWithin(
+          COALESCE(job."locationPoint", "canonicalCompany"."location")::geography,
+          ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+          :radiusMeters
+        )`,
+        { lon: params.lon, lat: params.lat, radiusMeters },
+      );
+
+    if (params.query && params.query.trim()) {
+      const q = `%${params.query.trim()}%`;
+      qb.andWhere(
+        `(job.name ILIKE :q OR job.description ILIKE :q OR job.company->>'name' ILIKE :q)`,
+        { q },
+      );
+    }
+
+    const total = await qb.getCount();
+
+    qb.addSelect(
+      `ST_Distance(
+        COALESCE(job."locationPoint", "canonicalCompany"."location")::geography,
+        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+      ) / 1000.0`,
+      'distance_km',
+    )
+      .addSelect('COALESCE(job.lat, "canonicalCompany".lat)', 'effective_lat')
+      .addSelect('COALESCE(job.lon, "canonicalCompany".lon)', 'effective_lon')
+      .orderBy('distance_km', 'ASC')
+      .offset(skip)
+      .limit(limit);
+
+    const rawAndEntities = await qb.getRawAndEntities();
+
+    const result = rawAndEntities.entities.map((job, index) => {
+      const raw = rawAndEntities.raw[index];
+      const dist = raw?.distance_km != null ? parseFloat(raw.distance_km) : null;
+      const effectiveLat =
+        raw?.effective_lat != null ? parseFloat(raw.effective_lat) : job.lat;
+      const effectiveLon =
+        raw?.effective_lon != null ? parseFloat(raw.effective_lon) : job.lon;
+
+      return {
+        ...job,
+        lat: effectiveLat,
+        lon: effectiveLon,
+        distanceKm: dist != null ? Math.round(dist * 10) / 10 : null,
+      };
+    });
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: Math.ceil(total / limit) || 1,
+        total,
+      },
+      result,
     };
   }
 }
