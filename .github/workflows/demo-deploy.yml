@@ -91,9 +91,9 @@ jobs:
         working-directory: ai-service
         run: |
           uv sync --locked
-          uv run ruff check app tests
-          uv run ruff format --check app tests
-          uv run mypy app
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+          uv run mypy src/talentpulse_ai
           uv run pytest
       - name: Install validation tools
         run: |
@@ -238,7 +238,7 @@ jobs:
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false --push \
             -t "${REGISTRY}/${BACKEND_REPOSITORY}:${RELEASE_SHA}" -f backend/Dockerfile.demo backend
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false --push \
-            -t "${REGISTRY}/${AI_REPOSITORY}:${RELEASE_SHA}" -f ai-service/Dockerfile.demo ai-service
+            -t "${REGISTRY}/${AI_REPOSITORY}:${RELEASE_SHA}" -f ai-service/Dockerfile ai-service
       - name: Resolve and gate immutable digests
         id: digests
         env:

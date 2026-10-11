@@ -1,6 +1,12 @@
 import { forwardRef } from 'react';
-import type { OnlineCV, CVFontOption, CVThemeOption } from '../../lib/cvTypes';
-import { CV_FONTS, CV_THEMES } from '../../lib/cvTypes';
+import type { OnlineCV, CVFontOption, CVThemeOption, CVLocale } from '../../lib/cvTypes';
+import {
+  CV_FONTS,
+  CV_THEMES,
+  CV_TEMPLATE_LABELS,
+  normalizeCvPreviewData,
+  resolveLoadedCvLocale,
+} from '../../lib/cvTypes';
 import { CV_PREVIEW_TEMPLATES } from './preview/templates';
 
 interface CVPreviewCanvasProps {
@@ -13,6 +19,7 @@ interface CVPreviewCanvasProps {
   scale?: number;
   className?: string;
   cvLanguage?: 'vi' | 'en';
+  cvLocale?: CVLocale;
 }
 
 const SECTION_TITLES = {
@@ -52,6 +59,7 @@ export const CVPreviewCanvas = forwardRef<HTMLDivElement, CVPreviewCanvasProps>(
       scale = 1,
       className = '',
       cvLanguage = 'vi',
+      cvLocale,
     },
     ref,
   ) => {
@@ -67,8 +75,15 @@ export const CVPreviewCanvas = forwardRef<HTMLDivElement, CVPreviewCanvasProps>(
     };
     const fontMultiplier = fontSizeMultipliers[fontSize] || 1.0;
 
-    const templateType = data.templateType || 'template1';
-    const langTitles = SECTION_TITLES[cvLanguage] || SECTION_TITLES.vi;
+    const normalizedData = normalizeCvPreviewData(data);
+    const templateType = normalizedData.templateType || 'template1';
+    const resolvedLocale: CVLocale = resolveLoadedCvLocale(
+      normalizedData.revision,
+      cvLocale || (cvLanguage === 'en' ? 'en-US' : 'vi-VN'),
+    );
+    const resolvedLanguage = resolvedLocale === 'en-US' ? 'en' : 'vi';
+    const langTitles = SECTION_TITLES[resolvedLanguage] || SECTION_TITLES.vi;
+    const labels = CV_TEMPLATE_LABELS[resolvedLocale];
 
     const TemplateComponent =
       CV_PREVIEW_TEMPLATES[templateType] || CV_PREVIEW_TEMPLATES.template1;
@@ -90,11 +105,13 @@ export const CVPreviewCanvas = forwardRef<HTMLDivElement, CVPreviewCanvasProps>(
         id="cv-print-area"
       >
         <TemplateComponent
-          data={data}
+          data={normalizedData}
           currentTheme={currentTheme}
           fontMultiplier={fontMultiplier}
           isPremium={isPremium}
           langTitles={langTitles}
+          locale={resolvedLocale}
+          labels={labels}
         />
       </div>
     );

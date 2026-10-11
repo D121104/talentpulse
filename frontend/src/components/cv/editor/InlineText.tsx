@@ -348,6 +348,8 @@ export interface InlineTextProps {
   className?: string;
   style?: React.CSSProperties;
   multiline?: boolean;
+  /** Render newline-separated content as readable bullets when not editing. */
+  bulletList?: boolean;
   nowrap?: boolean;
   rows?: number;
   asTitle?: boolean;
@@ -365,6 +367,7 @@ export function InlineText({
   className = '',
   style = {},
   multiline = false,
+  bulletList = false,
   nowrap = false,
   rows,
   asTitle = false,
@@ -380,6 +383,12 @@ export function InlineText({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const initialRows = rows || (multiline ? 2 : 1);
+  const bulletItems = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^(?:[-*•]|\d+[.)])\s+/, ''));
+  const shouldRenderBullets = bulletList && !isFocused && bulletItems.length > 1;
 
   // Auto-grow textarea height so all text wraps and remains fully visible
   const adjustHeight = () => {
@@ -462,7 +471,35 @@ export function InlineText({
         />
       )}
 
-      {nowrap ? (
+      {shouldRenderBullets ? (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            setIsFocused(true);
+            window.setTimeout(() => textareaRef.current?.focus(), 0);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setIsFocused(true);
+              window.setTimeout(() => textareaRef.current?.focus(), 0);
+            }
+          }}
+          className={`w-full max-w-full rounded px-1 py-0.5 border border-transparent hover:border-red-400 hover:bg-red-50/20 cursor-text ${className}`}
+          style={dynamicStyle}
+          aria-label="Chỉnh sửa danh sách gạch đầu dòng"
+        >
+          <ul
+            className="list-disc pl-5 space-y-0.5"
+            style={{ listStyleType: 'disc', listStylePosition: 'outside', paddingInlineStart: '1.25rem' }}
+          >
+            {bulletItems.map((item, index) => (
+              <li key={`${index}-${item}`}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : nowrap ? (
         <input
           type="text"
           value={value}

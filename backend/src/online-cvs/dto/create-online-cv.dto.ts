@@ -4,12 +4,14 @@ import {
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsIn,
   IsOptional,
   IsString,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { OnlineCvGenerationMode } from '../entities/online-cv.entity';
 
 export class EducationEntryDto {
   @ApiPropertyOptional()
@@ -128,11 +130,57 @@ export class AwardEntryDto {
   date?: string;
 }
 
+export class ProjectEntryDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  projectName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  role?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  startDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  endDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  technologies?: string[];
+}
+
 export class CreateOnlineCVDto {
   @ApiProperty({ enum: ['template1', 'template2'] })
   @IsNotEmpty()
   @IsEnum(['template1', 'template2'])
   templateType: string;
+
+  @ApiPropertyOptional({ enum: ['vi-VN', 'en-US'], default: 'vi-VN' })
+  @IsOptional()
+  @IsIn(['vi-VN', 'en-US'])
+  locale?: 'vi-VN' | 'en-US';
+
+  @ApiPropertyOptional({
+    enum: OnlineCvGenerationMode,
+    default: OnlineCvGenerationMode.MANUAL,
+  })
+  @IsOptional()
+  @IsEnum(OnlineCvGenerationMode)
+  generationMode?: OnlineCvGenerationMode;
 
   @ApiPropertyOptional({
     description: 'Tên / Tiêu đề của CV (vd: CV - Senior Developer)',
@@ -222,6 +270,13 @@ export class CreateOnlineCVDto {
   @ValidateNested({ each: true })
   @Type(() => AwardEntryDto)
   awards?: AwardEntryDto[];
+
+  @ApiPropertyOptional({ type: [ProjectEntryDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ProjectEntryDto)
+  projects?: ProjectEntryDto[];
 
   @ApiPropertyOptional({
     type: [String],

@@ -484,14 +484,14 @@ describe('JobIndexingService', () => {
       _id: '00000000-0000-4000-8000-000000000013',
       aggregateId: 'job-1',
       sourceVersion,
-      representationVersion: 'local-ollama-v1',
+      representationVersion: 'local-ollama-qwen3-embedding-4b-2560-v2',
       eventType: 'JOB_CHANGED',
       attemptCount: 1,
     });
 
     expect(
       upsertJob.mock.calls.map(([request]) => request.representation_version),
-    ).toEqual(['demo-v1', 'local-ollama-v1']);
+    ).toEqual(['demo-v1', 'local-ollama-qwen3-embedding-4b-2560-v2']);
     expect(upsertJob.mock.calls[0][0].idempotency_key).not.toBe(
       upsertJob.mock.calls[1][0].idempotency_key,
     );

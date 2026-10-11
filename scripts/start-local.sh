@@ -23,12 +23,18 @@ readonly OLLAMA_URL="http://127.0.0.1:11435"
 readonly JWT_ISSUER="https://talentpulse.local"
 readonly JWT_AUDIENCE="talentpulse-ai"
 readonly JWT_SUBJECT="talentpulse-backend"
-readonly LOCAL_OLLAMA_EMBEDDING_MODEL="${AI_OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:0.6b}"
-readonly LOCAL_OLLAMA_GENERATION_MODEL="${AI_OLLAMA_GENERATION_MODEL:-qwen3:1.7b}"
-readonly LOCAL_OLLAMA_EMBEDDING_DIMENSIONS="${AI_OLLAMA_EMBEDDING_DIMENSIONS:-1024}"
-readonly LOCAL_QDRANT_COLLECTION="jobs_ollama_${LOCAL_OLLAMA_EMBEDDING_DIMENSIONS}_local_v1"
-readonly LOCAL_QDRANT_ALIAS="jobs_current_local"
-readonly LOCAL_QDRANT_INDEX_VERSION="local-ollama-v1"
+# Qwen3-Embedding-4B exposes 2560 dimensions (official model metadata; see scripts/README.md).
+# Keep the embedding model/version stable so the local Qdrant representation stays compatible.
+readonly LOCAL_OLLAMA_EMBEDDING_MODEL="${AI_OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}"
+readonly LOCAL_OLLAMA_GENERATION_MODEL="${AI_OLLAMA_GENERATION_MODEL:-qwen3:4b}"
+readonly LOCAL_OLLAMA_EMBEDDING_DIMENSIONS="${AI_OLLAMA_EMBEDDING_DIMENSIONS:-2560}"
+readonly LOCAL_QDRANT_COLLECTION="jobs_ollama_qwen3_embedding_4b_2560_local_v2"
+readonly LOCAL_QDRANT_ALIAS="jobs_current_local_qwen3_embedding_4b_2560"
+readonly LOCAL_QDRANT_INDEX_VERSION="local-ollama-qwen3-embedding-4b-2560-v2"
+# qwen3:4b requires more than its ~3.2 GB loaded footprint for inference workspace.
+# This affects only the repo-managed local Compose profile.
+readonly LOCAL_OLLAMA_MEMORY_LIMIT="${OLLAMA_MEMORY_LIMIT:-4g}"
+readonly LOCAL_OLLAMA_MEMORY_SWAP_LIMIT="${OLLAMA_MEMORY_SWAP_LIMIT:-6g}"
 readonly LOCAL_OLLAMA_TIMEOUT_SECONDS=120
 readonly DETERMINISTIC_AI_SERVICE_TIMEOUT_MS=10000
 readonly OLLAMA_AI_SERVICE_TIMEOUT_MS=180000
@@ -57,12 +63,15 @@ Usage: scripts/start-local.sh [--ai-profile=deterministic|ollama] [--cv-ocr] [--
 
 Starts local PostgreSQL and Redis, then FastAPI, NestJS, and the Vite frontend.
 The Ollama profile additionally starts local Ollama and Qdrant and pulls missing models.
-OCR is disabled by default; --cv-ocr opts the local FastAPI child into host-local OCR.
+CV generation defaults to qwen3:4b; set AI_OLLAMA_GENERATION_MODEL to preserve a
+different local model when needed. Embeddings default to qwen3-embedding:4b
+(2560 dimensions). OCR is disabled by default; --cv-ocr opts the
+local FastAPI child into host-local OCR.
 Ctrl-C stops the three application processes; Docker dependencies remain running.
 
 --ai-profile=...  Select deterministic (default) or the explicit Ollama/Qdrant profile.
 --cv-ocr          Enable bounded local PDF OCR (requires pdftoppm, tesseract, eng, and vie).
---index-bootstrap Run the bounded local job-index command after all services are ready.
+--index-bootstrap Run the bounded local reindex/backfill into the new Qdrant version after services are ready.
 --dry-run         Print the planned commands and change nothing.
 --help            Show this help.
 EOF
@@ -237,7 +246,9 @@ ensure_local_tls() {
 }
 
 compose() {
-  docker compose -f "$COMPOSE_FILE" "$@"
+  OLLAMA_MEMORY_LIMIT="$LOCAL_OLLAMA_MEMORY_LIMIT" \
+    OLLAMA_MEMORY_SWAP_LIMIT="$LOCAL_OLLAMA_MEMORY_SWAP_LIMIT" \
+    docker compose -f "$COMPOSE_FILE" "$@"
 }
 
 wait_for_dependencies() {
@@ -317,7 +328,7 @@ initialize_local_qdrant() {
       AI_QDRANT_INDEX_VERSION="$LOCAL_QDRANT_INDEX_VERSION" \
       AI_COHERE_MODEL="$LOCAL_OLLAMA_EMBEDDING_MODEL" \
       AI_COHERE_DIMENSIONS="$LOCAL_OLLAMA_EMBEDDING_DIMENSIONS" \
-      timeout --signal=TERM 60s uv run --no-sync python -m app.qdrant_admin initialize >/dev/null
+      PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}" timeout --signal=TERM 60s uv run --no-sync python -m talentpulse_ai.scripts.qdrant_admin initialize >/dev/null
   ) || die 'local Qdrant initialization failed; existing aliases are never repointed'
 }
 
@@ -382,7 +393,7 @@ bootstrap_local_index_if_requested() {
   printf 'Running explicitly requested bounded local job indexing bootstrap.\n'
   (
     cd -- "$BACKEND_DIR"
-    timeout --signal=TERM 15m npm run index:jobs -- --environment=local --max-operations=100
+    timeout --signal=TERM 15m npm run index:jobs -- --environment=local --max-operations=100 --reconcile
   ) || die 'local job indexing bootstrap failed'
 }
 
@@ -508,15 +519,18 @@ CV OCR limits: $(if [[ "$CV_OCR" == true ]]; then printf 'native threshold=%s ch
 Compose: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'docker compose -f %s --profile ollama up -d postgres redis qdrant ollama' "$COMPOSE_FILE"; else printf 'docker compose -f %s up -d postgres redis' "$COMPOSE_FILE"; fi)
 Dependency waits: PostgreSQL and Redis$(if [[ "$AI_PROFILE" == ollama ]]; then printf ', Qdrant %s, Ollama %s' "$QDRANT_URL" "$OLLAMA_URL"; fi)
 Ollama models: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s, %s (pull only when absent)' "$LOCAL_OLLAMA_EMBEDDING_MODEL" "$LOCAL_OLLAMA_GENERATION_MODEL"; else printf 'skipped (deterministic profile)'; fi)
-Qdrant initialization: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s via the non-destructive operator command' "$LOCAL_QDRANT_COLLECTION"; else printf 'skipped (deterministic profile)'; fi)
-FastAPI: (cd $AI_DIR && uv run --no-sync uvicorn app.main:app --app-dir . --host 127.0.0.1 --port 8001 --ssl-keyfile $TLS_KEY --ssl-certfile $TLS_CERT)
+Ollama memory: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'limit=%s swap-limit=%s (local Compose only)' "$LOCAL_OLLAMA_MEMORY_LIMIT" "$LOCAL_OLLAMA_MEMORY_SWAP_LIMIT"; else printf 'skipped (deterministic profile)'; fi)
+Ollama embedding: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s (%s dimensions)' "$LOCAL_OLLAMA_EMBEDDING_MODEL" "$LOCAL_OLLAMA_EMBEDDING_DIMENSIONS"; else printf 'skipped (deterministic profile)'; fi)
+Ollama generation: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s (override AI_OLLAMA_GENERATION_MODEL is preserved)' "$LOCAL_OLLAMA_GENERATION_MODEL"; else printf 'skipped (deterministic profile)'; fi)
+Qdrant initialization: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'collection=%s alias=%s index=%s (new/non-destructive)' "$LOCAL_QDRANT_COLLECTION" "$LOCAL_QDRANT_ALIAS" "$LOCAL_QDRANT_INDEX_VERSION"; else printf 'skipped (deterministic profile)'; fi)
+FastAPI: (cd $AI_DIR && uv run --no-sync uvicorn talentpulse_ai.main:app --app-dir src --host 127.0.0.1 --port 8001 --ssl-keyfile $TLS_KEY --ssl-certfile $TLS_CERT)
 NestJS:  (cd $BACKEND_DIR && npm run start:dev)
 Frontend: (cd $FRONTEND_DIR && npm run dev -- --host 127.0.0.1 --port 5173)
 AI health: $AI_URL/health/ready (verified with the local CA)
 Backend health: $BACKEND_URL/api/v1/health/ready
 Frontend: $FRONTEND_URL/
 Environment files are preserved; backend launch variables explicitly override .env AI connection settings.
-Index bootstrap: $(if [[ "$INDEX_BOOTSTRAP" == true ]]; then printf 'requested explicitly (bounded to 100 jobs)'; else printf 'not run'; fi)
+Index bootstrap: $(if [[ "$INDEX_BOOTSTRAP" == true ]]; then printf 'requested explicitly (bounded reconcile/backfill to 100 jobs; old vectors untouched)'; else printf 'not run'; fi)
 NestJS AI timeout: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%sms (local Ollama)' "$OLLAMA_AI_SERVICE_TIMEOUT_MS"; else printf '%sms (deterministic)' "$DETERMINISTIC_AI_SERVICE_TIMEOUT_MS"; fi)
 FastAPI Ollama provider timeout: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%ss (bounded)' "$LOCAL_OLLAMA_TIMEOUT_SECONDS"; else printf 'not used (deterministic profile)'; fi)
 EOF
@@ -566,7 +580,7 @@ export AI_RAG_GENERATE_SCOPE=rag:generate
 export AI_JOB_INDEX_SCOPE=jobs:index
 configure_cv_ocr_environment
 start_process fastapi "$LOG_DIR/fastapi.log" "$AI_DIR" \
-  uv run --no-sync uvicorn app.main:app --app-dir . --host 127.0.0.1 --port 8001 \
+  uv run --no-sync uvicorn talentpulse_ai.main:app --app-dir src --host 127.0.0.1 --port 8001 \
   --ssl-keyfile "$TLS_KEY" --ssl-certfile "$TLS_CERT"
 clear_cv_ocr_environment
 unset AI_JWT_PUBLIC_KEY

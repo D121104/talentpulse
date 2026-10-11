@@ -11,6 +11,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { v4 as uuidv4 } from 'uuid';
 import { types, defaults } from 'pg';
 import { AppModule } from './app.module';
+import { createValidationException } from './core/validation-error';
 
 // Configure PostgreSQL type parsers and date input behavior
 // 1. Force pg to format JS Date parameter values as UTC strings ('YYYY-MM-DD HH:mm:ss.ms +00:00')
@@ -45,6 +46,7 @@ async function bootstrap() {
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
+      exceptionFactory: createValidationException,
     }),
   );
   app.useGlobalInterceptors(new TransformInterceptor());

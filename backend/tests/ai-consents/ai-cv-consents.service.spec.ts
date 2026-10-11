@@ -74,6 +74,28 @@ describe('AiCvConsentsService', () => {
     expect(eventRepo.save).not.toHaveBeenCalled();
   });
 
+  it('uses the caller transaction for the final consent read and the revoke lock namespace', async () => {
+    const { service, consentRepo, manager } = setup();
+    const scoped = { findOne: jest.fn().mockResolvedValue(null) };
+    manager.getRepository.mockReturnValue(scoped);
+    await service.lockScope(manager, userId, policy.scope);
+    expect(manager.query).toHaveBeenCalledWith(
+      `SELECT pg_advisory_xact_lock(hashtext('ai_cv_consent:' || $1 || ':' || $2))`,
+      [userId, policy.scope],
+    );
+    await expect(
+      service.hasValidConsent(
+        userId,
+        policy.scope,
+        policy.consentVersion,
+        policy.policyHash,
+        manager,
+      ),
+    ).resolves.toBe(false);
+    expect(scoped.findOne).toHaveBeenCalled();
+    expect(consentRepo.findOne).not.toHaveBeenCalled();
+  });
+
   it('persists the canonical policy and grant event atomically', async () => {
     const { service, consentRepo, eventRepo, manager } = setup();
     const savedConsent = {

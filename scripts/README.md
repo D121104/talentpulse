@@ -24,14 +24,43 @@ Deterministic mode is the default and does not start or pull Ollama/Qdrant:
 
 The explicit Ollama profile starts loopback-only Qdrant (`6333`) and Ollama on
 host port `11435` (container port `11434`) with persistent named volumes, waits
-for both health endpoints, pulls only missing `qwen3-embedding:0.6b` and
-`qwen3:1.7b` models, and initializes the separate `jobs_ollama_1024_local_v1`
-collection through the existing
-non-destructive `qdrant-admin initialize` command:
+for both health endpoints, pulls only missing `qwen3-embedding:4b` and `qwen3:4b`, and initializes the
+new separate `jobs_ollama_qwen3_embedding_4b_2560_local_v2` collection (2560
+dimensions) with alias `jobs_current_local_qwen3_embedding_4b_2560` and index
+version `local-ollama-qwen3-embedding-4b-2560-v2` through the existing non-destructive
+`qdrant-admin initialize` command:
 
 ```bash
 ./scripts/start-local.sh --ai-profile=ollama
 ```
+
+`qwen3:4b` is the local generation default. Preserve environment overrides by
+setting `AI_OLLAMA_GENERATION_MODEL` and/or `AI_OLLAMA_EMBEDDING_MODEL` before
+startup; the explicit embedding dimension must match the model metadata:
+
+```bash
+AI_OLLAMA_GENERATION_MODEL=qwen3:1.7b ./scripts/start-local.sh --ai-profile=ollama
+```
+
+The generation override is passed to FastAPI and used for the missing-model pull.
+
+The local Compose Ollama container has a configurable 4 GiB memory limit (and 6 GiB combined memory+swap limit) by default.
+This leaves qwen3:4b room for its inference workspace beyond the approximately 3.2 GiB loaded model footprint;
+set `OLLAMA_MEMORY_LIMIT` and `OLLAMA_MEMORY_SWAP_LIMIT` only for local runs when the host has capacity.
+These settings are confined to `backend/environment/docker-compose.yml` and do not affect production or cloud services.
+
+Changing generation alone does not require rebuilding vectors. Changing the
+embedding model or dimensions does require a new collection/version and a full
+reindex into that new target.
+
+The 2560-dimension value is sourced, not guessed: the official Ollama model
+metadata for `qwen3-embedding:4b-fp16` reports `qwen3.embedding_length=2560`,
+and the Qwen official model card lists Qwen3-Embedding-4B as 2560 dimensions
+(with configurable output dimensions up to 2560). Sources:
+
+- https://ollama.com/library/qwen3-embedding:4b-fp16/blobs/e8b4e85c8fcc
+- https://github.com/QwenLM/Qwen3-Embedding
+- https://huggingface.co/Qwen/Qwen3-Embedding-4B
 
 ## Local PDF OCR (explicit opt-in)
 
@@ -63,18 +92,27 @@ are temporary and OCR text stays local; CV content is not printed or sent to an
 external OCR/LLM provider. OCR failures degrade safely to native parsing when
 possible. This feature is for local development only, not demo or production.
 
-Model downloads can require several gigabytes and are bounded to 15 minutes per
-model. Ollama provider requests use a bounded 120-second FastAPI timeout, while
-NestJS waits up to 180 seconds for the local Ollama profile (the deterministic
-profile remains at 10 seconds). The local Qdrant initializer refuses an existing incompatible collection
+Model downloads can require several gigabytes; `qwen3:4b` needs more runtime
+RAM than smaller generation models. Downloads are bounded to 15 minutes per model. Non-CV Ollama provider requests
+keep the bounded 120-second FastAPI timeout, while existing synchronous NestJS
+callers may retain their shorter client timeout. CV draft generation is separate
+and worker-oriented: its FastAPI total deadline defaults to 600 seconds, with a
+120-second core call, 45-second localization chunks, one 45-second repair call,
+and a hard cap of 12 provider calls. A browser/client timeout does not cancel an
+in-flight provider thread; the service still enforces its own per-call and total
+deadlines. The local Qdrant initializer refuses an existing incompatible collection
 or alias target; it never deletes data or repoints an alias. Qdrant and Ollama
 data stay in Docker named volumes. Remove only those volumes, after confirmation,
 when a full local AI reset is required; do not remove PostgreSQL data implicitly.
 
 The current worktree's exact indexing bootstrap is not run automatically.
-`--index-bootstrap` is an explicit, bounded opt-in for the existing
-`npm run index:jobs -- --environment=local --max-operations=100` command after
-application readiness.
+`--index-bootstrap` is an explicit, bounded opt-in for
+`npm run index:jobs -- --environment=local --max-operations=100 --reconcile` after
+application readiness. It writes only the new representation version and never
+repoints the old alias or deletes old vectors. Repeat in bounded batches, or run
+the same command with `--max-operations=10000 --reconcile` while the local profile
+is running to backfill all canonical PostgreSQL jobs. The old collection
+`jobs_ollama_1024_local_v1` and alias `jobs_current_local` remain untouched.
 
 ## Prerequisites
 

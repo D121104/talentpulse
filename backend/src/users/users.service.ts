@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
 import { RegisterUserDto } from './dto/create-user.dto';
 import { UpdateUserDto, UpdateUserPasswordDto } from './dto/update-user.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { User, PremiumPlan } from './entities/user.entity';
 import { Company } from 'src/companies/entities/company.entity';
 import { PremiumPackage } from 'src/payments/entities/premium-package.entity';
@@ -189,13 +190,49 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
+    // The legacy endpoint is still used by administrators. Never spread a
+    // candidate-controlled DTO into the entity: role, email and company are
+    // authorization/ownership fields and must remain server-owned.
+    const updatePayload =
+      user.role === Role.ADMIN
+        ? { ...updateUserDto }
+        : this.profileUpdatePayload(updateUserDto);
+
     return await this.userRepo.update(id, {
-      ...updateUserDto,
+      ...updatePayload,
       updatedBy: {
         _id: user._id,
         email: user.email,
       },
     });
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto, user: IUser) {
+    const existing = await this.userRepo.findOne({
+      where: { _id: userId, isDeleted: false },
+    });
+    if (!existing) throw new NotFoundException('User not found');
+
+    await this.userRepo.update(userId, {
+      ...this.profileUpdatePayload(dto),
+      updatedBy: { _id: user._id, email: user.email },
+    });
+    return this.findOne(userId);
+  }
+
+  private profileUpdatePayload(
+    dto: Pick<
+      UpdateProfileDto,
+      'name' | 'age' | 'gender' | 'address' | 'avatar'
+    >,
+  ): Partial<User> {
+    const payload: Partial<User> = {};
+    if (dto.name !== undefined) payload.name = dto.name;
+    if (dto.age !== undefined) payload.age = dto.age;
+    if (dto.gender !== undefined) payload.gender = dto.gender;
+    if (dto.address !== undefined) payload.address = dto.address;
+    if (dto.avatar !== undefined) payload.avatar = dto.avatar;
+    return payload;
   }
 
   async updateUserCompany(

@@ -9,9 +9,18 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
+import type { CvGenerationMetadata } from '../async-cv-generation.types';
+
+export type OnlineCvLocale = 'vi-VN' | 'en-US';
+
+export enum OnlineCvGenerationMode {
+  MANUAL = 'MANUAL',
+  EDITOR_ONLY = 'EDITOR_ONLY',
+}
 
 export class EducationEntry {
   schoolName: string;
+  degree?: string;
   major: string;
   startDate: string;
   endDate: string;
@@ -41,12 +50,25 @@ export class ActivityEntry {
 
 export class CertificateEntry {
   name: string;
+  issuer?: string;
   date: string;
+  credentialUrl?: string;
 }
 
 export class AwardEntry {
   name: string;
+  issuer?: string;
   date: string;
+  description?: string;
+}
+
+export class OnlineCvProjectEntry {
+  projectName: string;
+  role: string;
+  startDate: string;
+  endDate: string;
+  description: string;
+  technologies: string[];
 }
 
 @Entity('online_cvs')
@@ -56,6 +78,45 @@ export class OnlineCV {
 
   @Column({ enum: ['template1', 'template2'] })
   templateType: string;
+
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: OnlineCvGenerationMode.MANUAL,
+  })
+  generationMode: OnlineCvGenerationMode;
+
+  @Column({ type: 'integer', default: 1 })
+  contentVersion: number;
+
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  sourceVersion: string;
+
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  generatedBy: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  targetJobId: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  sourceProfileId: string;
+
+  @Column({ type: 'integer', nullable: true })
+  sourceProfileVersion: number;
+
+  @Column({ type: 'jsonb', nullable: true })
+  generationSnapshot: Record<string, unknown>;
+
+  @Column({ type: 'jsonb', nullable: true })
+  revision: {
+    contentVersion: number;
+    locale?: OnlineCvLocale;
+    generatedAt?: string;
+    warnings?: string[];
+    sourceTrace?: Record<string, unknown> & {
+      generation?: CvGenerationMetadata;
+    };
+  };
 
   @Column({ nullable: true })
   title: string;
@@ -102,10 +163,13 @@ export class OnlineCV {
   @Column({ type: 'jsonb', default: '[]' })
   awards: AwardEntry[];
 
+  @Column({ type: 'jsonb', default: '[]' })
+  projects: OnlineCvProjectEntry[];
+
   @Column({
     type: 'jsonb',
     default:
-      '["objective", "education", "experience", "skills", "activities", "certificates", "awards"]',
+      '["objective", "education", "experience", "skills", "projects", "activities", "certificates", "awards"]',
   })
   sectionOrder: string[];
 

@@ -1,12 +1,36 @@
-import { Phone, Mail, Globe, MapPin, Sparkles } from 'lucide-react';
-import type { CVPreviewTemplateProps } from '../CVPreviewTemplateProps';
+import { Phone, Mail, Globe, MapPin, Sparkles } from "lucide-react";
+import type { CVPreviewTemplateProps } from "../CVPreviewTemplateProps";
+import { getCvTimelineEntries } from "../../../../lib/cvTypes";
+import { DescriptionContent } from "../../DescriptionContent";
 
 export function PreviewTemplate1({
   data,
   currentTheme,
   fontMultiplier,
   langTitles,
+  labels,
 }: CVPreviewTemplateProps) {
+  const sectionOrder = Array.from(
+    new Set(
+      (
+        data.sectionOrder || [
+          "objective",
+          "education",
+          "experience",
+          "skills",
+          "activities",
+          "certificates",
+          "awards",
+        ]
+      ).map((section) => (section === "projects" ? "activities" : section)),
+    ),
+  );
+  const renderGeneratedBullets =
+    data.generationMode === "EDITOR_ONLY" ||
+    Boolean(data.revision?.generatedAt);
+
+  const timelineEntries = getCvTimelineEntries(data.activities, data.projects);
+
   return (
     <div className="p-10 sm:p-12 flex flex-col justify-between min-h-[297mm] h-auto w-full">
       <div className="flex-1 w-full">
@@ -22,13 +46,13 @@ export function PreviewTemplate1({
               fontSize: `${1.75 * fontMultiplier}rem`,
             }}
           >
-            {data.fullName || 'HỌ VÀ TÊN CỦA BẠN'}
+            {data.fullName || labels.nameFallback}
           </h1>
           <p
             className="font-medium text-slate-600 mb-3 tracking-wide"
             style={{ fontSize: `${1.05 * fontMultiplier}rem` }}
           >
-            {data.position || 'Vị trí công việc ứng tuyển'}
+            {data.position || labels.positionFallback}
           </p>
 
           {/* Contact info list - TopCV responsive wrap style */}
@@ -38,25 +62,37 @@ export function PreviewTemplate1({
           >
             {data.phone && (
               <span className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap">
-                <Phone className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
+                <Phone
+                  className="h-3.5 w-3.5 shrink-0"
+                  style={{ color: currentTheme.color }}
+                />
                 <span>{data.phone}</span>
               </span>
             )}
             {data.email && (
               <span className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap">
-                <Mail className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
+                <Mail
+                  className="h-3.5 w-3.5 shrink-0"
+                  style={{ color: currentTheme.color }}
+                />
                 <span>{data.email}</span>
               </span>
             )}
             {data.link && (
               <span className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap">
-                <Globe className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
+                <Globe
+                  className="h-3.5 w-3.5 shrink-0"
+                  style={{ color: currentTheme.color }}
+                />
                 <span>{data.link}</span>
               </span>
             )}
             {data.address && (
               <span className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap">
-                <MapPin className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
+                <MapPin
+                  className="h-3.5 w-3.5 shrink-0"
+                  style={{ color: currentTheme.color }}
+                />
                 <span>{data.address}</span>
               </span>
             )}
@@ -64,26 +100,16 @@ export function PreviewTemplate1({
         </div>
 
         {/* Dynamic Sections rendering based on sectionOrder */}
-        {(
-          data.sectionOrder || [
-            'objective',
-            'education',
-            'experience',
-            'skills',
-            'activities',
-            'certificates',
-            'awards',
-          ]
-        ).map((secKey) => {
+        {sectionOrder.map((secKey) => {
           // 1. Objective
-          if (secKey === 'objective' && data.careerObjective) {
+          if (secKey === "objective" && data.careerObjective) {
             return (
               <div key="objective" className="mb-6">
                 <h2
                   className="text-sm font-bold uppercase tracking-wider pb-1 mb-2.5 border-b"
                   style={{
                     color: currentTheme.color,
-                    borderColor: '#E2E8F0',
+                    borderColor: "#E2E8F0",
                     fontSize: `${0.95 * fontMultiplier}rem`,
                   }}
                 >
@@ -100,14 +126,18 @@ export function PreviewTemplate1({
           }
 
           // 2. Education
-          if (secKey === 'education' && data.education && data.education.length > 0) {
+          if (
+            secKey === "education" &&
+            data.education &&
+            data.education.length > 0
+          ) {
             return (
               <div key="education" className="mb-6">
                 <h2
                   className="text-sm font-bold uppercase tracking-wider pb-1 mb-2.5 border-b"
                   style={{
                     color: currentTheme.color,
-                    borderColor: '#E2E8F0',
+                    borderColor: "#E2E8F0",
                     fontSize: `${0.95 * fontMultiplier}rem`,
                   }}
                 >
@@ -121,15 +151,25 @@ export function PreviewTemplate1({
                           className="font-bold text-slate-900"
                           style={{ fontSize: `${0.9 * fontMultiplier}rem` }}
                         >
-                          {edu.schoolName || 'Tên trường học / Viện đào tạo'}
+                          {edu.schoolName || labels.schoolFallback}
                         </span>
                         <span
                           className="text-xs text-slate-500 font-medium shrink-0 ml-2"
                           style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
                         >
-                          {edu.startDate} {edu.startDate && edu.endDate ? '—' : ''} {edu.endDate}
+                          {edu.startDate}{" "}
+                          {edu.startDate && edu.endDate ? "—" : ""}{" "}
+                          {edu.endDate}
                         </span>
                       </div>
+                      {edu.degree && (
+                        <p
+                          className="text-slate-700 mt-0.5"
+                          style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
+                        >
+                          {edu.degree}
+                        </p>
+                      )}
                       {edu.major && (
                         <p
                           className="font-medium text-slate-700 italic mt-0.5"
@@ -154,14 +194,18 @@ export function PreviewTemplate1({
           }
 
           // 3. Work Experience
-          if (secKey === 'experience' && data.workExperience && data.workExperience.length > 0) {
+          if (
+            secKey === "experience" &&
+            data.workExperience &&
+            data.workExperience.length > 0
+          ) {
             return (
               <div key="experience" className="mb-6">
                 <h2
                   className="text-sm font-bold uppercase tracking-wider pb-1 mb-2.5 border-b"
                   style={{
                     color: currentTheme.color,
-                    borderColor: '#E2E8F0',
+                    borderColor: "#E2E8F0",
                     fontSize: `${0.95 * fontMultiplier}rem`,
                   }}
                 >
@@ -175,13 +219,15 @@ export function PreviewTemplate1({
                           className="font-bold text-slate-900"
                           style={{ fontSize: `${0.9 * fontMultiplier}rem` }}
                         >
-                          {exp.companyName || 'Tên công ty / Doanh nghiệp'}
+                          {exp.companyName || labels.companyFallback}
                         </span>
                         <span
                           className="text-xs text-slate-500 font-medium shrink-0 ml-2"
                           style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
                         >
-                          {exp.startDate} {exp.startDate && exp.endDate ? '—' : ''} {exp.endDate}
+                          {exp.startDate}{" "}
+                          {exp.startDate && exp.endDate ? "—" : ""}{" "}
+                          {exp.endDate}
                         </span>
                       </div>
                       {exp.position && (
@@ -196,12 +242,12 @@ export function PreviewTemplate1({
                         </p>
                       )}
                       {exp.description && (
-                        <p
-                          className="text-slate-600 mt-1 whitespace-pre-line text-justify"
+                        <DescriptionContent
+                          text={exp.description}
+                          className="text-slate-600 mt-1 text-justify"
+                          bulletList={renderGeneratedBullets}
                           style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                        >
-                          {exp.description}
-                        </p>
+                        />
                       )}
                     </div>
                   ))}
@@ -211,14 +257,14 @@ export function PreviewTemplate1({
           }
 
           // 4. Skills
-          if (secKey === 'skills' && data.skills && data.skills.length > 0) {
+          if (secKey === "skills" && data.skills && data.skills.length > 0) {
             return (
               <div key="skills" className="mb-6">
                 <h2
                   className="text-sm font-bold uppercase tracking-wider pb-1 mb-2.5 border-b"
                   style={{
                     color: currentTheme.color,
-                    borderColor: '#E2E8F0',
+                    borderColor: "#E2E8F0",
                     fontSize: `${0.95 * fontMultiplier}rem`,
                   }}
                 >
@@ -232,9 +278,13 @@ export function PreviewTemplate1({
                         style={{ backgroundColor: currentTheme.color }}
                       />
                       <div style={{ fontSize: `${0.85 * fontMultiplier}rem` }}>
-                        <span className="font-bold text-slate-900">{skill.name}</span>
+                        <span className="font-bold text-slate-900">
+                          {skill.name}
+                        </span>
                         {skill.description && (
-                          <span className="text-slate-600 ml-1.5">— {skill.description}</span>
+                          <span className="text-slate-600 ml-1.5">
+                            — {skill.description}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -245,21 +295,21 @@ export function PreviewTemplate1({
           }
 
           // 5. Activities
-          if (secKey === 'activities' && data.activities && data.activities.length > 0) {
+          if (secKey === "activities" && timelineEntries.length > 0) {
             return (
               <div key="activities" className="mb-6">
                 <h2
                   className="text-sm font-bold uppercase tracking-wider pb-1 mb-2.5 border-b"
                   style={{
                     color: currentTheme.color,
-                    borderColor: '#E2E8F0',
+                    borderColor: "#E2E8F0",
                     fontSize: `${0.95 * fontMultiplier}rem`,
                   }}
                 >
                   {langTitles.activities}
                 </h2>
                 <div className="space-y-3">
-                  {data.activities.map((act, idx) => (
+                  {timelineEntries.map(({ entry: act }, idx) => (
                     <div key={idx}>
                       <div className="flex items-baseline justify-between">
                         <span
@@ -272,7 +322,9 @@ export function PreviewTemplate1({
                           className="text-xs text-slate-500 font-medium shrink-0 ml-2"
                           style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
                         >
-                          {act.startDate} {act.startDate && act.endDate ? '—' : ''} {act.endDate}
+                          {act.startDate}{" "}
+                          {act.startDate && act.endDate ? "—" : ""}{" "}
+                          {act.endDate}
                         </span>
                       </div>
                       {act.position && (
@@ -284,12 +336,12 @@ export function PreviewTemplate1({
                         </p>
                       )}
                       {act.description && (
-                        <p
-                          className="text-slate-600 mt-1 whitespace-pre-line"
+                        <DescriptionContent
+                          text={act.description}
+                          className="text-slate-600 mt-1"
+                          bulletList={renderGeneratedBullets}
                           style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                        >
-                          {act.description}
-                        </p>
+                        />
                       )}
                     </div>
                   ))}
@@ -299,14 +351,18 @@ export function PreviewTemplate1({
           }
 
           // 6. Certificates
-          if (secKey === 'certificates' && data.certificates && data.certificates.length > 0) {
+          if (
+            secKey === "certificates" &&
+            data.certificates &&
+            data.certificates.length > 0
+          ) {
             return (
               <div key="certificates" className="mb-6">
                 <h2
                   className="text-sm font-bold uppercase tracking-wider pb-1 mb-2.5 border-b"
                   style={{
                     color: currentTheme.color,
-                    borderColor: '#E2E8F0',
+                    borderColor: "#E2E8F0",
                     fontSize: `${0.95 * fontMultiplier}rem`,
                   }}
                 >
@@ -319,8 +375,24 @@ export function PreviewTemplate1({
                       className="flex items-baseline justify-between"
                       style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
                     >
-                      <span className="font-semibold text-slate-800">• {cert.name}</span>
-                      {cert.date && <span className="text-xs text-slate-500">{cert.date}</span>}
+                      <span className="font-semibold text-slate-800">
+                        • {cert.name}
+                      </span>
+                      {cert.issuer && (
+                        <span className="text-xs text-slate-500 mr-2">
+                          {cert.issuer}
+                        </span>
+                      )}{" "}
+                      {cert.credentialUrl && (
+                        <span className="text-xs text-slate-500 mr-2">
+                          {cert.credentialUrl}
+                        </span>
+                      )}{" "}
+                      {cert.date && (
+                        <span className="text-xs text-slate-500">
+                          {cert.date}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -329,14 +401,14 @@ export function PreviewTemplate1({
           }
 
           // 7. Awards
-          if (secKey === 'awards' && data.awards && data.awards.length > 0) {
+          if (secKey === "awards" && data.awards && data.awards.length > 0) {
             return (
               <div key="awards" className="mb-6">
                 <h2
                   className="text-sm font-bold uppercase tracking-wider pb-1 mb-2.5 border-b"
                   style={{
                     color: currentTheme.color,
-                    borderColor: '#E2E8F0',
+                    borderColor: "#E2E8F0",
                     fontSize: `${0.95 * fontMultiplier}rem`,
                   }}
                 >
@@ -349,8 +421,24 @@ export function PreviewTemplate1({
                       className="flex items-baseline justify-between"
                       style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
                     >
-                      <span className="font-semibold text-slate-800">• {award.name}</span>
-                      {award.date && <span className="text-xs text-slate-500">{award.date}</span>}
+                      <span className="font-semibold text-slate-800">
+                        • {award.name}
+                      </span>
+                      {award.issuer && (
+                        <span className="text-xs text-slate-500 mr-2">
+                          {award.issuer}
+                        </span>
+                      )}{" "}
+                      {award.description && (
+                        <span className="text-xs text-slate-600 ml-2">
+                          {award.description}
+                        </span>
+                      )}{" "}
+                      {award.date && (
+                        <span className="text-xs text-slate-500">
+                          {award.date}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -367,10 +455,11 @@ export function PreviewTemplate1({
         className="cv-watermark mt-8 pt-3 border-t border-slate-200 flex items-center justify-between text-[10px] text-slate-400 select-none"
         data-watermark="true"
       >
-        <span>Trang 1 / 1</span>
+        <span>{labels.page} 1 / 1</span>
         <span className="inline-flex items-center gap-1 font-semibold text-slate-500">
           <Sparkles className="h-3 w-3 text-primary" />
-          Được tạo bởi <b className="text-slate-700">TalentPulse</b> — talentpulse.vn
+          {labels.createdBy} <b className="text-slate-700">TalentPulse</b> —
+          talentpulse.vn
         </span>
       </div>
     </div>

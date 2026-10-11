@@ -527,7 +527,7 @@ integrationDescribe(
           aggregateType: 'JOB',
           eventType: 'JOB_CHANGED',
           sourceVersion,
-          representationVersion: 'local-ollama-v1',
+          representationVersion: 'local-ollama-qwen3-embedding-4b-2560-v2',
           status: 'PENDING',
           attemptCount: 0,
           availableAt: new Date(),
@@ -543,7 +543,7 @@ integrationDescribe(
       });
       expect(rows.map((row) => row.representationVersion).sort()).toEqual([
         'demo-v1',
-        'local-ollama-v1',
+        'local-ollama-qwen3-embedding-4b-2560-v2',
       ]);
     });
 
@@ -567,7 +567,7 @@ integrationDescribe(
           aggregateType: 'JOB',
           eventType: 'JOB_CHANGED',
           sourceVersion,
-          representationVersion: 'local-ollama-v1',
+          representationVersion: 'local-ollama-qwen3-embedding-4b-2560-v2',
           status: 'PENDING',
           attemptCount: 0,
           availableAt: new Date(),

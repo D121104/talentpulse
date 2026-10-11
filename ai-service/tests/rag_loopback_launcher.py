@@ -5,17 +5,16 @@ import sys
 from pathlib import Path
 from uuid import UUID
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import uvicorn
-from app.application.generation import DeterministicGenerationProvider
-from app.core.config import Settings
-from app.domain.rag import RetrievedChunk
-from app.infrastructure.rag_providers import (
-    DeterministicEmbeddingProvider,
-    InMemoryVectorRetriever,
-)
-from app.main import create_app
+
+from talentpulse_ai.core.config import Settings
+from talentpulse_ai.infrastructure.embeddings.model import DeterministicEmbeddingProvider
+from talentpulse_ai.infrastructure.llm.deterministic import DeterministicGenerationProvider
+from talentpulse_ai.infrastructure.vectorstore.memory import InMemoryVectorRetriever
+from talentpulse_ai.main import create_app
+from talentpulse_ai.modules.rag_chatbot.schemas import RetrievedChunk
 
 JOB_ID = UUID("77777777-7777-4777-8777-777777777777")
 

@@ -10,14 +10,14 @@ job-indexing orchestration. Qdrant Cloud is a derived index.
 
 ```bash
 uv sync
-uv run uvicorn app.main:app --app-dir . --host 0.0.0.0 --port 8001
+uv run uvicorn talentpulse_ai.main:app --app-dir src --host 0.0.0.0 --port 8001
 ```
 
 The Qdrant demo collection is initialized only by an explicit operator command; it
 is never run during application startup or readiness checks:
 
 ```bash
-AI_QDRANT_ADMIN_ENABLED=true uv run qdrant-admin initialize
+AI_QDRANT_ADMIN_ENABLED=true PYTHONPATH=src uv run python -m talentpulse_ai.scripts.qdrant_admin initialize
 ```
 
 ### Optional local PDF OCR
@@ -49,13 +49,35 @@ uses the Pydantic Settings-compatible JSON list `["eng","vie"]`.
 PDF bytes, temporary rendered images, and OCR text remain local to the FastAPI
 process and are not printed or sent to an external provider. OCR is bounded and
 fails back to native parsing when possible. Do not enable this local flag as a
-cloud/demo deployment setting. Local Ollama keeps its existing 120-second FastAPI
-provider bound and 180-second NestJS AI request timeout; deterministic mode keeps
-its 10-second NestJS timeout.
+cloud/demo deployment setting. Other AI endpoints keep the existing 120-second
+Ollama provider bound and their existing client timeouts. CV draft generation has a
+separate worker budget: `AI_CV_GENERATION_TOTAL_TIMEOUT_SECONDS` defaults to 600
+seconds, with 120 seconds for the core call, 45 seconds per localization chunk,
+and 45 seconds for one bounded repair call. Settings bound the total to 900
+seconds and every provider call to 120 seconds. The localization chunk size is 6,
+the provider-call cap remains 12, `num_predict=256` stays bounded, and no timeout
+is retried.
 
 The local application ports are FastAPI HTTPS `8001`, NestJS `8000`, Vite `5173`,
 PostgreSQL `5432`, Redis `6379`, Qdrant `6333`, and Ollama `11435` (the latter two
 only with the Ollama profile).
+
+Synchronous callers may keep a shorter HTTP client timeout (for example, a
+browser-facing request budget); that does not change the FastAPI CV service deadline.
+A client disconnect cannot reliably stop an in-flight provider thread, so cancellation
+is best-effort at the provider boundary. Each provider call and the complete CV
+operation remain bounded, and timeout metrics record call kind, latency, and safe
+reason codes without logging CV/provider content. Background workers should use a
+client timeout longer than the six-minute service budget.
+
+The local Ollama profile defaults to generation model `qwen3:4b` and embedding
+model `qwen3-embedding:4b`. The embedding vector size is **2560**, verified from
+the official Ollama `qwen3.embedding_length` metadata and the Qwen model card.
+Changing embedding model or dimensions requires a new collection/version and a
+reindex; the profile uses `jobs_ollama_qwen3_embedding_4b_2560_local_v2` with
+alias `jobs_current_local_qwen3_embedding_4b_2560` and index version
+`local-ollama-qwen3-embedding-4b-2560-v2`, leaving the prior local target untouched.
+See the source links and reindex procedure in `scripts/README.md`.
 
 ## Authentication and scopes
 

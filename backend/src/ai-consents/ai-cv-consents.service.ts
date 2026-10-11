@@ -167,14 +167,22 @@ export class AiCvConsentsService {
     return this.getCurrent(userId, policy.scope);
   }
 
+  getPolicyMetadata(scope: string) {
+    return this.getPolicy(scope);
+  }
+
   async hasValidConsent(
     userId: string,
     scope: string,
     consentVersion: string,
     policyHash: string,
+    manager?: EntityManager,
   ): Promise<boolean> {
     if (!isUUID(userId) || !isAiCvConsentScope(scope)) return false;
-    const policy = getActiveAiCvConsentPolicy(this.configService);
+    const policy = getActiveAiCvConsentPolicy(
+      this.configService,
+      scope as AiCvConsentScope,
+    );
     if (
       scope !== policy.scope ||
       consentVersion !== policy.consentVersion ||
@@ -183,7 +191,9 @@ export class AiCvConsentsService {
       return false;
     }
 
-    const consent = await this.consentRepo.findOne({
+    const consent = await (
+      manager?.getRepository(AiCvConsent) || this.consentRepo
+    ).findOne({
       where: { userId, scope: policy.scope, status: AiCvConsentStatus.GRANTED },
     });
     return Boolean(
@@ -199,7 +209,7 @@ export class AiCvConsentsService {
     if (!isAiCvConsentScope(scope)) {
       throw new BadRequestException(AI_CV_CONSENT_ERROR_MESSAGES.INVALID_SCOPE);
     }
-    const policy = getActiveAiCvConsentPolicy(this.configService);
+    const policy = getActiveAiCvConsentPolicy(this.configService, scope);
     if (policy.scope !== scope) {
       throw new BadRequestException(AI_CV_CONSENT_ERROR_MESSAGES.INVALID_SCOPE);
     }
@@ -223,11 +233,7 @@ export class AiCvConsentsService {
     if (!isUUID(value)) throw new BadRequestException(message);
   }
 
-  private async lockScope(
-    manager: EntityManager,
-    userId: string,
-    scope: string,
-  ) {
+  async lockScope(manager: EntityManager, userId: string, scope: string) {
     if (typeof manager.query === 'function') {
       await manager.query(
         `SELECT pg_advisory_xact_lock(hashtext('ai_cv_consent:' || $1 || ':' || $2))`,

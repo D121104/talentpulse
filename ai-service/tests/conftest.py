@@ -4,11 +4,12 @@ from uuid import uuid4
 
 import jwt
 import pytest
-from app.core.config import Settings, get_settings
-from app.main import app
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+
+from talentpulse_ai.core.config import Settings, get_settings
+from talentpulse_ai.main import app
 
 
 @pytest.fixture

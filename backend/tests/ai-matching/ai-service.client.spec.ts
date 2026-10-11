@@ -91,6 +91,141 @@ const matchResponse = {
   scoring_version: 'v1',
   semantic_component_version: 'v1',
 };
+const cvDraftRequest = {
+  identity: {
+    request_id: '00000000-0000-4000-8000-000000000011',
+    trace_id: '00000000-0000-4000-8000-000000000012',
+    operation_attempt_id: '00000000-0000-4000-8000-000000000013',
+  },
+  candidate: {
+    candidate_id: '00000000-0000-4000-8000-000000000001',
+    full_name: 'Jane Doe',
+    email: 'jane@example.com',
+    phone: '+84123456789',
+    link: null,
+    address: 'Hanoi',
+    headline: 'Backend Engineer',
+    career_objective: 'Build reliable services',
+    skills: ['TypeScript'],
+    experience: [
+      {
+        company_name: 'Acme',
+        position: 'Backend Engineer',
+        start_date: '2020-01',
+        end_date: null,
+        description: 'Built APIs',
+      },
+    ],
+    education: [
+      {
+        school_name: 'University',
+        degree: 'BSc',
+        major: 'Computer Science',
+        start_date: '2016-01',
+        end_date: '2020-01',
+        description: null,
+      },
+    ],
+    projects: [
+      {
+        project_name: 'TalentPulse',
+        role: 'Developer',
+        start_date: '2021-01',
+        end_date: null,
+        description: 'Recruitment platform',
+        technologies: ['TypeScript'],
+      },
+    ],
+    certificates: ['AWS Certified Developer'],
+    activities: ['Mentored interns'],
+    awards: ['Engineering award'],
+  },
+  job: {
+    job_id: '00000000-0000-4000-8000-000000000002',
+    title: 'Senior Backend Engineer',
+    company_name: 'Acme',
+    description: 'Build reliable APIs',
+    location: 'Hanoi',
+    work_mode: 'hybrid',
+    level: 'senior',
+    required_skills: ['TypeScript'],
+    preferred_skills: ['PostgreSQL'],
+  },
+  template_type: 'template1' as const,
+  locale: 'en',
+  source_version: 'profile-v1',
+  content_version: 1,
+  consent_version: 'consent-v1',
+};
+const cvDraftResponse = {
+  request_id: cvDraftRequest.identity.request_id,
+  trace_id: cvDraftRequest.identity.trace_id,
+  operation_attempt_id: cvDraftRequest.identity.operation_attempt_id,
+  candidate_id: cvDraftRequest.candidate.candidate_id,
+  target_job_id: cvDraftRequest.job.job_id,
+  template_type: cvDraftRequest.template_type,
+  generation_mode: 'EDITOR_ONLY' as const,
+  full_name: 'Jane Doe',
+  title: 'Senior Backend Engineer',
+  position: 'Backend Engineer',
+  email: 'jane@example.com',
+  phone: '+84123456789',
+  link: null,
+  address: 'Hanoi',
+  career_objective: 'Build reliable services',
+  education: [
+    {
+      school_name: 'University',
+      degree: 'BSc',
+      major: 'Computer Science',
+      start_date: '2016-01',
+      end_date: '2020-01',
+      description: null,
+    },
+  ],
+  projects: [
+    {
+      project_name: 'TalentPulse',
+      role: 'Developer',
+      start_date: '2021-01',
+      end_date: null,
+      description: 'Recruitment platform',
+      technologies: ['TypeScript'],
+      bullets: ['Delivered the recruitment platform'],
+      source_index: 0,
+    },
+  ],
+  work_experience: [
+    {
+      company_name: 'Acme',
+      position: 'Backend Engineer',
+      start_date: '2020-01',
+      end_date: null,
+      description: 'Built APIs',
+      bullets: ['Delivered reliable APIs'],
+      source_index: 0,
+    },
+  ],
+  skills: [{ name: 'Programming', description: 'TypeScript' }],
+  activities: ['Mentored interns'],
+  certificates: ['AWS Certified Developer'],
+  awards: ['Engineering award'],
+  section_order: [
+    'objective',
+    'education',
+    'experience',
+    'projects',
+    'skills',
+    'activities',
+    'certificates',
+    'awards',
+  ],
+  warnings: [],
+  generated_by: 'fastapi',
+  source_version: cvDraftRequest.source_version,
+  content_version: cvDraftRequest.content_version,
+};
+
 const claimsFromRequest = (requestConfig: {
   headers?: Record<string, string>;
 }) => {
@@ -289,6 +424,156 @@ describe('AiServiceClient', () => {
       message: 'AI service rejected the request',
     });
   });
+  it('accepts the complete eight-section FastAPI CV draft response', async () => {
+    const client = new AiServiceClient(config(auth));
+    request.mockResolvedValue({ status: 200, data: cvDraftResponse });
+
+    await expect(client.generateCvDraft(cvDraftRequest)).resolves.toEqual(
+      cvDraftResponse,
+    );
+    expect(request.mock.calls[0][0].data).toEqual(cvDraftRequest);
+  });
+
+  it('preserves commas and semicolons inside whole owned skill members', async () => {
+    const client = new AiServiceClient(config(auth));
+    const members = [
+      'C, C++',
+      'Cloud; data',
+      'English (TOEIC 590; speaking, reading)',
+    ];
+    const input = {
+      ...cvDraftRequest,
+      candidate: { ...cvDraftRequest.candidate, skills: members },
+    };
+    const data = {
+      ...cvDraftResponse,
+      skills: [{ name: 'Owned skills', description: members.join('; ') }],
+    };
+    request.mockResolvedValue({ status: 200, data });
+    await expect(client.generateCvDraft(input)).resolves.toEqual(data);
+  });
+
+  it.each([
+    ['Giao tiếp tốt', 'Good communication'],
+    ['Problem Solving', 'Giải quyết vấn đề'],
+    ['Team collaboration', 'Hợp tác nhóm'],
+    [' English  (TOEIC  590) ', ' Tiếng Anh  (TOEIC  590) '],
+    ['C,  C++', 'C,  C++'],
+  ])('accepts only owned approved display %s', async (source, display) => {
+    const client = new AiServiceClient(config(auth));
+    const input = {
+      ...cvDraftRequest,
+      candidate: { ...cvDraftRequest.candidate, skills: [source] },
+    };
+    const data = {
+      ...cvDraftResponse,
+      skills: [{ name: 'Skills', description: display }],
+    };
+    request.mockResolvedValue({ status: 200, data });
+    await expect(client.generateCvDraft(input)).resolves.toEqual(data);
+  });
+
+  it.each([
+    ['Giao tiếp tốt', 'Excellent leadership'],
+    ['Giao tiếp tốt', 'Good communication (advanced)'],
+    ['English (TOEIC  590)', 'Tiếng Anh (TOEIC  650)'],
+    ['English (basic)', 'Tiếng Anh (cơ bản)'],
+    ['Python', 'Rust'],
+    ['Python', 'Tiếng Anh'],
+    ['Giao tiếp tốt', 'Giải quyết vấn đề'],
+    ['English (TOEIC  590)', 'Tiếng Anh'],
+  ])('rejects unowned mapped detail %s', async (source, display) => {
+    const client = new AiServiceClient(config(auth));
+    const input = {
+      ...cvDraftRequest,
+      candidate: { ...cvDraftRequest.candidate, skills: [source] },
+    };
+    request.mockResolvedValue({
+      status: 200,
+      data: {
+        ...cvDraftResponse,
+        skills: [{ name: 'Skills', description: display }],
+      },
+    });
+    await expect(client.generateCvDraft(input)).rejects.toMatchObject({
+      code: 'AI_INVALID_RESPONSE',
+    });
+  });
+
+  it('does not translate an owned certificate title as an ordinary skill label', async () => {
+    const client = new AiServiceClient(config(auth));
+    const input = {
+      ...cvDraftRequest,
+      candidate: {
+        ...cvDraftRequest.candidate,
+        skills: [],
+        certificates: ['English (TOEIC 590)'],
+      },
+    };
+    request.mockResolvedValue({
+      status: 200,
+      data: {
+        ...cvDraftResponse,
+        skills: [{ name: 'Languages', description: 'Tiếng Anh (TOEIC 590)' }],
+      },
+    });
+    await expect(client.generateCvDraft(input)).rejects.toMatchObject({
+      code: 'AI_INVALID_RESPONSE',
+    });
+  });
+
+  it.each(['Rust', 'TypeScript; React', 'English (TOEIC 590)'])(
+    'rejects unowned grouped value %s',
+    async (description) => {
+      const client = new AiServiceClient(config(auth));
+      request.mockResolvedValue({
+        status: 200,
+        data: { ...cvDraftResponse, skills: [{ name: 'Skills', description }] },
+      });
+      await expect(
+        client.generateCvDraft(cvDraftRequest),
+      ).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
+    },
+  );
+
+  it('allows a language exam qualification only when the source certificate owns it', async () => {
+    const client = new AiServiceClient(config(auth));
+    const input = {
+      ...cvDraftRequest,
+      candidate: {
+        ...cvDraftRequest.candidate,
+        skills: [],
+        certificates: ['TOEIC 590'],
+      },
+    };
+    const data = {
+      ...cvDraftResponse,
+      skills: [{ name: 'Languages', description: 'TOEIC 590' }],
+    };
+    request.mockResolvedValue({ status: 200, data });
+    await expect(client.generateCvDraft(input)).resolves.toEqual(data);
+  });
+
+  it.each([[undefined], [-1], [1], [0.5], [0, 0], [0, 0, 0, 0]])(
+    'indices %j',
+    async (...indices) => {
+      const client = new AiServiceClient(config(auth));
+      request.mockResolvedValue({
+        status: 200,
+        data: {
+          ...cvDraftResponse,
+          work_experience: indices.map((source_index) => ({
+            ...cvDraftResponse.work_experience[0],
+            source_index,
+          })),
+        },
+      });
+      await expect(
+        client.generateCvDraft(cvDraftRequest),
+      ).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
+    },
+  );
+
   it('validates the shared CV match golden fixture and preserves its metadata', async () => {
     const fixture = JSON.parse(
       readFileSync(
@@ -575,7 +860,7 @@ describe('AiServiceClient job indexing boundary', () => {
       status: 200,
       data: {
         ...jobIndexResponse(jobIndexUpsertRequest, 'UPSERT'),
-        representation_version: 'local-ollama-v1',
+        representation_version: 'local-ollama-qwen3-embedding-4b-2560-v2',
       },
     });
     await expect(client.upsertJob(jobIndexUpsertRequest)).rejects.toMatchObject(

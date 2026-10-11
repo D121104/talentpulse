@@ -1,9 +1,21 @@
-import { Phone, Mail, Globe, MapPin, MoveUp, MoveDown, Trash2, Sparkles } from 'lucide-react';
-import { InlineText, resolveFontSizePx } from '../InlineText';
-import type { CVEditorTemplateProps } from '../CVTemplateProps';
+import {
+  Phone,
+  Mail,
+  Globe,
+  MapPin,
+  MoveUp,
+  MoveDown,
+  Trash2,
+  Sparkles,
+} from "lucide-react";
+import { InlineText, resolveFontSizePx } from "../InlineText";
+import type { CVEditorTemplateProps } from "../CVTemplateProps";
+import type { ActivityEntry, ProjectEntry } from "../../../../lib/cvTypes";
+import { hasMeaningfulCvEntry } from "../../../../lib/cvTypes";
 
 export function Template2ModernTimeline({
   currentTheme,
+  labels,
   currentFont,
   fontMultiplier,
   fullName,
@@ -28,6 +40,8 @@ export function Template2ModernTimeline({
   setSkills,
   activities,
   setActivities,
+  projects,
+  setProjects,
   certificates,
   setCertificates,
   awards,
@@ -36,7 +50,63 @@ export function Template2ModernTimeline({
   sectionLabels,
   markDirty,
   pageCount,
+  bulletDescriptions,
 }: CVEditorTemplateProps) {
+  const timelineEntries = [
+    ...activities.map((entry, index) => ({
+      kind: "activity" as const,
+      index,
+      entry,
+    })),
+    ...projects.map((entry, index) => ({
+      kind: "project" as const,
+      index,
+      entry: {
+        organizationName: entry.projectName,
+        position: entry.role,
+        startDate: entry.startDate,
+        endDate: entry.endDate,
+        description:
+          entry.description ||
+          entry.technologies
+            ?.filter((technology) => technology.trim())
+            .join(", "),
+      },
+    })),
+  ];
+
+  const updateTimelineEntry = (
+    kind: "activity" | "project",
+    index: number,
+    field:
+      | "organizationName"
+      | "projectName"
+      | "position"
+      | "role"
+      | "startDate"
+      | "endDate"
+      | "description",
+    value: string,
+  ) => {
+    if (kind === "project") {
+      setProjects((prev) =>
+        prev.map((item, itemIndex) =>
+          itemIndex === index
+            ? ({ ...item, [field]: value } as ProjectEntry)
+            : item,
+        ),
+      );
+    } else {
+      setActivities((prev) =>
+        prev.map((item, itemIndex) =>
+          itemIndex === index
+            ? ({ ...item, [field]: value } as ActivityEntry)
+            : item,
+        ),
+      );
+    }
+  };
+
   return (
     <div className="p-8 sm:p-10 flex flex-col justify-between min-h-[297mm] h-auto w-full box-border">
       <div className="flex-1 w-full">
@@ -49,7 +119,7 @@ export function Template2ModernTimeline({
                 setFullName(v);
                 markDirty();
               }}
-              placeholder="HỌ VÀ TÊN"
+              placeholder={labels.fullNamePlaceholder}
               asTitle={true}
               className="font-black tracking-tight block leading-tight"
               style={{
@@ -66,7 +136,7 @@ export function Template2ModernTimeline({
                 setPosition(v);
                 markDirty();
               }}
-              placeholder="VỊ TRÍ ỨNG TUYỂN"
+              placeholder={labels.positionPlaceholder}
               className="font-bold text-slate-600 uppercase tracking-wider block mt-1"
               style={{ fontSize: `${0.95 * fontMultiplier}rem` }}
               defaultFontSizePx={resolveFontSizePx(0.95 * fontMultiplier * 16)}
@@ -81,10 +151,12 @@ export function Template2ModernTimeline({
                   setCareerObjective(v);
                   markDirty();
                 }}
-                placeholder="Mục tiêu nghề nghiệp của bạn, bao gồm mục tiêu ngắn hạn và dài hạn..."
+                placeholder={labels.objectivePlaceholder}
                 className="text-slate-600 mt-2.5 block leading-relaxed"
                 style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                defaultFontSizePx={resolveFontSizePx(
+                  0.825 * fontMultiplier * 16,
+                )}
                 defaultFontFamily={currentFont.family}
               />
             )}
@@ -100,7 +172,10 @@ export function Template2ModernTimeline({
           >
             <div className="flex items-center gap-2">
               <div className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg bg-white/80 shadow-2xs">
-                <Phone className="h-3 w-3" style={{ color: currentTheme.color }} />
+                <Phone
+                  className="h-3 w-3"
+                  style={{ color: currentTheme.color }}
+                />
               </div>
               <InlineText
                 value={phone}
@@ -110,13 +185,18 @@ export function Template2ModernTimeline({
                 }}
                 placeholder="0123 456 789"
                 className="flex-1 min-w-[120px]"
-                defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                defaultFontSizePx={resolveFontSizePx(
+                  0.825 * fontMultiplier * 16,
+                )}
                 defaultFontFamily={currentFont.family}
               />
             </div>
             <div className="flex items-center gap-2">
               <div className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg bg-white/80 shadow-2xs">
-                <Mail className="h-3 w-3" style={{ color: currentTheme.color }} />
+                <Mail
+                  className="h-3 w-3"
+                  style={{ color: currentTheme.color }}
+                />
               </div>
               <InlineText
                 value={email}
@@ -126,13 +206,18 @@ export function Template2ModernTimeline({
                 }}
                 placeholder="email@example.com"
                 className="flex-1 min-w-[140px]"
-                defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                defaultFontSizePx={resolveFontSizePx(
+                  0.825 * fontMultiplier * 16,
+                )}
                 defaultFontFamily={currentFont.family}
               />
             </div>
             <div className="flex items-center gap-2">
               <div className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg bg-white/80 shadow-2xs">
-                <MapPin className="h-3 w-3" style={{ color: currentTheme.color }} />
+                <MapPin
+                  className="h-3 w-3"
+                  style={{ color: currentTheme.color }}
+                />
               </div>
               <InlineText
                 value={address}
@@ -140,15 +225,20 @@ export function Template2ModernTimeline({
                   setAddress(v);
                   markDirty();
                 }}
-                placeholder="Hà Nội, Việt Nam"
+                placeholder={labels.addressPlaceholder}
                 className="flex-1 min-w-[120px]"
-                defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                defaultFontSizePx={resolveFontSizePx(
+                  0.825 * fontMultiplier * 16,
+                )}
                 defaultFontFamily={currentFont.family}
               />
             </div>
             <div className="flex items-center gap-2">
               <div className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg bg-white/80 shadow-2xs">
-                <Globe className="h-3 w-3" style={{ color: currentTheme.color }} />
+                <Globe
+                  className="h-3 w-3"
+                  style={{ color: currentTheme.color }}
+                />
               </div>
               <InlineText
                 value={link}
@@ -158,7 +248,9 @@ export function Template2ModernTimeline({
                 }}
                 placeholder="linkedin.com/in/username"
                 className="flex-1 min-w-[120px]"
-                defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                defaultFontSizePx={resolveFontSizePx(
+                  0.825 * fontMultiplier * 16,
+                )}
                 defaultFontFamily={currentFont.family}
               />
             </div>
@@ -174,7 +266,10 @@ export function Template2ModernTimeline({
               <div>
                 <div className="flex items-center justify-between pb-1.5 mb-4 border-b border-slate-200">
                   <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentTheme.color }} />
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: currentTheme.color }}
+                    />
                     <h2
                       className="text-xs font-black uppercase tracking-wider text-slate-900"
                       style={{
@@ -190,19 +285,31 @@ export function Template2ModernTimeline({
                     onClick={() => {
                       setWorkExperience((prev) => [
                         ...prev,
-                        { companyName: '', position: '', startDate: '', endDate: '', description: '' },
+                        {
+                          companyName: "",
+                          position: "",
+                          startDate: "",
+                          endDate: "",
+                          description: "",
+                        },
                       ]);
                       markDirty();
                     }}
                     className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-75 hover:opacity-100 print:hidden"
                   >
-                    + Thêm
+                    + {labels.add}
                   </button>
                 </div>
 
                 <div className="space-y-4 relative pl-3.5 border-l-2 border-slate-200 ml-1.5">
                   {workExperience.map((exp, idx) => (
-                    <div key={idx} className="relative group p-2 rounded-xl transition hover:bg-slate-50/90 pr-2">
+                    <div
+                      key={idx}
+                      data-cv-empty-entry={
+                        !hasMeaningfulCvEntry(exp) ? "true" : undefined
+                      }
+                      className="relative group p-2 rounded-xl transition hover:bg-slate-50/90 pr-2"
+                    >
                       {/* Floating Action Buttons Toolbar */}
                       <div className="absolute right-1 -top-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-md rounded-lg p-0.5 print:hidden">
                         {idx > 0 && (
@@ -219,7 +326,7 @@ export function Template2ModernTimeline({
                               markDirty();
                             }}
                             className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                            title="Di chuyển lên"
+                            title={labels.moveUp}
                           >
                             <MoveUp className="h-3 w-3" />
                           </button>
@@ -238,7 +345,7 @@ export function Template2ModernTimeline({
                               markDirty();
                             }}
                             className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                            title="Di chuyển xuống"
+                            title={labels.moveDown}
                           >
                             <MoveDown className="h-3 w-3" />
                           </button>
@@ -246,11 +353,13 @@ export function Template2ModernTimeline({
                         <button
                           type="button"
                           onClick={() => {
-                            setWorkExperience((prev) => prev.filter((_, i) => i !== idx));
+                            setWorkExperience((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            );
                             markDirty();
                           }}
                           className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                          title="Xóa mục này"
+                          title={labels.removeSection}
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
@@ -266,28 +375,36 @@ export function Template2ModernTimeline({
                       <div className="flex items-start justify-between gap-2.5">
                         <div className="flex-1 min-w-0">
                           <InlineText
-                            value={exp.position || ''}
+                            value={exp.position || ""}
                             onChange={(v) => {
                               setWorkExperience((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, position: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, position: v } : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Vị trí công việc"
+                            placeholder={labels.workPositionPlaceholder}
                             className="font-extrabold text-slate-900 leading-snug"
                             style={{ fontSize: `${0.875 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.875 * fontMultiplier * 16)}
+                            defaultFontSizePx={resolveFontSizePx(
+                              0.875 * fontMultiplier * 16,
+                            )}
                             defaultFontFamily={currentFont.family}
                           />
                           <InlineText
-                            value={exp.companyName || ''}
+                            value={exp.companyName || ""}
                             onChange={(v) => {
                               setWorkExperience((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, companyName: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx
+                                    ? { ...item, companyName: v }
+                                    : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Tên công ty"
+                            placeholder={labels.companyPlaceholder}
                             className="font-bold text-xs mt-0.5 block"
                             style={{ color: currentTheme.color }}
                             defaultFontSizePx="12px"
@@ -300,33 +417,43 @@ export function Template2ModernTimeline({
                         <div className="flex items-center justify-end gap-1 text-[11px] font-medium text-slate-600 bg-slate-100/90 px-2 py-0.5 rounded-md border border-slate-200/70 shrink-0 mt-0.5 shadow-2xs">
                           <InlineText
                             nowrap={true}
-                            value={exp.startDate || ''}
+                            value={exp.startDate || ""}
                             onChange={(v) => {
                               setWorkExperience((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, startDate: v } : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Bắt đầu"
+                            placeholder={labels.startDatePlaceholder}
                             className="text-center font-medium"
                             style={{ fontSize: `${0.75 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
+                            defaultFontSizePx={resolveFontSizePx(
+                              0.75 * fontMultiplier * 16,
+                            )}
                             defaultFontFamily={currentFont.family}
                           />
-                          <span className="text-slate-400 font-bold select-none">-</span>
+                          <span className="text-slate-400 font-bold select-none">
+                            -
+                          </span>
                           <InlineText
                             nowrap={true}
-                            value={exp.endDate || ''}
+                            value={exp.endDate || ""}
                             onChange={(v) => {
                               setWorkExperience((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, endDate: v } : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Kết thúc"
+                            placeholder={labels.endDatePlaceholder}
                             className="text-center font-medium"
                             style={{ fontSize: `${0.75 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
+                            defaultFontSizePx={resolveFontSizePx(
+                              0.75 * fontMultiplier * 16,
+                            )}
                             defaultFontFamily={currentFont.family}
                           />
                         </div>
@@ -337,17 +464,22 @@ export function Template2ModernTimeline({
                         <InlineText
                           multiline={true}
                           rows={2}
-                          value={exp.description || ''}
+                          value={exp.description || ""}
+                          bulletList={bulletDescriptions}
                           onChange={(v) => {
                             setWorkExperience((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, description: v } : item,
+                              ),
                             );
                             markDirty();
                           }}
-                          placeholder="Mô tả công việc chi tiết và các kết quả nổi bật..."
+                          placeholder={labels.workDescriptionPlaceholder}
                           className="text-slate-600 text-xs leading-relaxed"
                           style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
-                          defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
+                          defaultFontSizePx={resolveFontSizePx(
+                            0.8 * fontMultiplier * 16,
+                          )}
                           defaultFontFamily={currentFont.family}
                         />
                       </div>
@@ -362,7 +494,10 @@ export function Template2ModernTimeline({
               <div>
                 <div className="flex items-center justify-between pb-1.5 mb-4 border-b border-slate-200">
                   <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentTheme.color }} />
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: currentTheme.color }}
+                    />
                     <h2
                       className="text-xs font-black uppercase tracking-wider text-slate-900"
                       style={{
@@ -378,167 +513,226 @@ export function Template2ModernTimeline({
                     onClick={() => {
                       setActivities((prev) => [
                         ...prev,
-                        { organizationName: '', position: '', startDate: '', endDate: '', description: '' },
+                        {
+                          organizationName: "",
+                          position: "",
+                          startDate: "",
+                          endDate: "",
+                          description: "",
+                        },
                       ]);
                       markDirty();
                     }}
                     className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-75 hover:opacity-100 print:hidden"
                   >
-                    + Thêm
+                    + {labels.add}
                   </button>
                 </div>
 
                 <div className="space-y-4 relative pl-3.5 border-l-2 border-slate-200 ml-1.5">
-                  {activities.map((act, idx) => (
-                    <div key={idx} className="relative group p-2 rounded-xl transition hover:bg-slate-50/90 pr-2">
-                      {/* Floating Action Buttons Toolbar */}
-                      <div className="absolute right-1 -top-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-md rounded-lg p-0.5 print:hidden">
-                        {idx > 0 && (
+                  {timelineEntries.map(
+                    ({ kind, index: entryIndex, entry: act }, idx) => (
+                      <div
+                        key={idx}
+                        data-cv-empty-entry={
+                          !hasMeaningfulCvEntry(act) ? "true" : undefined
+                        }
+                        className="relative group p-2 rounded-xl transition hover:bg-slate-50/90 pr-2"
+                      >
+                        {/* Floating Action Buttons Toolbar */}
+                        <div className="absolute right-1 -top-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-md rounded-lg p-0.5 print:hidden">
+                          {kind === "activity" && entryIndex > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActivities((prev) => {
+                                  const arr = [...prev];
+                                  const temp = arr[entryIndex];
+                                  arr[entryIndex] = arr[entryIndex - 1];
+                                  arr[entryIndex - 1] = temp;
+                                  return arr;
+                                });
+                                markDirty();
+                              }}
+                              className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
+                              title={labels.moveUp}
+                            >
+                              <MoveUp className="h-3 w-3" />
+                            </button>
+                          )}
+                          {kind === "activity" &&
+                            entryIndex < activities.length - 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActivities((prev) => {
+                                    const arr = [...prev];
+                                    const temp = arr[entryIndex];
+                                    arr[entryIndex] = arr[entryIndex + 1];
+                                    arr[entryIndex + 1] = temp;
+                                    return arr;
+                                  });
+                                  markDirty();
+                                }}
+                                className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
+                                title={labels.moveDown}
+                              >
+                                <MoveDown className="h-3 w-3" />
+                              </button>
+                            )}
                           <button
                             type="button"
                             onClick={() => {
-                              setActivities((prev) => {
-                                const arr = [...prev];
-                                const temp = arr[idx];
-                                arr[idx] = arr[idx - 1];
-                                arr[idx - 1] = temp;
-                                return arr;
-                              });
+                              if (kind === "project") {
+                                setProjects((prev) =>
+                                  prev.filter((_, i) => i !== entryIndex),
+                                );
+                              } else {
+                                setActivities((prev) =>
+                                  prev.filter((_, i) => i !== entryIndex),
+                                );
+                              }
                               markDirty();
                             }}
-                            className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                            title="Di chuyển lên"
+                            className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
+                            title={labels.removeSection}
                           >
-                            <MoveUp className="h-3 w-3" />
+                            <Trash2 className="h-3 w-3" />
                           </button>
-                        )}
-                        {idx < activities.length - 1 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActivities((prev) => {
-                                const arr = [...prev];
-                                const temp = arr[idx];
-                                arr[idx] = arr[idx + 1];
-                                arr[idx + 1] = temp;
-                                return arr;
-                              });
-                              markDirty();
-                            }}
-                            className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                            title="Di chuyển xuống"
-                          >
-                            <MoveDown className="h-3 w-3" />
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActivities((prev) => prev.filter((_, i) => i !== idx));
-                            markDirty();
-                          }}
-                          className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                          title="Xóa mục này"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      </div>
-
-                      {/* Node Bullet */}
-                      <span
-                        className="absolute -left-[21px] top-3.5 h-2.5 w-2.5 rounded-full border-2 border-white shadow-2xs"
-                        style={{ backgroundColor: currentTheme.color }}
-                      />
-
-                      {/* Header Row: Organization on Left, Compact Date on Top-Right */}
-                      <div className="flex items-start justify-between gap-2.5">
-                        <div className="flex-1 min-w-0">
-                          <InlineText
-                            value={act.organizationName || ''}
-                            onChange={(v) => {
-                              setActivities((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, organizationName: v } : item)),
-                              );
-                              markDirty();
-                            }}
-                            placeholder="Tên tổ chức / Dự án"
-                            className="font-extrabold text-slate-900 leading-snug"
-                            style={{ fontSize: `${0.875 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.875 * fontMultiplier * 16)}
-                            defaultFontFamily={currentFont.family}
-                          />
-                          <InlineText
-                            value={act.position || ''}
-                            onChange={(v) => {
-                              setActivities((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, position: v } : item)),
-                              );
-                              markDirty();
-                            }}
-                            placeholder="Vị trí / Vai trò tham gia"
-                            className="font-semibold text-xs text-slate-600 block mt-0.5 italic"
-                            defaultFontSizePx="12px"
-                            defaultFontFamily={currentFont.family}
-                          />
                         </div>
 
-                        {/* Compact Date Range Badge in Top-Right */}
-                        <div className="flex items-center justify-end gap-1 text-[11px] font-medium text-slate-600 bg-slate-100/90 px-2 py-0.5 rounded-md border border-slate-200/70 shrink-0 mt-0.5 shadow-2xs">
-                          <InlineText
-                            nowrap={true}
-                            value={act.startDate || ''}
-                            onChange={(v) => {
-                              setActivities((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
-                              );
-                              markDirty();
-                            }}
-                            placeholder="Bắt đầu"
-                            className="text-center font-medium"
-                            style={{ fontSize: `${0.75 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                            defaultFontFamily={currentFont.family}
-                          />
-                          <span className="text-slate-400 font-bold select-none">-</span>
-                          <InlineText
-                            nowrap={true}
-                            value={act.endDate || ''}
-                            onChange={(v) => {
-                              setActivities((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
-                              );
-                              markDirty();
-                            }}
-                            placeholder="Kết thúc"
-                            className="text-center font-medium"
-                            style={{ fontSize: `${0.75 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                            defaultFontFamily={currentFont.family}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Description */}
-                      <div className="mt-1.5">
-                        <InlineText
-                          multiline={true}
-                          rows={1}
-                          value={act.description || ''}
-                          onChange={(v) => {
-                            setActivities((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                            );
-                            markDirty();
-                          }}
-                          placeholder="Mô tả vai trò, đóng góp và thành tích..."
-                          className="text-slate-600 text-xs leading-relaxed"
-                          style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
-                          defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
+                        {/* Node Bullet */}
+                        <span
+                          className="absolute -left-[21px] top-3.5 h-2.5 w-2.5 rounded-full border-2 border-white shadow-2xs"
+                          style={{ backgroundColor: currentTheme.color }}
                         />
+
+                        {/* Header Row: Organization on Left, Compact Date on Top-Right */}
+                        <div className="flex items-start justify-between gap-2.5">
+                          <div className="flex-1 min-w-0">
+                            <InlineText
+                              value={act.organizationName || ""}
+                              onChange={(v) => {
+                                updateTimelineEntry(
+                                  kind,
+                                  entryIndex,
+                                  kind === "project"
+                                    ? "projectName"
+                                    : "organizationName",
+                                  v,
+                                );
+                                markDirty();
+                              }}
+                              placeholder={labels.activityNamePlaceholder}
+                              className="font-extrabold text-slate-900 leading-snug"
+                              style={{
+                                fontSize: `${0.875 * fontMultiplier}rem`,
+                              }}
+                              defaultFontSizePx={resolveFontSizePx(
+                                0.875 * fontMultiplier * 16,
+                              )}
+                              defaultFontFamily={currentFont.family}
+                            />
+                            <InlineText
+                              value={act.position || ""}
+                              onChange={(v) => {
+                                updateTimelineEntry(
+                                  kind,
+                                  entryIndex,
+                                  kind === "project" ? "role" : "position",
+                                  v,
+                                );
+                                markDirty();
+                              }}
+                              placeholder={labels.activityPositionPlaceholder}
+                              className="font-semibold text-xs text-slate-600 block mt-0.5 italic"
+                              defaultFontSizePx="12px"
+                              defaultFontFamily={currentFont.family}
+                            />
+                          </div>
+
+                          {/* Compact Date Range Badge in Top-Right */}
+                          <div className="flex items-center justify-end gap-1 text-[11px] font-medium text-slate-600 bg-slate-100/90 px-2 py-0.5 rounded-md border border-slate-200/70 shrink-0 mt-0.5 shadow-2xs">
+                            <InlineText
+                              nowrap={true}
+                              value={act.startDate || ""}
+                              onChange={(v) => {
+                                updateTimelineEntry(
+                                  kind,
+                                  entryIndex,
+                                  "startDate",
+                                  v,
+                                );
+                                markDirty();
+                              }}
+                              placeholder={labels.startDatePlaceholder}
+                              className="text-center font-medium"
+                              style={{
+                                fontSize: `${0.75 * fontMultiplier}rem`,
+                              }}
+                              defaultFontSizePx={resolveFontSizePx(
+                                0.75 * fontMultiplier * 16,
+                              )}
+                              defaultFontFamily={currentFont.family}
+                            />
+                            <span className="text-slate-400 font-bold select-none">
+                              -
+                            </span>
+                            <InlineText
+                              nowrap={true}
+                              value={act.endDate || ""}
+                              onChange={(v) => {
+                                updateTimelineEntry(
+                                  kind,
+                                  entryIndex,
+                                  "endDate",
+                                  v,
+                                );
+                                markDirty();
+                              }}
+                              placeholder={labels.endDatePlaceholder}
+                              className="text-center font-medium"
+                              style={{
+                                fontSize: `${0.75 * fontMultiplier}rem`,
+                              }}
+                              defaultFontSizePx={resolveFontSizePx(
+                                0.75 * fontMultiplier * 16,
+                              )}
+                              defaultFontFamily={currentFont.family}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Description */}
+                        <div className="mt-1.5">
+                          <InlineText
+                            multiline={true}
+                            rows={1}
+                            value={act.description || ""}
+                            bulletList={
+                              bulletDescriptions && kind === "project"
+                            }
+                            onChange={(v) => {
+                              updateTimelineEntry(
+                                kind,
+                                entryIndex,
+                                "description",
+                                v,
+                              );
+                              markDirty();
+                            }}
+                            placeholder={labels.activityDescriptionPlaceholder}
+                            className="text-slate-600 text-xs leading-relaxed"
+                            style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
+                            defaultFontSizePx={resolveFontSizePx(
+                              0.8 * fontMultiplier * 16,
+                            )}
+                            defaultFontFamily={currentFont.family}
+                          />
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ),
+                  )}
                 </div>
               </div>
             )}
@@ -551,7 +745,10 @@ export function Template2ModernTimeline({
               <div>
                 <div className="flex items-center justify-between pb-1.5 mb-4 border-b border-slate-200">
                   <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentTheme.color }} />
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: currentTheme.color }}
+                    />
                     <h2
                       className="text-xs font-black uppercase tracking-wider text-slate-900"
                       style={{
@@ -567,13 +764,19 @@ export function Template2ModernTimeline({
                     onClick={() => {
                       setEducation((prev) => [
                         ...prev,
-                        { schoolName: '', major: '', startDate: '', endDate: '', description: '' },
+                        {
+                          schoolName: "",
+                          major: "",
+                          startDate: "",
+                          endDate: "",
+                          description: "",
+                        },
                       ]);
                       markDirty();
                     }}
                     className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-75 hover:opacity-100 print:hidden"
                   >
-                    + Thêm
+                    + {labels.add}
                   </button>
                 </div>
 
@@ -626,7 +829,9 @@ export function Template2ModernTimeline({
                         <button
                           type="button"
                           onClick={() => {
-                            setEducation((prev) => prev.filter((_, i) => i !== idx));
+                            setEducation((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            );
                             markDirty();
                           }}
                           className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
@@ -640,28 +845,49 @@ export function Template2ModernTimeline({
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <InlineText
-                            value={edu.schoolName || ''}
+                            value={edu.schoolName || ""}
                             onChange={(v) => {
                               setEducation((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, schoolName: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, schoolName: v } : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Tên trường học"
+                            placeholder={labels.schoolPlaceholder}
                             className="font-extrabold text-slate-900 block leading-snug"
                             style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
+                            defaultFontSizePx={resolveFontSizePx(
+                              0.85 * fontMultiplier * 16,
+                            )}
                             defaultFontFamily={currentFont.family}
                           />
                           <InlineText
-                            value={edu.major || ''}
+                            value={edu.degree || ""}
                             onChange={(v) => {
                               setEducation((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, major: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, degree: v } : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Chuyên ngành / Ngành học"
+                            placeholder={labels.degreePlaceholder}
+                            className="text-slate-700 block"
+                            defaultFontSizePx="12px"
+                            defaultFontFamily={currentFont.family}
+                          />
+                          <InlineText
+                            value={edu.major || ""}
+                            onChange={(v) => {
+                              setEducation((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, major: v } : item,
+                                ),
+                              );
+                              markDirty();
+                            }}
+                            placeholder={labels.majorPlaceholder}
                             className="font-bold text-xs mt-0.5 block"
                             style={{ color: currentTheme.color }}
                             defaultFontSizePx="12px"
@@ -674,33 +900,43 @@ export function Template2ModernTimeline({
                         <div className="flex items-center justify-end gap-1 text-[10.5px] font-medium text-slate-600 bg-white px-1.5 py-0.5 rounded-md border border-slate-200/80 shrink-0 mt-0.5 shadow-2xs">
                           <InlineText
                             nowrap={true}
-                            value={edu.startDate || ''}
+                            value={edu.startDate || ""}
                             onChange={(v) => {
                               setEducation((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, startDate: v } : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Bắt đầu"
+                            placeholder={labels.startDatePlaceholder}
                             className="text-center font-medium"
                             style={{ fontSize: `${0.725 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.725 * fontMultiplier * 16)}
+                            defaultFontSizePx={resolveFontSizePx(
+                              0.725 * fontMultiplier * 16,
+                            )}
                             defaultFontFamily={currentFont.family}
                           />
-                          <span className="text-slate-400 font-bold select-none">-</span>
+                          <span className="text-slate-400 font-bold select-none">
+                            -
+                          </span>
                           <InlineText
                             nowrap={true}
-                            value={edu.endDate || ''}
+                            value={edu.endDate || ""}
                             onChange={(v) => {
                               setEducation((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, endDate: v } : item,
+                                ),
                               );
                               markDirty();
                             }}
-                            placeholder="Kết thúc"
+                            placeholder={labels.endDatePlaceholder}
                             className="text-center font-medium"
                             style={{ fontSize: `${0.725 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.725 * fontMultiplier * 16)}
+                            defaultFontSizePx={resolveFontSizePx(
+                              0.725 * fontMultiplier * 16,
+                            )}
                             defaultFontFamily={currentFont.family}
                           />
                         </div>
@@ -710,17 +946,21 @@ export function Template2ModernTimeline({
                       <InlineText
                         multiline={true}
                         rows={1}
-                        value={edu.description || ''}
+                        value={edu.description || ""}
                         onChange={(v) => {
                           setEducation((prev) =>
-                            prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
+                            prev.map((item, i) =>
+                              i === idx ? { ...item, description: v } : item,
+                            ),
                           );
                           markDirty();
                         }}
                         placeholder="GPA, học bổng hoặc thành tích..."
                         className="text-slate-600 text-xs mt-1 block leading-relaxed"
                         style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
-                        defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
+                        defaultFontSizePx={resolveFontSizePx(
+                          0.8 * fontMultiplier * 16,
+                        )}
                         defaultFontFamily={currentFont.family}
                       />
                     </div>
@@ -734,7 +974,10 @@ export function Template2ModernTimeline({
               <div>
                 <div className="flex items-center justify-between pb-1.5 mb-4 border-b border-slate-200">
                   <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentTheme.color }} />
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: currentTheme.color }}
+                    />
                     <h2
                       className="text-xs font-black uppercase tracking-wider text-slate-900"
                       style={{
@@ -748,12 +991,15 @@ export function Template2ModernTimeline({
                   <button
                     type="button"
                     onClick={() => {
-                      setSkills((prev) => [...prev, { name: '', description: '' }]);
+                      setSkills((prev) => [
+                        ...prev,
+                        { name: "", description: "" },
+                      ]);
                       markDirty();
                     }}
                     className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-75 hover:opacity-100 print:hidden"
                   >
-                    + Thêm
+                    + {labels.add}
                   </button>
                 </div>
 
@@ -765,30 +1011,36 @@ export function Template2ModernTimeline({
                     >
                       <div className="w-28 sm:w-32 shrink-0">
                         <InlineText
-                          value={skill.name || ''}
+                          value={skill.name || ""}
                           onChange={(v) => {
                             setSkills((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, name: v } : item)),
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, name: v } : item,
+                              ),
                             );
                             markDirty();
                           }}
-                          placeholder="Tên kỹ năng (vd: Python)"
+                          placeholder={labels.skillNamePlaceholder}
                           className="font-bold text-slate-800"
                           style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                          defaultFontSizePx={resolveFontSizePx(
+                            0.825 * fontMultiplier * 16,
+                          )}
                           defaultFontFamily={currentFont.family}
                         />
                       </div>
                       <div className="flex-1 min-w-0">
                         <InlineText
-                          value={skill.description || ''}
+                          value={skill.description || ""}
                           onChange={(v) => {
                             setSkills((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, description: v } : item,
+                              ),
                             );
                             markDirty();
                           }}
-                          placeholder="Mức độ / Chi tiết (vd: Thành thạo)"
+                          placeholder={labels.skillDescriptionPlaceholder}
                           className="text-slate-600 text-xs"
                           defaultFontSizePx="12px"
                           defaultFontFamily={currentFont.family}
@@ -816,7 +1068,10 @@ export function Template2ModernTimeline({
               <div>
                 <div className="flex items-center justify-between pb-1.5 mb-3.5 border-b border-slate-200">
                   <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentTheme.color }} />
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: currentTheme.color }}
+                    />
                     <h2
                       className="text-xs font-black uppercase tracking-wider text-slate-900"
                       style={{
@@ -830,12 +1085,15 @@ export function Template2ModernTimeline({
                   <button
                     type="button"
                     onClick={() => {
-                      setCertificates((prev) => [...prev, { name: '', date: '' }]);
+                      setCertificates((prev) => [
+                        ...prev,
+                        { name: "", date: "" },
+                      ]);
                       markDirty();
                     }}
                     className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-75 hover:opacity-100 print:hidden"
                   >
-                    + Thêm
+                    + {labels.add}
                   </button>
                 </div>
 
@@ -843,35 +1101,76 @@ export function Template2ModernTimeline({
                   {certificates.map((cert, idx) => (
                     <div
                       key={idx}
+                      data-cv-empty-entry={
+                        !hasMeaningfulCvEntry(cert) ? "true" : undefined
+                      }
                       className="group relative flex items-start justify-between gap-2 p-1.5 rounded-lg hover:bg-slate-50 transition pr-7"
                     >
                       <div className="flex-1 min-w-0">
                         <InlineText
-                          value={cert.name || ''}
+                          value={cert.name || ""}
                           onChange={(v) => {
                             setCertificates((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, name: v } : item)),
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, name: v } : item,
+                              ),
                             );
                             markDirty();
                           }}
-                          placeholder="Tên chứng chỉ..."
+                          placeholder={labels.certificateNamePlaceholder}
                           className="font-bold text-slate-800"
                           style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                          defaultFontSizePx={resolveFontSizePx(
+                            0.825 * fontMultiplier * 16,
+                          )}
+                          defaultFontFamily={currentFont.family}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <InlineText
+                          value={cert.issuer || ""}
+                          onChange={(v) =>
+                            setCertificates((prev) =>
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, issuer: v } : item,
+                              ),
+                            )
+                          }
+                          placeholder={labels.certificateIssuerPlaceholder}
+                          className="text-slate-500 text-xs block"
+                          defaultFontSizePx="11px"
+                          defaultFontFamily={currentFont.family}
+                        />
+                        <InlineText
+                          value={cert.credentialUrl || ""}
+                          onChange={(v) =>
+                            setCertificates((prev) =>
+                              prev.map((item, i) =>
+                                i === idx
+                                  ? { ...item, credentialUrl: v }
+                                  : item,
+                              ),
+                            )
+                          }
+                          placeholder={labels.credentialUrlPlaceholder}
+                          className="text-slate-500 text-xs block"
+                          defaultFontSizePx="11px"
                           defaultFontFamily={currentFont.family}
                         />
                       </div>
                       <div className="shrink-0">
                         <InlineText
                           nowrap={true}
-                          value={cert.date || ''}
+                          value={cert.date || ""}
                           onChange={(v) => {
                             setCertificates((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, date: v } : item)),
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, date: v } : item,
+                              ),
                             );
                             markDirty();
                           }}
-                          placeholder="Năm"
+                          placeholder={labels.yearPlaceholder}
                           className="text-center font-medium text-slate-500 text-[11px]"
                           style={{ fontSize: `${0.75 * fontMultiplier}rem` }}
                           defaultFontSizePx="11px"
@@ -881,11 +1180,13 @@ export function Template2ModernTimeline({
                       <button
                         type="button"
                         onClick={() => {
-                          setCertificates((prev) => prev.filter((_, i) => i !== idx));
+                          setCertificates((prev) =>
+                            prev.filter((_, i) => i !== idx),
+                          );
                           markDirty();
                         }}
                         className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-red-500 rounded bg-white shadow-2xs print:hidden cursor-pointer"
-                        title="Xóa chứng chỉ"
+                        title={labels.removeCertificate}
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -900,7 +1201,10 @@ export function Template2ModernTimeline({
               <div>
                 <div className="flex items-center justify-between pb-1.5 mb-3.5 border-b border-slate-200">
                   <div className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentTheme.color }} />
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: currentTheme.color }}
+                    />
                     <h2
                       className="text-xs font-black uppercase tracking-wider text-slate-900"
                       style={{
@@ -914,12 +1218,12 @@ export function Template2ModernTimeline({
                   <button
                     type="button"
                     onClick={() => {
-                      setAwards((prev) => [...prev, { name: '', date: '' }]);
+                      setAwards((prev) => [...prev, { name: "", date: "" }]);
                       markDirty();
                     }}
                     className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-75 hover:opacity-100 print:hidden"
                   >
-                    + Thêm
+                    + {labels.add}
                   </button>
                 </div>
 
@@ -927,35 +1231,74 @@ export function Template2ModernTimeline({
                   {awards.map((award, idx) => (
                     <div
                       key={idx}
+                      data-cv-empty-entry={
+                        !hasMeaningfulCvEntry(award) ? "true" : undefined
+                      }
                       className="group relative flex items-start justify-between gap-2 p-1.5 rounded-lg hover:bg-slate-50 transition pr-7"
                     >
                       <div className="flex-1 min-w-0">
                         <InlineText
-                          value={award.name || ''}
+                          value={award.name || ""}
                           onChange={(v) => {
                             setAwards((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, name: v } : item)),
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, name: v } : item,
+                              ),
                             );
                             markDirty();
                           }}
-                          placeholder="Tên giải thưởng..."
+                          placeholder={labels.awardNamePlaceholder}
                           className="font-bold text-slate-800"
                           style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
+                          defaultFontSizePx={resolveFontSizePx(
+                            0.825 * fontMultiplier * 16,
+                          )}
+                          defaultFontFamily={currentFont.family}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <InlineText
+                          value={award.issuer || ""}
+                          onChange={(v) =>
+                            setAwards((prev) =>
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, issuer: v } : item,
+                              ),
+                            )
+                          }
+                          placeholder={labels.awardIssuerPlaceholder}
+                          className="text-slate-500 text-xs block"
+                          defaultFontSizePx="11px"
+                          defaultFontFamily={currentFont.family}
+                        />
+                        <InlineText
+                          value={award.description || ""}
+                          onChange={(v) =>
+                            setAwards((prev) =>
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, description: v } : item,
+                              ),
+                            )
+                          }
+                          placeholder={labels.awardDescriptionPlaceholder}
+                          className="text-slate-500 text-xs block"
+                          defaultFontSizePx="11px"
                           defaultFontFamily={currentFont.family}
                         />
                       </div>
                       <div className="shrink-0">
                         <InlineText
                           nowrap={true}
-                          value={award.date || ''}
+                          value={award.date || ""}
                           onChange={(v) => {
                             setAwards((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, date: v } : item)),
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, date: v } : item,
+                              ),
                             );
                             markDirty();
                           }}
-                          placeholder="Năm"
+                          placeholder={labels.yearPlaceholder}
                           className="text-center font-medium text-slate-500 text-[11px]"
                           style={{ fontSize: `${0.75 * fontMultiplier}rem` }}
                           defaultFontSizePx="11px"
@@ -969,7 +1312,7 @@ export function Template2ModernTimeline({
                           markDirty();
                         }}
                         className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-red-500 rounded bg-white shadow-2xs print:hidden cursor-pointer"
-                        title="Xóa giải thưởng"
+                        title={labels.removeAward}
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -987,10 +1330,13 @@ export function Template2ModernTimeline({
         className="cv-watermark mt-8 pt-3 border-t border-slate-200 flex items-center justify-between text-[10px] text-slate-400 select-none"
         data-watermark="true"
       >
-        <span>Tổng số trang: {pageCount}</span>
+        <span>
+          {labels.pageCount}: {pageCount}
+        </span>
         <span className="inline-flex items-center gap-1 font-semibold text-slate-500">
           <Sparkles className="h-3 w-3 text-primary" />
-          Được tạo bởi <b className="text-slate-700">TalentPulse</b> — talentpulse.vn
+          {labels.createdBy} <b className="text-slate-700">TalentPulse</b> —
+          talentpulse.vn
         </span>
       </div>
     </div>

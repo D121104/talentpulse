@@ -3,8 +3,15 @@ import type {
   OnlineCV,
   CreateOnlineCVDto,
   UpdateOnlineCVDto,
+  GenerateOnlineCVDraftRequest,
+  GenerateOnlineCVDraftResponse,
+  GenerateOnlineCVJobRequest,
+  GenerateOnlineCVJobAcceptedResponse,
+  GenerateOnlineCVJobStatusResponse,
   UserCV,
   CreateUserCVDto,
+  AiCvGenerationConsent,
+  AiCvGenerationConsentPolicy,
 } from "./cvTypes";
 
 import { API_URL } from "./api";
@@ -33,6 +40,70 @@ export const onlineCvApi = {
       body: dto,
       accessToken,
     }),
+
+  generateDraft: (
+    id: string,
+    request: GenerateOnlineCVDraftRequest = {},
+    accessToken?: string | null,
+  ) =>
+    apiRequest<GenerateOnlineCVDraftResponse>(`/online-cvs/${id}/generate`, {
+      method: 'POST',
+      body: request,
+      accessToken,
+    }),
+
+  createGenerationJob: (
+    id: string,
+    request: GenerateOnlineCVJobRequest = {},
+    idempotencyKey: string,
+    accessToken?: string | null,
+  ) =>
+    apiRequest<GenerateOnlineCVJobAcceptedResponse>(
+      `/online-cvs/${id}/generation-jobs`,
+      {
+        method: "POST",
+        body: request,
+        headers: { "Idempotency-Key": idempotencyKey },
+        accessToken,
+      },
+    ),
+
+  createGenerationJobFromCareerProfile: (
+    request: GenerateOnlineCVJobRequest,
+    idempotencyKey: string,
+    accessToken?: string | null,
+  ) =>
+    apiRequest<GenerateOnlineCVJobAcceptedResponse>(
+      "/online-cvs/generation-jobs/from-career-profile",
+      {
+        method: "POST",
+        body: request,
+        headers: { "Idempotency-Key": idempotencyKey },
+        accessToken,
+      },
+    ),
+
+  getGenerationJob: (
+    id: string,
+    operationId: string,
+    accessToken?: string | null,
+    signal?: AbortSignal,
+  ) =>
+    apiRequest<GenerateOnlineCVJobStatusResponse>(
+      `/online-cvs/${id}/generation-jobs/${operationId}`,
+      { accessToken, signal },
+    ),
+
+  cancelGenerationJob: (
+    id: string,
+    operationId: string,
+    accessToken?: string | null,
+    signal?: AbortSignal,
+  ) =>
+    apiRequest<GenerateOnlineCVJobStatusResponse>(
+      `/online-cvs/${id}/generation-jobs/${operationId}`,
+      { method: "DELETE", accessToken, signal },
+    ),
 
   remove: (id: string, accessToken?: string | null) =>
     apiRequest<{ message: string }>(`/online-cvs/${id}`, {
@@ -78,7 +149,53 @@ export const onlineCvApi = {
         body: { isSearchable },
         accessToken,
       },
+  ),
+};
+
+export const aiCvConsentApi = {
+  policy: (accessToken?: string | null) =>
+    apiRequest<AiCvGenerationConsentPolicy>(
+      "/ai/cv-consents/policy/cv_generation",
+      { accessToken },
     ),
+
+  current: (accessToken?: string | null) =>
+    apiRequest<AiCvGenerationConsent | null>(
+      "/ai/cv-consents/current/cv_generation",
+      { accessToken },
+    ),
+
+  grant: (
+    policy: AiCvGenerationConsentPolicy,
+    accessToken?: string | null,
+  ) =>
+    apiRequest<AiCvGenerationConsent>("/ai/cv-consents/grant", {
+      method: "POST",
+      body: {
+        scope: policy.scope,
+        consentVersion: policy.consentVersion,
+        policyHash: policy.policyHash,
+        source: "web",
+        sourceMetadata: { locale: document.documentElement.lang || "vi" },
+      },
+      accessToken,
+    }),
+
+  revoke: (
+    policy: AiCvGenerationConsentPolicy,
+    accessToken?: string | null,
+  ) =>
+    apiRequest<AiCvGenerationConsent>("/ai/cv-consents/revoke", {
+      method: "POST",
+      body: {
+        scope: policy.scope,
+        consentVersion: policy.consentVersion,
+        policyHash: policy.policyHash,
+        source: "web",
+        sourceMetadata: { locale: document.documentElement.lang || "vi" },
+      },
+      accessToken,
+    }),
 };
 
 export const userCvApi = {

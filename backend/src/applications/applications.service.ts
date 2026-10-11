@@ -23,6 +23,7 @@ import { UsersService } from 'src/users/users.service';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
 import { CVParseStatus } from 'src/usercvs/cv-parse-status';
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
+import { OnlineCvGenerationMode } from 'src/online-cvs/entities/online-cv.entity';
 import { Role } from 'src/decorator/customize';
 import aqp from 'api-query-params';
 import { NotificationsService } from 'src/notifications/notifications.service';
@@ -110,7 +111,10 @@ export class ApplicationsService implements OnModuleInit {
           );
 
           // If online CV does not have exported pdfUrl yet, trigger background export
-          if (!onlineCv.pdfUrl) {
+          if (
+            onlineCv.generationMode !== OnlineCvGenerationMode.EDITOR_ONLY &&
+            !onlineCv.pdfUrl
+          ) {
             this.onlineCVsService
               .exportToPdf(onlineCv._id, user)
               .catch((err) =>
