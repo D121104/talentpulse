@@ -29,6 +29,8 @@ import {
 import { useToast } from '../../../context/ToastContext';
 import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate, formatDateTime } from '../../../lib/dateUtils';
+import { applicationCsv } from '../../../lib/applicationCsv';
+import { userApi } from '../../../lib/userApi';
 
 interface CandidateManagementTabProps {
   company: CompanyInfo | null;
@@ -56,6 +58,21 @@ export function CandidateManagementTab({
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
   const [jobs, setJobs] = useState<HrJobItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [exportAccess, setExportAccess] = useState<{ token: string; allowed: boolean } | null>(null);
+  const canExportAiScores = exportAccess?.token === accessToken && exportAccess?.allowed === true;
+
+  useEffect(() => {
+    let cancelled = false;
+    setExportAccess(null);
+    if (accessToken && hasCompany) {
+      void userApi.getMyEntitlements(accessToken).then((result) => {
+        if (!cancelled) setExportAccess({ token: accessToken, allowed: result.limits.canExportAiScores });
+      }).catch(() => {
+        if (!cancelled) setExportAccess({ token: accessToken, allowed: false });
+      });
+    }
+    return () => { cancelled = true; };
+  }, [accessToken, hasCompany]);
 
   // Filters
   const [selectedJobId, setSelectedJobId] = useState<string>(filterJobId || 'ALL');
@@ -239,29 +256,21 @@ export function CandidateManagementTab({
   };
 
   const handleExportCSV = () => {
+    if (!canExportAiScores || isLoading) return;
     if (applications.length === 0) {
       info(t('employer.candidatesTab.noCandidatesFound'));
       return;
     }
 
-    const headers = ['Họ tên', 'Email', 'Vị trí nộp', 'Trạng thái', 'Ngày nộp', 'Link CV'];
-    const rows = applications.map((app) => [
-      `"${app.userId?.name || ''}"`,
-      `"${app.userId?.email || ''}"`,
-      `"${app.jobId?.name || ''}"`,
-      app.status,
-      formatDate(app.createdAt),
-      `"${app.cvId?.url || ''}"`,
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = applicationCsv(applications, t, formatDate);
+    const url = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `Bao_cao_ung_vien_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 
     success(t('employer.candidatesTab.exportCsvBtn'));
   };
@@ -354,6 +363,8 @@ export function CandidateManagementTab({
           <button
             type="button"
             onClick={handleExportCSV}
+            disabled={!canExportAiScores || isLoading || applications.length === 0}
+            title={t(!canExportAiScores ? 'employer.candidatesTab.exportAccessUnavailable' : 'employer.candidatesTab.exportScope')}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm font-bold text-slate-700 hover:bg-slate-50 shadow-xs dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 cursor-pointer"
           >
             <Download className="h-4 w-4 text-slate-500" />
@@ -361,6 +372,10 @@ export function CandidateManagementTab({
           </button>
         </div>
       </div>
+
+      <p className="text-xs text-slate-500 dark:text-slate-400">
+        {t('employer.candidatesTab.exportScope')}
+      </p>
 
       {/* 2. Filters Row */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

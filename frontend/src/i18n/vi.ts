@@ -544,7 +544,17 @@ export const vi = {
       filterStatusLabel: 'Trạng thái:',
       searchNamePlaceholder: 'Tìm ứng viên theo tên, email...',
       aiRankBtn: 'AI Xếp hạng ứng viên',
-      exportCsvBtn: 'Xuất CSV báo cáo',
+      exportCsvBtn: 'Xuất danh sách đã tải (CSV)',
+      exportScope: 'Chỉ xuất danh sách đã tải (tối đa 50 hồ sơ), kèm điểm AI. Tìm theo tên không thay đổi nội dung xuất.',
+      exportAccessUnavailable: 'Chưa thể xuất vì đang kiểm tra hoặc chưa xác nhận được quyền truy cập. Tải lại trang để thử lại.',
+      csv: {
+        name: 'Họ tên', email: 'Email', job: 'Vị trí nộp', status: 'Trạng thái ứng tuyển',
+        appliedAt: 'Ngày nộp', cvUrl: 'Link CV', aiScore: 'Điểm AI (%)', aiStatus: 'Trạng thái điểm AI',
+      },
+      aiScoreStatus: {
+        COMPLETED: 'Đã chấm điểm', PENDING: 'Đang chờ', PROCESSING: 'Đang xử lý', FAILED: 'Thất bại',
+        MISSING: 'Chưa có điểm', STALE: 'Điểm đã cũ', UNAVAILABLE: 'Không khả dụng',
+      },
       colCandidate: 'Ứng viên',
       colJob: 'Vị trí nộp',
       colCv: 'Hồ sơ CV',

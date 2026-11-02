@@ -545,7 +545,17 @@ export const en = {
       filterStatusLabel: 'Status:',
       searchNamePlaceholder: 'Search candidate by name, email...',
       aiRankBtn: 'AI Candidate Ranking',
-      exportCsvBtn: 'Export CSV Report',
+      exportCsvBtn: 'Export loaded list (CSV)',
+      exportScope: 'Exports only the currently loaded list (up to 50 applications), including AI scores. Name search does not change the export.',
+      exportAccessUnavailable: 'Export is unavailable while access is being checked or could not be confirmed. Reload to try again.',
+      csv: {
+        name: 'Name', email: 'Email', job: 'Applied position', status: 'Application status',
+        appliedAt: 'Applied on', cvUrl: 'CV link', aiScore: 'AI score (%)', aiStatus: 'AI score status',
+      },
+      aiScoreStatus: {
+        COMPLETED: 'Completed', PENDING: 'Pending', PROCESSING: 'Processing', FAILED: 'Failed',
+        MISSING: 'Not scored', STALE: 'Outdated', UNAVAILABLE: 'Unavailable',
+      },
       colCandidate: 'Candidate',
       colJob: 'Target Job',
       colCv: 'CV Resume',

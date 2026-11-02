@@ -140,6 +140,10 @@ export interface HrJobItem {
 
 export interface ApplicationItem {
   _id: string;
+  aiScore?: {
+    status: 'COMPLETED' | 'PENDING' | 'PROCESSING' | 'FAILED' | 'MISSING' | 'STALE' | 'UNAVAILABLE';
+    overallScore: number | null;
+  } | null;
   status: "PENDING" | "REVIEWING" | "CONSIDERING" | "APPROVED" | "REJECTED";
   coverLetter?: string;
   createdAt: string;

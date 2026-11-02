@@ -11,12 +11,16 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Application, ApplicationStatus } from './entities/application.entity';
 import { Company } from 'src/companies/entities/company.entity';
-import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
+import {
+  CVMatchResult,
+  CVProcessingStatus,
+} from 'src/ai-matching/entities/cv-match-result.entity';
+import { ApplicationAiScoreSummary } from './dto/application-ai-score.dto';
 import { IUser } from 'src/users/users.interface';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application.dto';
@@ -304,6 +308,7 @@ export class ApplicationsService implements OnModuleInit {
 
   // Get all applications (Admin/HR)
   async findAll(qs: any, user: IUser) {
+    user = { ...user, role: await this.assertApplicationListRole(user) };
     const { filter, sort } = aqp(qs);
     delete filter.current;
     delete filter.pageSize;
@@ -322,7 +327,7 @@ export class ApplicationsService implements OnModuleInit {
       .leftJoinAndSelect('app.job', 'job')
       .where('app.isDeleted = :isDeleted', { isDeleted: false });
 
-    if (userInfo.role === Role.HR) {
+    if (user.role === Role.HR) {
       if (!userInfo.company || !userInfo.company._id) {
         return {
           meta: {
@@ -364,10 +369,12 @@ export class ApplicationsService implements OnModuleInit {
       .getManyAndCount();
 
     const totalPage = Math.ceil(totalRecord / limit);
+    const scores = await this.loadApplicationScores(applications);
 
     // Format fields with populated aliases for backward compatibility
     const formatted = applications.map((app) => ({
-      ...app,
+      ...this.applicationListFields(app),
+      aiScore: scores.get(app._id),
       cvId: app.cv
         ? {
             _id: app.cv._id,
@@ -415,6 +422,7 @@ export class ApplicationsService implements OnModuleInit {
 
   // Get applications by job (for HR to review)
   async findByJob(jobId: string, qs: any, user: IUser) {
+    user = { ...user, role: await this.assertApplicationListRole(user) };
     const job = await this.jobsService.findOneForInternal(jobId);
 
     if (user.role === Role.HR) {
@@ -446,6 +454,7 @@ export class ApplicationsService implements OnModuleInit {
       .leftJoinAndSelect('app.cv', 'cv')
       .leftJoinAndSelect('app.user', 'user')
       .where('app.jobId = :jobId', { jobId })
+      .leftJoinAndSelect('app.company', 'company')
       .andWhere('app.isDeleted = :isDeleted', { isDeleted: false });
 
     if (qs.status) {
@@ -460,9 +469,13 @@ export class ApplicationsService implements OnModuleInit {
       .getManyAndCount();
 
     const totalPage = Math.ceil(totalRecord / limit);
+    const scores = await this.loadApplicationScores(
+      applications.map((app) => Object.assign(app, { job })),
+    );
 
     const formatted = applications.map((app) => ({
-      ...app,
+      ...this.applicationListFields(app),
+      aiScore: scores.get(app._id),
       cvId: app.cv
         ? {
             _id: app.cv._id,
@@ -492,6 +505,114 @@ export class ApplicationsService implements OnModuleInit {
       },
       result: formatted,
     };
+  }
+
+  private async assertApplicationListRole(user: IUser): Promise<Role> {
+    const { role, limits } = await this.usersService.getUserEntitlements(user);
+    if (
+      (role !== Role.HR && role !== Role.ADMIN) ||
+      !limits.canExportAiScores
+    ) {
+      throw new ForbiddenException('Only HR and admins can list applications');
+    }
+    return role;
+  }
+
+  private applicationListFields(app: Application) {
+    return {
+      _id: app._id,
+      cvId: app.cvId,
+      userId: app.userId,
+      companyId: app.companyId,
+      jobId: app.jobId,
+      coverLetter: app.coverLetter,
+      status: app.status,
+      history: app.history,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+      createdBy: app.createdBy,
+      updatedBy: app.updatedBy,
+      deletedBy: app.deletedBy,
+      isDeleted: app.isDeleted,
+      deletedAt: app.deletedAt,
+      aiRankingConsentGranted: app.aiRankingConsentGranted,
+      aiRankingConsentVersion: app.aiRankingConsentVersion,
+      aiRankingConsentPolicyHash: app.aiRankingConsentPolicyHash,
+      aiRankingConsentAt: app.aiRankingConsentAt,
+    };
+  }
+
+  private async loadApplicationScores(
+    applications: Application[],
+  ): Promise<Map<string, ApplicationAiScoreSummary>> {
+    const summaries = new Map<string, ApplicationAiScoreSummary>();
+    if (!applications.length) return summaries;
+    const results = await this.cvMatchResultRepo.find({
+      where: {
+        applicationId: In(applications.map((app) => app._id)),
+        isDeleted: false,
+      },
+      select: {
+        applicationId: true,
+        cvId: true,
+        userId: true,
+        jobId: true,
+        status: true,
+        matchScore: true,
+        contentHash: true,
+        jobSourceVersion: true,
+      },
+    });
+    const byApplication = new Map(results.map((r) => [r.applicationId, r]));
+    for (const app of applications) {
+      const result = byApplication.get(app._id);
+      let status: ApplicationAiScoreSummary['status'] = 'MISSING';
+      let overallScore: number | null = null;
+      if (
+        !app.aiRankingConsentGranted ||
+        !app.aiRankingConsentVersion ||
+        !app.aiRankingConsentPolicyHash ||
+        !app.aiRankingConsentAt ||
+        app.isDeleted ||
+        app.deletedAt ||
+        ![
+          ApplicationStatus.PENDING,
+          ApplicationStatus.REVIEWING,
+          ApplicationStatus.CONSIDERING,
+          ApplicationStatus.APPROVED,
+        ].includes(app.status) ||
+        !app.cv ||
+        app.cv.isDeleted ||
+        app.cv.deletedAt ||
+        !app.user ||
+        app.user.isDeleted ||
+        app.user.deletedAt
+      ) {
+        status = 'UNAVAILABLE';
+      } else if (
+        result &&
+        result.cvId === app.cvId &&
+        result.userId === app.userId &&
+        result.jobId === app.jobId
+      ) {
+        status = result.status;
+        if (
+          !app.cv.contentHash ||
+          result.contentHash !== app.cv.contentHash ||
+          !app.job ||
+          !app.company ||
+          result.jobSourceVersion !== getJobSourceVersion(app.job, app.company)
+        ) {
+          status = 'STALE';
+        } else if (status === CVProcessingStatus.COMPLETED) {
+          overallScore = Number.isFinite(result.matchScore)
+            ? result.matchScore
+            : null;
+        }
+      }
+      summaries.set(app._id, { status, overallScore });
+    }
+    return summaries;
   }
 
   // Get user's own applications
