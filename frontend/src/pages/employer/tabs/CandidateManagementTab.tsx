@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import MatchingAnalysis from './MatchingAnalysis';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -748,7 +749,7 @@ export function CandidateManagementTab({
               {isLoadingAiRank ? (
                 <div className="py-20 text-center">
                   <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
-                  <p className="mt-2 text-xs text-slate-400">{t('employer.searchCvTab.searchingBtn')}</p>
+                  <p className="mt-2 text-xs text-slate-400">{t('employer.candidatesTab.modalAiRankLoading')}</p>
                 </div>
               ) : aiRankingData?.rankedCandidates && aiRankingData.rankedCandidates.length > 0 ? (
                 <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
@@ -799,28 +800,13 @@ export function CandidateManagementTab({
                       </div>
 
                       {/* Explanation & Skills */}
-                      {candidate.analysisAvailable && candidate.shortExplanation && (
-                        <p className="text-xs text-slate-600 dark:text-slate-300 italic bg-white/70 dark:bg-slate-900/50 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
-                          &ldquo;{candidate.shortExplanation}&rdquo;
-                        </p>
-                      )}
 
                       {!candidate.analysisAvailable ? (
                         <div className="text-xs text-slate-600 dark:text-slate-300">
                           <p>{t('employer.candidatesTab.aiAnalysisLocked')}</p>
                           {onNavigateTab && <button type="button" onClick={() => { setIsAiRankModalOpen(false); onNavigateTab('premium'); }} className="mt-2 font-bold text-primary underline">{t('employer.searchCvTab.upgradeAdvanced')}</button>}
                         </div>
-                      ) : <div className="flex flex-wrap gap-1">
-                        {candidate.matchedSkills.length === 0 && <p className="text-xs text-slate-500">{t('employer.candidatesTab.aiNoMatchedSkills')}</p>}
-                        {candidate.matchedSkills.map((sk) => (
-                          <span
-                            key={sk}
-                            className="rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-                          >
-                            +{sk}
-                          </span>
-                        ))}
-                      </div>}
+                      ) : <MatchingAnalysis candidate={candidate} />}
                     </div>
                   ))}
                 </div>

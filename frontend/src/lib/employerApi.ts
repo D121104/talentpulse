@@ -175,6 +175,27 @@ export interface ApplicationItem {
   };
 }
 
+export interface MatchingAnalysisComponent {
+  score: number | null;
+  weight: number;
+  available: boolean;
+  evidence: string[];
+}
+
+export interface HRMatchingAnalysis {
+  source: 'persisted_cv_match_result';
+  textLocale: 'en' | 'und';
+  components: Record<'semantic' | 'skills' | 'experience', MatchingAnalysisComponent>;
+  compatibility: Record<'location' | 'workMode', MatchingAnalysisComponent>;
+  matchedSkills: string[];
+  missingRequiredSkills: string[];
+  strengths: string[];
+  gaps: string[];
+  versions: { scoring: string | null; model: string | null; normalization: string | null };
+  degraded: boolean | null;
+  explanation: { text: string | null; source: 'deterministic_matching' | 'stored_unknown' | 'unavailable'; locale: 'en' | 'und' };
+}
+
 export interface AIRankedCandidate {
   applicationId: string;
   candidateId: string;
@@ -186,6 +207,7 @@ export interface AIRankedCandidate {
   cvUrl: string;
   matchScore: number;
   analysisAvailable: boolean;
+  aiAnalysis?: HRMatchingAnalysis;
   matchedSkills: string[];
   missingSkills: string[];
   shortExplanation: string;

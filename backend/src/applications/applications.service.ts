@@ -1,3 +1,4 @@
+import { mapHRMatchingAnalysis } from 'src/ai-matching/hr-matching-analysis';
 import {
   BadRequestException,
   ForbiddenException,
@@ -1012,6 +1013,9 @@ export class ApplicationsService implements OnModuleInit {
             ? result.explanation || ''
             : '',
           analysisAvailable: entitlements.limits.canViewCandidateAiAnalysis,
+          ...(entitlements.limits.canViewCandidateAiAnalysis
+            ? { aiAnalysis: mapHRMatchingAnalysis(result) }
+            : {}),
           applicationStatus: appInfo?.status || 'PENDING',
           appliedAt: appInfo?.createdAt
             ? new Date(appInfo.createdAt).toISOString()
