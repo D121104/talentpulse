@@ -26,7 +26,6 @@ import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application.dto';
 import { UsersService } from 'src/users/users.service';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
-import { CVParseStatus } from 'src/usercvs/cv-parse-status';
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
 import { OnlineCvGenerationMode } from 'src/online-cvs/entities/online-cv.entity';
 import { Role } from 'src/decorator/customize';
@@ -37,7 +36,6 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
-import { consentIdempotencyKey } from 'src/ai-matching/cv-processing.processor';
 import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { JobsService } from 'src/jobs/jobs.service';
 import {
@@ -209,45 +207,11 @@ export class ApplicationsService implements OnModuleInit {
 
     // Queue only opaque IDs and version/hash consent fences. The worker reloads
     // all CV, application and job content from canonical PostgreSQL records.
-    if (
-      aiRankingConsent === true &&
-      userCv.parseStatus === CVParseStatus.READY &&
-      Boolean(userCv.contentHash)
-    ) {
+    if (aiRankingConsent === true) {
       try {
-        const company = job.company?._id
-          ? await this.companyRepo.findOne({
-              where: { _id: job.company._id },
-              withDeleted: true,
-            })
-          : null;
-        if (!company) {
-          this.logger.warn(
-            `Skipping CV processing queue for application ${savedApplication._id}: canonical company not found`,
-          );
-        } else {
-          const policy = getApplicationAiRankingConsentPolicy(
-            this.configService,
-          );
-          const jobSourceVersion = getJobSourceVersion(job, company);
-          await this.cvProcessingService.queueCVProcessing({
-            cvId: userCv._id.toString(),
-            userId: user._id,
-            applicationId: savedApplication._id.toString(),
-            cvContentVersion: userCv.contentVersion,
-            contentHash: userCv.contentHash || '',
-            jobId: job._id.toString(),
-            jobSourceVersion,
-            aiRankingConsentGranted: true,
-            aiRankingConsentVersion: policy.consentVersion,
-            aiRankingConsentPolicyHash: policy.policyHash,
-            consentIdempotencyKey: consentIdempotencyKey(
-              savedApplication._id.toString(),
-              userCv.contentVersion,
-              jobSourceVersion,
-            ),
-          });
-        }
+        await this.cvProcessingService.enqueueEligibleApplication(
+          savedApplication._id,
+        );
       } catch {
         this.logger.warn(
           `Failed to queue CV processing for application ${savedApplication._id}`,

@@ -403,10 +403,23 @@ integrationDescribe(
           description: 'Canonical synthetic job description',
           skills: ['TypeScript', 'PostgreSQL'],
           company: { _id: company._id, name: company.name },
+          createdBy: {
+            _id: '00000000-0000-4000-8000-000000000499',
+            email: 'hr@example.test',
+          },
           level: 'senior',
           location: 'Hanoi',
           isActive: true,
           isDeleted: false,
+        }),
+      );
+      await userRepo.save(
+        userRepo.create({
+          _id: job.createdBy._id,
+          email: 'hr@example.test',
+          password: 'synthetic',
+          role: Role.ADMIN,
+          company: { _id: company._id, name: company.name },
         }),
       );
       const contentVersion = 'cv-content-v1';
@@ -443,6 +456,7 @@ integrationDescribe(
           AI_CV_ALLOWED_HOSTS: 'res.cloudinary.com',
           CLOUD_NAME: 'test',
         }),
+        { enqueueReadyCV: jest.fn() } as any,
       );
       await parseProcessor.handleParse({
         data: {
@@ -632,6 +646,66 @@ integrationDescribe(
       expect(persisted.explanation).not.toContain(
         'Canonical synthetic job description',
       );
+    });
+
+    it('recovers apply-before-READY, serializes duplicate events, and refreshes completed stale results', async () => {
+      const fixture = await seedAndParse();
+      const s = applicationServices(fixture);
+      await fixture.cvRepo.update(fixture.parsed._id, {
+        parseStatus: CVParseStatus.PROCESSING,
+      });
+      const app = await s.applicationRepo.save(
+        s.applicationRepo.create({
+          cvId: fixture.parsed._id,
+          jobId: fixture.job._id,
+          userId: fixture.user._id,
+          companyId: fixture.company._id,
+          status: ApplicationStatus.PENDING,
+          aiRankingConsentGranted: true,
+          aiRankingConsentVersion: 'v1',
+          aiRankingConsentPolicyHash: 'policy',
+          aiRankingConsentAt: new Date(),
+        }),
+      );
+      await s.processingService.enqueueEligibleApplication(app._id);
+      expect(s.queued.add).not.toHaveBeenCalled();
+      await fixture.cvRepo.update(fixture.parsed._id, {
+        parseStatus: CVParseStatus.READY,
+      });
+      await Promise.all([
+        s.processingService.enqueueReadyCV(fixture.parsed._id),
+        s.processingService.enqueueEligibleApplication(app._id),
+        s.processingService.enqueueReadyCV(fixture.parsed._id),
+      ]);
+      expect(await s.resultRepo.count()).toBe(1);
+      expect(
+        new Set(s.queued.add.mock.calls.map((call) => call[2].jobId)).size,
+      ).toBe(1);
+      const result = await s.resultRepo.findOneByOrFail({
+        applicationId: app._id,
+      });
+      await s.resultRepo.update(result._id, {
+        status: CVProcessingStatus.COMPLETED,
+        matchScore: 0.8,
+      });
+      await fixture.jobRepo.update(fixture.job._id, {
+        description: 'Changed skills and job context',
+      });
+      await s.processingService.enqueueEligibleApplication(app._id);
+      const refreshed = await s.resultRepo.findOneByOrFail({ _id: result._id });
+      expect(refreshed.status).toBe(CVProcessingStatus.PENDING);
+      expect(refreshed.jobSourceVersion).not.toBe(result.jobSourceVersion);
+      expect(await s.resultRepo.count()).toBe(1);
+      await s.resultRepo.update(result._id, {
+        status: CVProcessingStatus.COMPLETED,
+      });
+      await fixture.cvRepo.update(fixture.parsed._id, {
+        contentHash: 'c'.repeat(64),
+      });
+      await s.processingService.enqueueReadyCV(fixture.parsed._id);
+      expect(
+        (await s.resultRepo.findOneByOrFail({ _id: result._id })).contentHash,
+      ).toBe('c'.repeat(64));
     });
 
     it('rejects a queued match after the canonical job source version changes', async () => {

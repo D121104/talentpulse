@@ -7,6 +7,8 @@ import {
 } from 'src/ai-matching/cv-processing.processor';
 import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { CVProcessingStatus } from 'src/ai-matching/entities/cv-match-result.entity';
+import { Role } from 'src/decorator/customize';
+import { PremiumPlan } from 'src/users/entities/user.entity';
 
 describe('CVProcessingProcessor', () => {
   const ids = {
@@ -31,6 +33,7 @@ describe('CVProcessingProcessor', () => {
     skills: ['TypeScript', 'NestJS'],
     level: 'senior',
     company: { _id: company._id, name: company.name },
+    createdBy: { _id: 'creator' },
     isDeleted: false,
     deletedAt: null,
     updatedAt: new Date('2026-01-01T00:00:00Z'),
@@ -56,7 +59,25 @@ describe('CVProcessingProcessor', () => {
   };
 
   function setup() {
+    const creator = {
+      role: Role.HR,
+      company: { _id: company._id },
+      isPremium: true,
+      premiumPlan: PremiumPlan.HR_PREMIUM,
+      premiumExpiresAt: new Date(Date.now() + 86400000),
+    };
     const resultRepo = {
+      manager: {
+        getRepository: () => ({
+          findOne: jest
+            .fn()
+            .mockImplementation(({ where }) =>
+              Promise.resolve(
+                where._id === 'creator' ? creator : { _id: ids.user },
+              ),
+            ),
+        }),
+      },
       findOne: jest.fn(),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
@@ -74,6 +95,7 @@ describe('CVProcessingProcessor', () => {
       applicationRepo as any,
     );
     return {
+      creator,
       processor,
       resultRepo,
       cvRepo,
@@ -110,6 +132,7 @@ describe('CVProcessingProcessor', () => {
         deletedAt: null,
       },
       application: {
+        companyId: company._id,
         _id: ids.application,
         cvId: ids.cv,
         userId: ids.user,
@@ -126,6 +149,120 @@ describe('CVProcessingProcessor', () => {
       company: { ...company },
     };
   }
+
+  it.each([CVProcessingStatus.COMPLETED, CVProcessingStatus.PROCESSING])(
+    'never relabels a delayed legacy %s result as fresh without invalidation',
+    async (status) => {
+      const h = setup();
+      const r = canonicalRecords();
+      r.result.status = status;
+      const legacy = {
+        ...r.result,
+        cv: { ...r.cv, contentHash: 'c'.repeat(64) },
+        job: r.job,
+        application: r.application,
+      };
+      h.companyRepo.findOne.mockResolvedValue(r.company);
+      h.resultRepo.findOne.mockResolvedValue(legacy);
+      // Stop after the transition: the normal handler must perform inference.
+      const process = jest
+        .spyOn(h.processor, 'handleProcessCV')
+        .mockResolvedValue({ success: false, stale: true });
+      await h.processor.handleReprocessCV({
+        data: { cvMatchResultId: ids.result },
+      } as any);
+      if (status === CVProcessingStatus.PROCESSING) {
+        expect(h.resultRepo.update).not.toHaveBeenCalled();
+        expect(process).not.toHaveBeenCalled();
+      } else {
+        expect(h.resultRepo.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            _id: ids.result,
+            status: CVProcessingStatus.COMPLETED,
+            contentHash: data.contentHash,
+            jobSourceVersion: data.jobSourceVersion,
+          }),
+          expect.objectContaining({
+            status: CVProcessingStatus.PENDING,
+            contentHash: 'c'.repeat(64),
+            matchScore: 0,
+          }),
+        );
+        expect(process).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it('does not disturb an active generation that wins the legacy invalidation race', async () => {
+    const h = setup();
+    const r = canonicalRecords();
+    h.resultRepo.findOne.mockResolvedValue({
+      ...r.result,
+      cv: r.cv,
+      job: r.job,
+      application: r.application,
+    });
+    h.companyRepo.findOne.mockResolvedValue(r.company);
+    h.resultRepo.update.mockResolvedValue({ affected: 0 });
+    const process = jest.spyOn(h.processor, 'handleProcessCV');
+    await h.processor.handleReprocessCV({
+      data: { cvMatchResultId: ids.result },
+    } as any);
+    expect(process).not.toHaveBeenCalled();
+    expect(h.resultRepo.update.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        status: CVProcessingStatus.PENDING,
+        contentHash: data.contentHash,
+        jobSourceVersion: data.jobSourceVersion,
+      }),
+    );
+  });
+
+  it.each(['free', 'expired', 'company mismatch'])(
+    'blocks inference for %s creator',
+    async (reason) => {
+      const h = setup();
+      const r = canonicalRecords();
+      h.resultRepo.findOne.mockResolvedValue(r.result);
+      h.cvRepo.findOne.mockResolvedValue(r.cv);
+      h.jobRepo.findOne.mockResolvedValue(r.job);
+      h.companyRepo.findOne.mockResolvedValue(r.company);
+      h.applicationRepo.findOne.mockResolvedValue(r.application);
+      if (reason === 'free') h.creator.premiumPlan = PremiumPlan.FREE;
+      if (reason === 'expired') h.creator.premiumExpiresAt = new Date(0);
+      if (reason === 'company mismatch') h.creator.company._id = 'unrelated';
+      await expect(
+        h.processor.handleProcessCV({ data } as any),
+      ).resolves.toEqual({ success: false, stale: true });
+      expect(h.aiServiceClient.matchCv).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['expired', 'revoked'])(
+    'discards inference if %s before persistence',
+    async (reason) => {
+      const h = setup();
+      const r = canonicalRecords();
+      h.resultRepo.findOne.mockResolvedValue(r.result);
+      h.cvRepo.findOne.mockResolvedValue(r.cv);
+      h.jobRepo.findOne.mockResolvedValue(r.job);
+      h.companyRepo.findOne.mockResolvedValue(r.company);
+      h.applicationRepo.findOne.mockResolvedValue(r.application);
+      h.aiServiceClient.matchCv.mockImplementation(async () => {
+        if (reason === 'expired') h.creator.premiumExpiresAt = new Date(0);
+        else r.application.aiRankingConsentGranted = false;
+        return { overall_score: 0.9 };
+      });
+      await expect(
+        h.processor.handleProcessCV({ data } as any),
+      ).resolves.toEqual({ success: false, stale: true });
+      expect(
+        h.resultRepo.update.mock.calls.some(
+          ([, update]) => update.status === CVProcessingStatus.COMPLETED,
+        ),
+      ).toBe(false);
+    },
+  );
 
   it('reloads canonical records and sends only canonical snapshots to AI', async () => {
     const setupResult = setup();
@@ -385,7 +522,7 @@ describe('CVProcessingProcessor', () => {
     await expect(
       setupResult.processor.handleProcessCV({ data } as any),
     ).resolves.toEqual({ success: false, stale: true });
-    expect(setupResult.resultRepo.update).toHaveBeenCalledTimes(1);
+    expect(setupResult.resultRepo.update).toHaveBeenCalledTimes(2);
     expect(setupResult.aiServiceClient.matchCv).toHaveBeenCalledTimes(1);
   });
 
