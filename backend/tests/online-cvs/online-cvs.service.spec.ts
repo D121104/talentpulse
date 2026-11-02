@@ -58,6 +58,68 @@ describe('online CV content deduplication', () => {
 describe('online CV locale metadata', () => {
   const user = { _id: 'user-1', email: 'candidate@example.com' } as any;
 
+  it.each([20000000, null])(
+    'persists candidate salary and explicit disclosure consent (%s)',
+    async (salary) => {
+      const cv = {
+        _id: 'cv-1',
+        userId: user._id,
+        contentVersion: 1,
+        revision: {},
+        templateType: 'template1',
+      };
+      const repository = {
+        findOne: jest.fn().mockResolvedValue(cv),
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
+      };
+      const service = Object.assign(Object.create(OnlineCVsService.prototype), {
+        onlineCVRepo: repository,
+        redisService: { deleteValue: jest.fn().mockResolvedValue(undefined) },
+      }) as OnlineCVsService;
+      await service.update(
+        'cv-1',
+        {
+          expectedContentVersion: 1,
+          expectedSalaryVndMonthly: salary,
+          shareExpectedSalary: false,
+        },
+        user,
+      );
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: { _id: 'cv-1', userId: user._id, isDeleted: false },
+      });
+      expect(repository.update).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          expectedSalaryVndMonthly: salary,
+          shareExpectedSalary: false,
+        }),
+      );
+    },
+  );
+
+  it('does not update salary on a CV not owned by the caller', async () => {
+    const repository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      update: jest.fn(),
+    };
+    const service = Object.assign(Object.create(OnlineCVsService.prototype), {
+      onlineCVRepo: repository,
+    }) as OnlineCVsService;
+    await expect(
+      service.update(
+        'other-cv',
+        {
+          expectedContentVersion: 1,
+          expectedSalaryVndMonthly: 0,
+          shareExpectedSalary: true,
+        },
+        user,
+      ),
+    ).rejects.toThrow('không thuộc về bạn');
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('preserves revision locale and source trace locale when editing without locale', async () => {
     const cv = {
       _id: 'cv-1',

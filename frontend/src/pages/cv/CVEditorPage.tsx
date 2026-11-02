@@ -33,6 +33,7 @@ import { useToast } from "../../context/ToastContext";
 import { formatDate } from "../../lib/dateUtils";
 import { ApiError } from "../../lib/api";
 import { onlineCvApi } from "../../lib/cvApi";
+import { optionalCandidateNumber } from "../../lib/candidateSearch";
 import {
   CV_FONTS,
   CV_THEMES,
@@ -430,6 +431,15 @@ export default function CVEditorPage() {
   const [link, setLink] = useState<string>("");
   const [address, setAddress] = useState<string>(user?.address || "");
   const [careerObjective, setCareerObjective] = useState<string>("");
+  const [expectedSalary, setExpectedSalary] = useState('');
+  const [shareExpectedSalary, setShareExpectedSalary] = useState(false);
+  let salaryValue: number | null = null;
+  let salaryValid = true;
+  try {
+    salaryValue = optionalCandidateNumber(expectedSalary, 2147483647, true) ?? null;
+  } catch {
+    salaryValid = false;
+  }
 
   const [education, setEducation] = useState<EducationEntry[]>([]);
 
@@ -758,6 +768,8 @@ export default function CVEditorPage() {
           setLink(cv.link || "");
           setAddress(cv.address || "");
           setCareerObjective(cv.careerObjective || "");
+          setExpectedSalary(cv.expectedSalaryVndMonthly == null ? '' : String(cv.expectedSalaryVndMonthly));
+          setShareExpectedSalary(cv.shareExpectedSalary === true);
 
           const normalizedSectionOrder = normalizeSectionOrder(cv.sectionOrder);
           if (normalizedSectionOrder && normalizedSectionOrder.length > 0) {
@@ -911,6 +923,8 @@ export default function CVEditorPage() {
     includeGenerationMode = true,
   ): CreateOnlineCVDto => {
     const payload: CreateOnlineCVDto = {
+      expectedSalaryVndMonthly: salaryValue,
+      shareExpectedSalary,
       title:
         title.trim() ||
         `CV - ${fullName.trim()}${position ? ` - ${position.trim()}` : ""}`,
@@ -960,7 +974,7 @@ export default function CVEditorPage() {
     return payload;
   };
 
-  latestPayloadRef.current = {
+  latestPayloadRef.current = !salaryValid ? null : {
     ...buildCvPayload(false, generationMode, false),
     expectedContentVersion: contentVersionRef.current,
   };
@@ -974,6 +988,7 @@ export default function CVEditorPage() {
       !accessToken ||
       isLoadingExistingCv ||
       !isDirty ||
+      !salaryValid ||
       isSaving ||
       generationIsActive
     ) {
@@ -1015,6 +1030,7 @@ export default function CVEditorPage() {
     isLoadingExistingCv,
     isNew,
     isSaving,
+    salaryValid,
     toast,
   ]);
 
@@ -1374,6 +1390,10 @@ export default function CVEditorPage() {
     redirectAfterSave: boolean,
     payloadGenerationMode: CVGenerationMode = generationMode,
   ): Promise<string | null> => {
+    if (!salaryValid) {
+      toast.error(cvLanguage === 'en' ? 'Enter a whole-number salary from 0 to 2,147,483,647 VND/month.' : 'Nhập lương nguyên từ 0 đến 2.147.483.647 VND/tháng.');
+      return null;
+    }
     if (!fullName.trim()) {
       alert("Vui lòng nhập Họ và tên trong CV!");
       return null;
@@ -1760,6 +1780,24 @@ export default function CVEditorPage() {
                 </button>
               </div>
 
+              <fieldset disabled={generationIsActive || isLoadingExistingCv} className="mb-5 space-y-3 border-b border-slate-200 pb-5 text-xs dark:border-slate-700">
+                <label className="block font-bold" htmlFor="cv-expected-salary">
+                  {cvLanguage === 'en' ? 'Expected salary (optional, VND/month)' : 'Lương mong muốn (không bắt buộc, VND/tháng)'}
+                </label>
+                <input id="cv-expected-salary" type="number" min="0" max="2147483647" step="1"
+                  value={expectedSalary} aria-invalid={!salaryValid} aria-describedby="cv-salary-help"
+                  onChange={(e) => { setExpectedSalary(e.target.value); markDirty(); }}
+                  className="w-full rounded-xl border border-slate-300 bg-transparent p-3 dark:border-slate-700" />
+                {!salaryValid && <p role="alert" className="text-red-600">{cvLanguage === 'en' ? 'Use a whole number from 0 to 2,147,483,647.' : 'Nhập số nguyên từ 0 đến 2.147.483.647.'}</p>}
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={shareExpectedSalary}
+                    onChange={(e) => { setShareExpectedSalary(e.target.checked); markDirty(); }} />
+                  {cvLanguage === 'en' ? 'Allow recruiters to filter this searchable CV by my expected salary.' : 'Cho phép nhà tuyển dụng lọc CV có thể tìm kiếm này theo lương mong muốn của tôi.'}
+                </label>
+                <p id="cv-salary-help" className="text-slate-500">{cvLanguage === 'en'
+                  ? 'Sharing is off by default. Leave the amount blank to clear it. This applies to structured online CV data, not salary text in uploaded files.'
+                  : 'Mặc định không chia sẻ. Để trống để xóa mức lương. Chỉ áp dụng cho dữ liệu CV online có cấu trúc, không phải nội dung lương trong file tải lên.'}</p>
+              </fieldset>
               {/* TOOL 1: Design & Font */}
               {activeSidebarTool === "design" && (
                 <div className="space-y-5 text-xs">

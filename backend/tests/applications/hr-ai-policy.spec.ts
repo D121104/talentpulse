@@ -14,6 +14,47 @@ function policyHarness(persisted: Record<string, unknown> | null) {
 
 describe('Persisted HR AI entitlements', () => {
   it.each([
+    [Role.HR, PremiumPlan.FREE, null, false],
+    [Role.HR, PremiumPlan.HR_PREMIUM, '2099-01-01', true],
+    [Role.HR, PremiumPlan.HR_PREMIUM, '2000-01-01', false],
+    [Role.ADMIN, PremiumPlan.FREE, null, true],
+  ])(
+    'gates combined advanced search by persisted %s/%s expiry=%s',
+    async (role, premiumPlan, premiumExpiresAt, allowed) => {
+      const usersService = policyHarness({
+        _id: 'hr',
+        role,
+        premiumPlan,
+        premiumExpiresAt,
+      });
+      const createQueryBuilder = jest.fn(() => {
+        throw new Error('query reached');
+      });
+      const search = Object.assign(
+        Object.create(CandidateAccessService.prototype),
+        {
+          usersService,
+          getCompanyRecruitmentProfile: jest.fn().mockResolvedValue(null),
+          onlineCVRepo: { createQueryBuilder },
+        },
+      ) as CandidateAccessService;
+      await expect(
+        search.searchCandidates(
+          {
+            skills: 'SQL',
+            location: 'Hanoi',
+            education: 'Bachelor',
+            minExperienceYears: 0,
+            minExpectedSalary: 0,
+          },
+          { _id: 'hr', role: Role.ADMIN } as never,
+        ),
+      ).rejects.toThrow(allowed ? 'query reached' : 'HR Premium');
+      expect(createQueryBuilder).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    },
+  );
+
+  it.each([
     [Role.HR, PremiumPlan.FREE, null, true, false],
     [Role.HR, PremiumPlan.HR_PREMIUM, '2099-01-01', true, true],
     [Role.HR, PremiumPlan.HR_PREMIUM, '2000-01-01', true, false],

@@ -31,6 +31,7 @@ import { useToast } from '../../../context/ToastContext';
 import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate } from '../../../lib/dateUtils';
 import { UserAvatar } from '../../../components/common/UserAvatar';
+import { candidateSearchQuery, emptyCandidateSearch } from '../../../lib/candidateSearch';
 
 interface CVSearchTabProps {
   accessToken: string | null;
@@ -68,11 +69,9 @@ export function CVSearchTab({
   }, [accessToken, hasCompany]);
 
   // Search filter criteria
-  const [searchCriteria, setSearchCriteria] = useState({
-    keyword: '',
-    skills: '',
-    location: '',
-  });
+  const [searchCriteria, setSearchCriteria] = useState(emptyCandidateSearch);
+  const [appliedCriteria, setAppliedCriteria] = useState(emptyCandidateSearch);
+  const [filterError, setFilterError] = useState('');
 
   // State
   const [results, setResults] = useState<CandidatePublicItem[]>([]);
@@ -103,8 +102,16 @@ export function CVSearchTab({
   };
 
   // Perform search
-  const performSearch = async (pageNum = 1) => {
+  const performSearch = async (pageNum = 1, criteria = appliedCriteria) => {
     if (!accessToken || !hasCompany) return;
+    let query;
+    try {
+      query = candidateSearchQuery(criteria, canUseAdvancedSearch);
+      setFilterError('');
+    } catch {
+      setFilterError(t('employer.searchCvTab.invalidFilters', { defaultValue: 'Use experience from 0–100 years and whole-number salary from 0–2,147,483,647 VND/month. Minimum must not exceed maximum.' }));
+      return;
+    }
 
     setIsSearching(true);
     setPage(pageNum);
@@ -112,11 +119,7 @@ export function CVSearchTab({
     try {
       const res = await employerApi.searchCandidatesGlobal(
         {
-          keyword: searchCriteria.keyword.trim() || undefined,
-          ...(canUseAdvancedSearch ? {
-            skills: searchCriteria.skills.trim() || undefined,
-            location: searchCriteria.location.trim() || undefined,
-          } : {}),
+          ...query,
           current: pageNum,
           pageSize: 12,
         },
@@ -124,6 +127,7 @@ export function CVSearchTab({
       );
 
       setResults(res.result || []);
+      setAppliedCriteria(criteria);
       setTotalPages(res.meta?.pages || 1);
       setTotalCount(res.meta?.total || 0);
       setHasCompanyJobs(res.meta?.hasCompanyJobs !== undefined ? res.meta.hasCompanyJobs : true);
@@ -137,7 +141,8 @@ export function CVSearchTab({
 
   useEffect(() => {
     void loadQuota();
-    void performSearch(1);
+    setSearchCriteria(emptyCandidateSearch);
+    void performSearch(1, emptyCandidateSearch);
   }, [accessToken, hasCompany]);
 
   if (!hasCompany) {
@@ -152,14 +157,13 @@ export function CVSearchTab({
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    void performSearch(1);
+    void performSearch(1, searchCriteria);
   };
 
   const handleResetSearch = () => {
-    setSearchCriteria({ keyword: '', skills: '', location: '' });
-    setTimeout(() => {
-      void performSearch(1);
-    }, 0);
+    setSearchCriteria(emptyCandidateSearch);
+    setFilterError('');
+    void performSearch(1, emptyCandidateSearch);
   };
 
   // Handler when HR clicks to unlock / view
@@ -344,6 +348,24 @@ export function CVSearchTab({
             </div>
           </div>
 
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(['education', 'minExperienceYears', 'maxExperienceYears', 'minExpectedSalary', 'maxExpectedSalary'] as const).map((field) => (
+              <label key={field} className="space-y-1 text-xs font-bold text-slate-700 dark:text-slate-300">
+                <span>{t(`employer.searchCvTab.${field}`)}</span>
+                <input type={field === 'education' ? 'text' : 'number'}
+                  min={field === 'education' ? undefined : 0}
+                  max={field === 'education' ? undefined : field.includes('Experience') ? 100 : 2147483647}
+                  step={field.includes('Experience') ? 'any' : 1} maxLength={field === 'education' ? 200 : undefined}
+                  disabled={!canUseAdvancedSearch} value={searchCriteria[field]}
+                  onChange={(e) => setSearchCriteria({ ...searchCriteria, [field]: e.target.value })}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800 disabled:opacity-50" />
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">{t('employer.searchCvTab.filterSemantics')}</p>
+          {(appliedCriteria.minExpectedSalary !== '' || appliedCriteria.maxExpectedSalary !== '') && canUseAdvancedSearch &&
+            <p role="status" className="text-xs text-primary">{t('employer.searchCvTab.salaryActive')}</p>}
+          {filterError && <p role="alert" className="text-sm text-red-600">{filterError}</p>}
           {!canUseAdvancedSearch && (
             <div id="advanced-search-status" role="status" className="text-xs text-slate-600 dark:text-slate-300">
               <p>{t(entitlementsFailed ? 'employer.searchCvTab.entitlementsFailed' : entitlementState?.token === accessToken ? 'employer.searchCvTab.advancedLocked' : 'employer.searchCvTab.entitlementsLoading')}</p>
@@ -506,10 +528,9 @@ export function CVSearchTab({
                       <div className="flex items-center gap-1">
                         <Briefcase className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500" />
                         <span className="font-semibold text-slate-700 dark:text-slate-300">
-                          {candidate.experienceSummary ||
-                            (candidate.experienceYears && candidate.experienceYears > 0
-                              ? `${candidate.experienceYears} năm kinh nghiệm`
-                              : 'Mới tốt nghiệp / Fresher')}
+                          {candidate.experienceYears == null
+                            ? t('employer.searchCvTab.experienceUnknown')
+                            : t('employer.searchCvTab.experienceValue', { count: Math.round(candidate.experienceYears * 10) / 10 })}
                         </span>
                       </div>
                     </div>

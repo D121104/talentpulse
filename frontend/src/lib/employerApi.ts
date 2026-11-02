@@ -200,7 +200,7 @@ export interface CandidatePublicItem {
   title: string;
   skills: string[];
   location: string;
-  experienceYears?: number;
+  experienceYears?: number | null;
   experiencePlacesCount?: number;
   experienceSummary?: string;
   companyMatchScore?: number;
@@ -663,6 +663,11 @@ export const employerApi = {
       keyword?: string;
       skills?: string;
       location?: string;
+      education?: string;
+      minExperienceYears?: number;
+      maxExperienceYears?: number;
+      minExpectedSalary?: number;
+      maxExpectedSalary?: number;
       current?: number;
       pageSize?: number;
     },
@@ -672,6 +677,10 @@ export const employerApi = {
     if (query.keyword) qs.append("keyword", query.keyword);
     if (query.skills) qs.append("skills", query.skills);
     if (query.location) qs.append("location", query.location);
+    if (query.education) qs.append("education", query.education);
+    for (const key of ['minExperienceYears', 'maxExperienceYears', 'minExpectedSalary', 'maxExpectedSalary'] as const) {
+      if (query[key] !== undefined) qs.append(key, String(query[key]));
+    }
     if (query.current) qs.append("current", String(query.current));
     if (query.pageSize) qs.append("pageSize", String(query.pageSize));
     return apiRequest<{ meta: any; result: CandidatePublicItem[] }>(
