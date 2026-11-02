@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Repository } from 'typeorm';
+import { ApplicationStatus } from 'src/applications/entities/application.entity';
 import {
   CVMatchResult,
   CVProcessingStatus,
@@ -127,7 +128,24 @@ export class CVProcessingService {
       .andWhere('result.contentHash = cv.contentHash')
       .andWhere('(cv.isDeleted = false OR cv.isDeleted IS NULL)')
       .andWhere('cv.deletedAt IS NULL')
+      .andWhere('application.aiRankingConsentGranted = true')
+      .andWhere('application.aiRankingConsentVersion IS NOT NULL')
+      .andWhere('application.aiRankingConsentPolicyHash IS NOT NULL')
+      .andWhere('application.aiRankingConsentAt IS NOT NULL')
+      .andWhere('application.isDeleted = false')
+      .andWhere('application.deletedAt IS NULL')
+      .andWhere('application.status IN (:...eligibleStatuses)', {
+        eligibleStatuses: [
+          ApplicationStatus.PENDING,
+          ApplicationStatus.REVIEWING,
+          ApplicationStatus.CONSIDERING,
+          ApplicationStatus.APPROVED,
+        ],
+      })
+      .andWhere('user.isDeleted = false')
+      .andWhere('user.deletedAt IS NULL')
       .orderBy('result.matchScore', 'DESC')
+      .addOrderBy('result._id', 'ASC')
       .take(topN)
       .getMany();
   }

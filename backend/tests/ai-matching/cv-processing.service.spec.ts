@@ -52,6 +52,7 @@ it('returns only completed matches fresh for the current job and CV versions', a
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
     getMany: jest.fn().mockResolvedValue([]),
   };
@@ -69,4 +70,21 @@ it('returns only completed matches fresh for the current job and CV versions', a
   expect(queryBuilder.andWhere).toHaveBeenCalledWith(
     'result.contentHash = cv.contentHash',
   );
+  for (const predicate of [
+    'application.aiRankingConsentGranted = true',
+    'application.aiRankingConsentVersion IS NOT NULL',
+    'application.aiRankingConsentPolicyHash IS NOT NULL',
+    'application.aiRankingConsentAt IS NOT NULL',
+    'application.isDeleted = false',
+    'application.deletedAt IS NULL',
+    'user.isDeleted = false',
+    'user.deletedAt IS NULL',
+  ]) {
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(predicate);
+  }
+  expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+    'application.status IN (:...eligibleStatuses)',
+    { eligibleStatuses: ['PENDING', 'REVIEWING', 'CONSIDERING', 'APPROVED'] },
+  );
+  expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('result._id', 'ASC');
 });

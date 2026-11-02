@@ -536,6 +536,8 @@ export const en = {
       deleteConfirm: 'Are you sure you want to delete this job posting?',
     },
     candidatesTab: {
+      aiAnalysisLocked: 'Detailed AI analysis requires HR Premium. Your overall match score is still available.',
+      aiNoMatchedSkills: 'No matched skills were identified.',
       title: 'Candidate & CV Management',
       subtitle: 'Review candidates, assess AI match scores, send results, and export reports',
       filterJobLabel: 'Filter by Job:',
@@ -581,6 +583,10 @@ export const en = {
       aiMatchedSkills: 'Matched Skills',
     },
     searchCvTab: {
+      advancedLocked: 'Skills and location filters require HR Premium. You can still browse and search by keyword.',
+      upgradeAdvanced: 'Upgrade to HR Premium',
+      entitlementsLoading: 'Checking access to advanced filters. Keyword search is available.',
+      entitlementsFailed: 'Could not check access to advanced filters. Keyword search is still available. Reload to try again.',
       title: 'Smart CV Discovery & Candidate Search',
       subtitle: 'Search and filter candidates by skills, education, and location across the talent database',
       targetJobLabel: 'Target recruitment campaign',

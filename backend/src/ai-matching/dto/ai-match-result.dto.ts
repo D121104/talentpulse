@@ -11,6 +11,7 @@ export interface ICandidateMatchResult {
   matchedSkills: string[];
   missingSkills: string[];
   shortExplanation: string;
+  analysisAvailable: boolean;
   applicationStatus: string;
   appliedAt: string;
 }
@@ -21,4 +22,11 @@ export interface IAIRankingResponse {
   totalApplications: number;
   rankedCandidates: ICandidateMatchResult[];
   processedAt: string;
+  processingStatus?: {
+    total: number;
+    completed: number;
+    processing: number;
+    pending: number;
+    failed: number;
+  };
 }

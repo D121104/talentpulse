@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { userApi, type UserEntitlementsResult } from '../../../lib/userApi';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -42,6 +44,28 @@ export function CVSearchTab({
   onNavigateTab,
 }: CVSearchTabProps) {
   const { success, error } = useToast();
+  const { t } = useTranslation();
+  const [entitlementState, setEntitlementState] = useState<{
+    token: string;
+    limits: UserEntitlementsResult['limits'];
+  } | null>(null);
+  const [entitlementsFailed, setEntitlementsFailed] = useState(false);
+  const canUseAdvancedSearch = entitlementState?.token === accessToken &&
+    entitlementState?.limits.canUseAdvancedCandidateSearch === true;
+
+  useEffect(() => {
+    let cancelled = false;
+    setEntitlementState(null);
+    setEntitlementsFailed(false);
+    if (accessToken && hasCompany) {
+      void userApi.getMyEntitlements(accessToken).then((result) => {
+        if (!cancelled) setEntitlementState({ token: accessToken, limits: result.limits });
+      }).catch(() => {
+        if (!cancelled) setEntitlementsFailed(true);
+      });
+    }
+    return () => { cancelled = true; };
+  }, [accessToken, hasCompany]);
 
   // Search filter criteria
   const [searchCriteria, setSearchCriteria] = useState({
@@ -89,8 +113,10 @@ export function CVSearchTab({
       const res = await employerApi.searchCandidatesGlobal(
         {
           keyword: searchCriteria.keyword.trim() || undefined,
-          skills: searchCriteria.skills.trim() || undefined,
-          location: searchCriteria.location.trim() || undefined,
+          ...(canUseAdvancedSearch ? {
+            skills: searchCriteria.skills.trim() || undefined,
+            location: searchCriteria.location.trim() || undefined,
+          } : {}),
           current: pageNum,
           pageSize: 12,
         },
@@ -290,6 +316,8 @@ export function CVSearchTab({
               <input
                 type="text"
                 value={searchCriteria.skills}
+                disabled={!canUseAdvancedSearch}
+                aria-describedby="advanced-search-status"
                 onChange={(e) => setSearchCriteria({ ...searchCriteria, skills: e.target.value })}
                 placeholder="Ví dụ: React, Java, NodeJS, UI/UX..."
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:bg-white focus:outline-none dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-white dark:placeholder:text-slate-500 dark:focus:bg-slate-800 dark:focus:border-primary transition-colors"
@@ -306,6 +334,8 @@ export function CVSearchTab({
                 <input
                   type="text"
                   value={searchCriteria.location}
+                  disabled={!canUseAdvancedSearch}
+                  aria-describedby="advanced-search-status"
                   onChange={(e) => setSearchCriteria({ ...searchCriteria, location: e.target.value })}
                   placeholder="Ví dụ: Hà Nội, TP.HCM, Đà Nẵng..."
                   className="w-full rounded-2xl border border-slate-200 bg-slate-50/70 pl-10 pr-3.5 py-2.5 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:bg-white focus:outline-none dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-white dark:placeholder:text-slate-500 dark:focus:bg-slate-800 dark:focus:border-primary transition-colors"
@@ -314,6 +344,16 @@ export function CVSearchTab({
             </div>
           </div>
 
+          {!canUseAdvancedSearch && (
+            <div id="advanced-search-status" role="status" className="text-xs text-slate-600 dark:text-slate-300">
+              <p>{t(entitlementsFailed ? 'employer.searchCvTab.entitlementsFailed' : entitlementState?.token === accessToken ? 'employer.searchCvTab.advancedLocked' : 'employer.searchCvTab.entitlementsLoading')}</p>
+              {entitlementState?.token === accessToken && (
+                <button type="button" onClick={() => onNavigateTab('premium')} className="mt-2 font-bold text-primary underline">
+                  {t('employer.searchCvTab.upgradeAdvanced')}
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"

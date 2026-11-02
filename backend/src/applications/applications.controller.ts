@@ -8,6 +8,8 @@ import {
   Delete,
   UseGuards,
   Query,
+  DefaultValuePipe,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { ApplicationsService } from './applications.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
@@ -89,11 +91,10 @@ export class ApplicationsController {
   @ResponseMessage('Xếp hạng ứng viên bằng AI')
   getAIRankedCandidates(
     @Param('jobId') jobId: string,
-    @Query('topN') topN: string,
+    @Query('topN', new DefaultValuePipe(10), ParseIntPipe) topN: number,
     @User() user: IUser,
   ) {
-    const limit = topN ? parseInt(topN, 10) : 10;
-    return this.applicationsService.getAIRankedCandidates(jobId, limit, user);
+    return this.applicationsService.getAIRankedCandidates(jobId, topN, user);
   }
 
   @UseGuards(JwtAuthGuard)

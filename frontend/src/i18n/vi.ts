@@ -535,6 +535,8 @@ export const vi = {
       deleteConfirm: 'Bạn có chắc muốn xóa tin tuyển dụng này?',
     },
     candidatesTab: {
+      aiAnalysisLocked: 'Phân tích AI chi tiết dành cho HR Premium. Bạn vẫn có thể xem điểm phù hợp tổng thể.',
+      aiNoMatchedSkills: 'Chưa xác định được kỹ năng đáp ứng.',
       title: 'Quản lý hồ sơ CV & Ứng viên',
       subtitle: 'Xem xét ứng viên, đánh giá mức độ phù hợp AI, gửi thông báo kết quả và xuất báo cáo',
       filterJobLabel: 'Lọc theo vị trí:',
@@ -580,6 +582,10 @@ export const vi = {
       aiMatchedSkills: 'Kỹ năng đáp ứng',
     },
     searchCvTab: {
+      advancedLocked: 'Bộ lọc kỹ năng và khu vực dành cho HR Premium. Bạn vẫn có thể xem hồ sơ và tìm theo từ khóa.',
+      upgradeAdvanced: 'Nâng cấp HR Premium',
+      entitlementsLoading: 'Đang kiểm tra quyền dùng bộ lọc nâng cao. Bạn vẫn có thể tìm theo từ khóa.',
+      entitlementsFailed: 'Không thể kiểm tra quyền dùng bộ lọc nâng cao. Bạn vẫn có thể tìm theo từ khóa. Tải lại trang để thử lại.',
       title: 'Tìm kiếm & Lọc hồ sơ CV ứng viên',
       subtitle: 'Tìm kiếm ứng viên theo nội dung kỹ năng, bằng cấp, địa điểm trong kho hồ sơ tuyển dụng',
       targetJobLabel: 'Tìm kiếm ứng viên cho vị trí tuyển dụng',

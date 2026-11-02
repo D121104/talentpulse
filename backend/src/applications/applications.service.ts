@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -842,12 +843,19 @@ export class ApplicationsService implements OnModuleInit {
     topN = 10,
     user: IUser,
   ): Promise<IAIRankingResponse> {
+    if (!Number.isInteger(topN) || topN < 1) {
+      throw new BadRequestException('topN must be a positive integer');
+    }
+    const entitlements = await this.usersService.getUserEntitlements(user._id);
+    if (!entitlements.limits.canViewAiRanking) {
+      throw new ForbiddenException('Bạn không có quyền xem xếp hạng AI');
+    }
     const job = await this.jobsService.findOneForInternal(jobId);
     if (!job) {
       throw new NotFoundException('Công việc không tồn tại');
     }
 
-    if (user.role === Role.HR) {
+    if (entitlements.role === Role.HR) {
       const userInfo = await this.usersService.findOne(user._id);
       if (
         !userInfo.company ||
@@ -894,7 +902,7 @@ export class ApplicationsService implements OnModuleInit {
     );
 
     const candidateResults: ICandidateMatchResult[] = rankedResults.map(
-      (result: any) => {
+      (result) => {
         const userInfo = result.user;
         const cvInfo = result.cv;
         const appInfo = result.application;
@@ -909,9 +917,16 @@ export class ApplicationsService implements OnModuleInit {
           cvTitle: cvInfo?.title || 'CV',
           cvUrl: cvInfo?.url || '',
           matchScore: result.matchScore,
-          matchedSkills: result.matchedSkills || [],
-          missingSkills: result.missingSkills || [],
-          shortExplanation: result.explanation || '',
+          matchedSkills: entitlements.limits.canViewCandidateAiAnalysis
+            ? result.matchedSkills || []
+            : [],
+          missingSkills: entitlements.limits.canViewCandidateAiAnalysis
+            ? result.missingSkills || []
+            : [],
+          shortExplanation: entitlements.limits.canViewCandidateAiAnalysis
+            ? result.explanation || ''
+            : '',
+          analysisAvailable: entitlements.limits.canViewCandidateAiAnalysis,
           applicationStatus: appInfo?.status || 'PENDING',
           appliedAt: appInfo?.createdAt
             ? new Date(appInfo.createdAt).toISOString()
@@ -931,7 +946,7 @@ export class ApplicationsService implements OnModuleInit {
       rankedCandidates: candidateResults,
       processedAt: new Date().toISOString(),
       processingStatus,
-    } as IAIRankingResponse;
+    };
   }
 
   /**
@@ -947,12 +962,16 @@ export class ApplicationsService implements OnModuleInit {
     },
     user: IUser,
   ) {
+    const entitlements = await this.usersService.getUserEntitlements(user._id);
+    if (!entitlements.limits.canUseAdvancedCandidateSearch) {
+      throw new ForbiddenException('Tìm kiếm CV nâng cao yêu cầu HR Premium');
+    }
     const job = await this.jobsService.findOneForInternal(jobId);
     if (!job) {
       throw new NotFoundException('Công việc không tồn tại');
     }
 
-    if (user.role === Role.HR) {
+    if (entitlements.role === Role.HR) {
       const userInfo = await this.usersService.findOne(user._id);
       if (
         !userInfo.company ||

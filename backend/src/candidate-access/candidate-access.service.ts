@@ -604,6 +604,16 @@ export class CandidateAccessService {
     const keyword = dto.keyword?.trim() || '';
     const skillsKeyword = dto.skills?.trim() || '';
     const locationKeyword = dto.location?.trim() || '';
+    if (skillsKeyword || locationKeyword) {
+      const entitlements = await this.usersService.getUserEntitlements(
+        hrUser._id,
+      );
+      if (!entitlements.limits.canUseAdvancedCandidateSearch) {
+        throw new ForbiddenException(
+          'Tìm kiếm ứng viên nâng cao yêu cầu HR Premium',
+        );
+      }
+    }
     const current = Math.max(1, Number(dto.current) || 1);
     const pageSize = Math.max(1, Math.min(50, Number(dto.pageSize) || 20));
 

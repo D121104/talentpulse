@@ -776,9 +776,6 @@ export class UsersService {
         where: { _id: userIdOrUser._id, isDeleted: false },
       });
     }
-    if (!user) {
-      user = userIdOrUser;
-    }
 
     const isPremium = this.isUserPremium(user);
     const isHr = this.isHrPremium(user);
@@ -810,6 +807,14 @@ export class UsersService {
           }
         : null,
       limits: {
+        canViewAiRanking: user?.role === Role.HR || user?.role === Role.ADMIN,
+        canExportAiScores: user?.role === Role.HR || user?.role === Role.ADMIN,
+        canUseAdvancedCandidateSearch:
+          (user?.role === Role.HR || user?.role === Role.ADMIN) && isHr,
+        canUseAutomaticCandidateMatching:
+          (user?.role === Role.HR || user?.role === Role.ADMIN) && isHr,
+        canViewCandidateAiAnalysis:
+          (user?.role === Role.HR || user?.role === Role.ADMIN) && isHr,
         hotJobLimit,
         candidateSearchLimit,
         maxActiveJobs,

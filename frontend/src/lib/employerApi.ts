@@ -181,6 +181,7 @@ export interface AIRankedCandidate {
   cvTitle: string;
   cvUrl: string;
   matchScore: number;
+  analysisAvailable: boolean;
   matchedSkills: string[];
   missingSkills: string[];
   shortExplanation: string;
@@ -547,6 +548,13 @@ export const employerApi = {
       jobName: string;
       totalApplications: number;
       rankedCandidates: AIRankedCandidate[];
+      processingStatus?: {
+        total: number;
+        completed: number;
+        processing: number;
+        pending: number;
+        failed: number;
+      };
       processedAt: string;
     }>(`/applications/by-job/${jobId}/ai-rank?topN=${topN}`, { accessToken }),
 

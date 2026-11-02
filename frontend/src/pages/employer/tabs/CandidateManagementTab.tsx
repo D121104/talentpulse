@@ -784,13 +784,19 @@ export function CandidateManagementTab({
                       </div>
 
                       {/* Explanation & Skills */}
-                      {candidate.shortExplanation && (
+                      {candidate.analysisAvailable && candidate.shortExplanation && (
                         <p className="text-xs text-slate-600 dark:text-slate-300 italic bg-white/70 dark:bg-slate-900/50 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
                           &ldquo;{candidate.shortExplanation}&rdquo;
                         </p>
                       )}
 
-                      <div className="flex flex-wrap gap-1">
+                      {!candidate.analysisAvailable ? (
+                        <div className="text-xs text-slate-600 dark:text-slate-300">
+                          <p>{t('employer.candidatesTab.aiAnalysisLocked')}</p>
+                          {onNavigateTab && <button type="button" onClick={() => { setIsAiRankModalOpen(false); onNavigateTab('premium'); }} className="mt-2 font-bold text-primary underline">{t('employer.searchCvTab.upgradeAdvanced')}</button>}
+                        </div>
+                      ) : <div className="flex flex-wrap gap-1">
+                        {candidate.matchedSkills.length === 0 && <p className="text-xs text-slate-500">{t('employer.candidatesTab.aiNoMatchedSkills')}</p>}
                         {candidate.matchedSkills.map((sk) => (
                           <span
                             key={sk}
@@ -799,7 +805,7 @@ export function CandidateManagementTab({
                             +{sk}
                           </span>
                         ))}
-                      </div>
+                      </div>}
                     </div>
                   ))}
                 </div>
@@ -916,4 +922,3 @@ export function CandidateManagementTab({
     </div>
   );
 }
-
