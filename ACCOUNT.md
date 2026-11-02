@@ -68,20 +68,24 @@ npm run seed:admin
 
 ## 💎 3. DANH SÁCH GÓI PREMIUM ĐÃ SEED TRONG DATABASE & ÁNH XẠ
 
-Tất cả các gói được lưu động tại bảng `premium_packages` và ánh xạ trực tiếp qua `user.premiumPackageId` & `user.aiQuotaRemaining`:
+Các gói được lưu tại bảng `premium_packages`; gói Premium của tài khoản được liên kết qua `user.premiumPackageId`. Subscription không sử dụng credit hoặc số dư AI theo gói.
 
-| STT | Mã gói (`code`) | Tên hiển thị | Đối tượng | Thời hạn | Giá niêm yết | AI Quota | Đặc quyền nổi bật |
+Giới hạn chatbot được cấu hình riêng cho từng gói bằng `chatbotDailyLimit`: số nguyên dương là số request tối đa mỗi ngày, `0` là không cho phép request, `null` là không giới hạn. Ngày sử dụng được tính theo UTC+7. Quản trị viên có thể chỉnh sửa giới hạn này cùng `hotJobLimit` và `candidateSearchLimit` trong quản lý gói.
+
+Gói `FREE_DEFAULT` được seed với 10 request chatbot/ngày. Ứng viên có Candidate Premium còn hạn dùng giới hạn của gói được liên kết; khi hết hạn, áp dụng gói Free. Các giá trị dưới đây là cấu hình seed, không phải giới hạn cố định trong code. Tài khoản HR không được dùng chatbot ứng viên. Nếu thiếu gói hoặc cấu hình chatbot không hợp lệ, API trả lỗi `CHATBOT_PACKAGE_CONFIGURATION_REQUIRED`, không tự đặt giới hạn mặc định.
+
+| STT | Mã gói (`code`) | Tên hiển thị | Đối tượng | Thời hạn | Giá niêm yết | Chatbot/ngày (seed) | Đặc quyền nổi bật |
 | :-: | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | `CANDIDATE_MONTHLY` | Candidate Premium (1 Tháng) | Ứng viên | 30 ngày | 49.000đ | 50 lượt | Đẩy top hồ sơ, không giới hạn CV, huy hiệu VIP |
-| 2 | `CANDIDATE_SEMI_ANNUAL` | Candidate Premium (6 Tháng) | Ứng viên | 180 ngày | 249.000đ | 200 lượt | Toàn bộ quyền lợi gói tháng, ưu tiên kết nối NTD |
-| 3 | `CANDIDATE_ANNUAL` | Candidate Premium (1 Năm) | Ứng viên | 365 ngày | 399.000đ | 500 lượt | Gói trọn gói 1 năm, tối ưu CV bởi AI |
-| 4 | `HR_MONTHLY` | HR Premium Enterprise (1 Tháng) | Nhà tuyển dụng | 30 ngày | 299.000đ | 100 lượt | Đăng tin ko giới hạn, 3 tin HOT, tìm 50 CV/ngày |
-| 5 | `HR_SEMI_ANNUAL` | HR Premium Enterprise (6 Tháng) | Nhà tuyển dụng | 180 ngày | 1.490.000đ | 500 lượt | Đăng tin ko giới hạn, 5 tin HOT, tìm 100 CV/ngày |
-| 6 | `HR_ANNUAL` | HR Premium Enterprise (1 Năm) | Nhà tuyển dụng | 365 ngày | 2.390.000đ | 1500 lượt | Đăng tin ko giới hạn, 10 tin HOT, không giới hạn mở khóa CV (999.999 CV/ngày) |
+| 1 | `CANDIDATE_MONTHLY` | Candidate Premium (1 Tháng) | Ứng viên | 30 ngày | 49.000đ | Không giới hạn (`null`) | Đẩy top hồ sơ, không giới hạn CV, huy hiệu VIP |
+| 2 | `CANDIDATE_SEMI_ANNUAL` | Candidate Premium (6 Tháng) | Ứng viên | 180 ngày | 249.000đ | Không giới hạn (`null`) | Toàn bộ quyền lợi gói tháng, ưu tiên kết nối NTD |
+| 3 | `CANDIDATE_ANNUAL` | Candidate Premium (1 Năm) | Ứng viên | 365 ngày | 399.000đ | Không giới hạn (`null`) | Gói trọn gói 1 năm, tối ưu CV bởi AI |
+| 4 | `HR_MONTHLY` | HR Premium Enterprise (1 Tháng) | Nhà tuyển dụng | 30 ngày | 299.000đ | Không áp dụng (`0`) | Đăng tin ko giới hạn, 3 tin HOT, tìm 50 CV/ngày |
+| 5 | `HR_SEMI_ANNUAL` | HR Premium Enterprise (6 Tháng) | Nhà tuyển dụng | 180 ngày | 1.490.000đ | Không áp dụng (`0`) | Đăng tin ko giới hạn, 5 tin HOT, tìm 100 CV/ngày |
+| 6 | `HR_ANNUAL` | HR Premium Enterprise (1 Năm) | Nhà tuyển dụng | 365 ngày | 2.390.000đ | Không áp dụng (`0`) | Đăng tin ko giới hạn, 10 tin HOT, không giới hạn mở khóa CV (999.999 CV/ngày) |
 
 ### 🔗 Trạng thái gán gói cho các tài khoản mẫu:
-- **HR Trưởng (`hr@talentpulse.com`)**: Gán gói `HR_ANNUAL` (`006e93d6-458a-4752-bd92-a86ec809fdad`), AI Quota: 1500, Hot Jobs: 10, Tìm CV: Không giới hạn.
-- **9 Ứng viên Premium** (`candidate.premium@talentpulse.com`, `long.le.frontend@...`, `minhanh.tran.backend@...`, `hoangnam.bds@...`, `bichngoc.salesb2b@...`, `maihuong.ketoan@...`, `thaonhi.uiux@...`, `thanhhuyen.hr@...`, `quochuy.marketing@...`): Gán gói `CANDIDATE_ANNUAL` (`0b57ca60-6f9c-4a00-b9ac-de5bc5db38f3`), AI Quota: 500.
+- **HR Trưởng (`hr@talentpulse.com`)**: Gán gói `HR_ANNUAL` (`006e93d6-458a-4752-bd92-a86ec809fdad`), không dùng chatbot ứng viên, Hot Jobs: 10, Tìm CV: Không giới hạn.
+- **9 Ứng viên Premium** (`candidate.premium@talentpulse.com`, `long.le.frontend@...`, `minhanh.tran.backend@...`, `hoangnam.bds@...`, `bichngoc.salesb2b@...`, `maihuong.ketoan@...`, `thaonhi.uiux@...`, `thanhhuyen.hr@...`, `quochuy.marketing@...`): Gán gói `CANDIDATE_ANNUAL` (`0b57ca60-6f9c-4a00-b9ac-de5bc5db38f3`), chatbot không giới hạn theo cấu hình seed khi gói còn hạn.
 
 ---
 
