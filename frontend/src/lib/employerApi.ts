@@ -42,7 +42,7 @@ export interface HrDashboardStats {
     maxDailyJobs: number;
     hotJobLimit?: number;
     candidateSearchLimit?: number;
-    aiQuota?: number;
+    chatbotDailyLimit?: number | null;
     packageName?: string;
     totalApplications: number;
     pendingApplications: number;

@@ -6,6 +6,8 @@ import { Role } from 'src/decorator/customize';
 import { PremiumPlan } from 'src/users/entities/user.entity';
 import { AiChatQuotaLedger } from './entities/ai-chat-quota-ledger.entity';
 import { AiQuotaReservationStatus } from './candidate-assistant.types';
+import { PremiumPackage } from 'src/payments/entities/premium-package.entity';
+import { isUUID } from 'class-validator';
 
 export interface AiQuotaReservation {
   id: string;
@@ -132,7 +134,43 @@ export class CandidateAssistantQuotaService {
       user.premiumPlan === PremiumPlan.CANDIDATE_PREMIUM &&
       user.premiumExpiresAt instanceof Date &&
       user.premiumExpiresAt.getTime() > now.getTime();
-    return premiumActive ? 100 : 10;
+    if (premiumActive && !isUUID(user.premiumPackageId || '')) {
+      throw new HttpException(
+        {
+          code: 'CHATBOT_PACKAGE_CONFIGURATION_REQUIRED',
+          message: 'Chatbot package policy requires administrator repair',
+        },
+        409,
+      );
+    }
+    const pkg = await this.dataSource.getRepository(PremiumPackage).findOne({
+      where: premiumActive
+        ? {
+            _id:
+              user.premiumPackageId || '00000000-0000-0000-0000-000000000000',
+            planType: PremiumPlan.CANDIDATE_PREMIUM,
+          }
+        : {
+            code: 'FREE_DEFAULT',
+            planType: PremiumPlan.FREE,
+            isDeleted: false,
+          },
+      withDeleted: premiumActive,
+    });
+    if (
+      !pkg ||
+      (pkg.chatbotDailyLimit !== null &&
+        (!Number.isInteger(pkg.chatbotDailyLimit) || pkg.chatbotDailyLimit < 0))
+    ) {
+      throw new HttpException(
+        {
+          code: 'CHATBOT_PACKAGE_CONFIGURATION_REQUIRED',
+          message: 'Chatbot package policy requires administrator repair',
+        },
+        409,
+      );
+    }
+    return pkg.chatbotDailyLimit;
   }
 
   private async update(

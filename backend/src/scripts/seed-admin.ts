@@ -63,7 +63,26 @@ async function runSeedAdmin() {
 
   // Seed default packages if empty
   const packageCount = await packageRepo.count({ where: { isDeleted: false } });
-  if (packageCount === 0) {
+  const free = await packageRepo.findOne({
+    where: { code: 'FREE_DEFAULT' },
+    withDeleted: true,
+  });
+  if (!free) {
+    await packageRepo.save(
+      packageRepo.create({
+        code: 'FREE_DEFAULT',
+        planType: PremiumPlan.FREE,
+        billingCycle: PaymentBillingCycle.MONTHLY,
+        name: 'Free',
+        price: 0,
+        durationDays: 30,
+        chatbotDailyLimit: 10,
+        features: [],
+        isActive: true,
+      }),
+    );
+  }
+  if (packageCount === (free && !free.isDeleted ? 1 : 0)) {
     console.log('Đang khởi tạo các gói Premium mặc định...');
     const defaultPackages: Partial<PremiumPackage>[] = [
       {
@@ -75,14 +94,14 @@ async function runSeedAdmin() {
         price: 49000,
         originalPrice: 49000,
         durationDays: 30,
-        aiQuota: 50,
+        chatbotDailyLimit: null,
         badge: null,
         features: [
           'Không giới hạn tạo và tải CV chất lượng cao',
           'Đẩy Top hồ sơ 24h mỗi ngày',
           'Xem danh sách NTD đã ghé thăm hồ sơ',
           'Huy hiệu Candidate Premium VIP nổi bật',
-          'AI Career Assistant: 50 lượt phân tích/tháng',
+          'AI Career Assistant theo hạn mức của gói',
         ],
         hotJobLimit: 0,
         candidateSearchLimit: 0,
@@ -98,13 +117,13 @@ async function runSeedAdmin() {
         price: 249000,
         originalPrice: 294000,
         durationDays: 180,
-        aiQuota: 200,
+        chatbotDailyLimit: null,
         badge: 'Tiết kiệm 15%',
         features: [
           'Toàn bộ quyền lợi gói Tháng',
           'Đẩy Top hồ sơ mỗi ngày',
           'Ưu tiên kết nối với chuyên viên tuyển dụng',
-          'AI Career Assistant: 200 lượt phân tích',
+          'AI Career Assistant theo hạn mức của gói',
         ],
         hotJobLimit: 0,
         candidateSearchLimit: 0,
@@ -120,13 +139,13 @@ async function runSeedAdmin() {
         price: 399000,
         originalPrice: 588000,
         durationDays: 365,
-        aiQuota: 500,
+        chatbotDailyLimit: null,
         badge: 'Khuyên Dùng - Phổ Biến Nhất',
         features: [
           'Toàn bộ quyền lợi gói 6 Tháng',
           'Đẩy Top hồ sơ 365 ngày',
           'Tối ưu CV bởi chuyên gia AI',
-          'AI Career Assistant: 500 lượt phân tích',
+          'AI Career Assistant theo hạn mức của gói',
         ],
         hotJobLimit: 0,
         candidateSearchLimit: 0,
@@ -142,7 +161,7 @@ async function runSeedAdmin() {
         price: 299000,
         originalPrice: 299000,
         durationDays: 30,
-        aiQuota: 100,
+        chatbotDailyLimit: 0,
         badge: null,
         features: [
           'Đăng tin tuyển dụng không giới hạn',
@@ -165,14 +184,14 @@ async function runSeedAdmin() {
         price: 1490000,
         originalPrice: 1794000,
         durationDays: 180,
-        aiQuota: 500,
+        chatbotDailyLimit: 0,
         badge: 'Tiết kiệm 17%',
         features: [
           'Đăng tin tuyển dụng không giới hạn',
           'Gắn nhãn HOT JOB cho 5 vị trí',
           'Mở khóa tìm kiếm 100 CV ứng viên/ngày',
           'Ưu tiên hiển thị tin tuyển dụng đầu trang tìm kiếm',
-          'AI Matching: 500 lượt phân tích',
+          'AI Matching phân tích độ phù hợp ứng viên',
         ],
         hotJobLimit: 5,
         candidateSearchLimit: 100,
@@ -189,14 +208,14 @@ async function runSeedAdmin() {
         price: 2390000,
         originalPrice: 3588000,
         durationDays: 365,
-        aiQuota: 1500,
+        chatbotDailyLimit: 0,
         badge: 'Lựa Chọn Hàng Đầu Của HR Pro',
         features: [
           'Đăng tin tuyển dụng không giới hạn 365 ngày',
           'Gắn nhãn HOT JOB cho 10 vị trí',
           'Không giới hạn mở khóa tìm kiếm CV ứng viên',
           'Tài khoản chuyên biệt chăm sóc 24/7',
-          'AI Sourcing & Matching: 1500 lượt phân tích',
+          'AI Sourcing & Matching hỗ trợ tuyển dụng',
         ],
         hotJobLimit: 10,
         candidateSearchLimit: 999999,

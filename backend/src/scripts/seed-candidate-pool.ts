@@ -984,7 +984,6 @@ async function runSeed() {
     isPremium: true,
     premiumPlan: PremiumPlan.HR_PREMIUM,
     premiumPackageId: hrPackage ? hrPackage._id : null,
-    aiQuotaRemaining: hrPackage ? hrPackage.aiQuota : 1500,
     premiumExpiresAt: oneYearLater,
     company: { _id: compTech._id, name: compTech.name, isActive: true },
   };
@@ -1333,7 +1332,6 @@ async function runSeed() {
         ? PremiumPlan.CANDIDATE_PREMIUM
         : PremiumPlan.FREE,
       premiumPackageId: cand.isPremium && candPackage ? candPackage._id : null,
-      aiQuotaRemaining: cand.isPremium && candPackage ? candPackage.aiQuota : 0,
       premiumExpiresAt: cand.isPremium ? oneYearLater : null,
       boostExpiresAt: cand.isBoosted ? boostExpireDate : null,
       isJobSeeking: true,

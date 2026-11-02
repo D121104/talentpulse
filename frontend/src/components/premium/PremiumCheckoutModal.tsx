@@ -22,6 +22,7 @@ interface PremiumCheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   planInfo: {
+    packageId?: string;
     planType: 'CANDIDATE_PREMIUM' | 'HR_PREMIUM';
     billingCycle: BillingCycle;
     price: number;
@@ -82,9 +83,11 @@ export const PremiumCheckoutModal: React.FC<PremiumCheckoutModalProps> = ({
     }
 
     try {
+      if (!planInfo.packageId) throw new Error('Gói chưa sẵn sàng. Vui lòng tải lại bảng giá.');
       setIsProcessing(true);
 
       const result = await paymentApi.createPaymentOrder(accessToken, {
+        packageId: planInfo.packageId,
         planType: planInfo.planType,
         billingCycle: planInfo.billingCycle,
         vatInvoiceRequested: needVatInvoice,

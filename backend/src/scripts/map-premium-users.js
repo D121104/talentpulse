@@ -8,17 +8,9 @@ async function main() {
 
   console.log('Connected to PostgreSQL database recruitment_db');
 
-  // 1. Ensure columns exist
-  await client.query(`
-    ALTER TABLE "users"
-    ADD COLUMN IF NOT EXISTS "premiumPackageId" character varying,
-    ADD COLUMN IF NOT EXISTS "aiQuotaRemaining" integer DEFAULT 0;
-  `);
-  console.log('Verified users columns: premiumPackageId, aiQuotaRemaining.');
-
   // 2. Fetch packages
   const packagesRes = await client.query(`
-    SELECT "_id", "code", "plan_type", "billing_cycle", "name", "price", "duration_days", "ai_quota", "hot_job_limit", "candidate_search_limit"
+    SELECT "_id", "code", "plan_type", "billing_cycle", "name", "price", "duration_days", "hot_job_limit", "candidate_search_limit"
     FROM "premium_packages"
     WHERE "is_active" = true AND "is_deleted" = false;
   `);
@@ -26,11 +18,11 @@ async function main() {
   console.log(`Found ${packagesRes.rows.length} active packages:`);
   console.table(packagesRes.rows);
 
-  const hrAnnualPkg = packagesRes.rows.find(p => p.code === 'HR_ANNUAL') || packagesRes.rows.find(p => p.plan_type === 'HR_PREMIUM');
-  const candAnnualPkg = packagesRes.rows.find(p => p.code === 'CANDIDATE_ANNUAL') || packagesRes.rows.find(p => p.plan_type === 'CANDIDATE_PREMIUM');
+  const hrAnnualPkg = packagesRes.rows.find(p => p._id === process.env.HR_PACKAGE_ID);
+  const candAnnualPkg = packagesRes.rows.find(p => p._id === process.env.CANDIDATE_PACKAGE_ID);
 
   if (!hrAnnualPkg || !candAnnualPkg) {
-    throw new Error('Could not find HR_ANNUAL or CANDIDATE_ANNUAL packages in database');
+    throw new Error('Explicit HR_PACKAGE_ID and CANDIDATE_PACKAGE_ID are required');
   }
 
   // 3. Find current premium users
@@ -50,12 +42,11 @@ async function main() {
       UPDATE "users"
       SET
         "premiumPackageId" = $1,
-        "aiQuotaRemaining" = $2,
         "updatedAt" = NOW()
-      WHERE "_id" = $3;
-    `, [targetPkg._id, targetPkg.ai_quota, user._id]);
+      WHERE "_id" = $2;
+    `, [targetPkg._id, user._id]);
 
-    console.log(`✓ Mapped ${user.email} (${user.role}) -> Package [${targetPkg.code}] (${targetPkg.name}), Quota: ${targetPkg.ai_quota}`);
+    console.log(`Mapped subscription package [${targetPkg.code}]`);
 
     // If HR, also ensure company is marked premium
     if (isHr && user.company && user.company._id) {
@@ -73,7 +64,7 @@ async function main() {
 
   // 4. Verify results
   const updatedUsersRes = await client.query(`
-    SELECT u."_id", u."email", u."role", u."isPremium", u."premiumPlan", u."premiumPackageId", u."aiQuotaRemaining", p."code" as package_code, p."name" as package_name, p."hot_job_limit", p."candidate_search_limit"
+    SELECT u."_id", u."email", u."role", u."isPremium", u."premiumPlan", u."premiumPackageId", p."code" as package_code, p."name" as package_name, p."hot_job_limit", p."candidate_search_limit"
     FROM "users" u
     LEFT JOIN "premium_packages" p ON u."premiumPackageId"::uuid = p."_id"
     WHERE u."isPremium" = true;

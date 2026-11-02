@@ -648,15 +648,8 @@ export class UsersService {
 
     if (packageId) {
       const pkg = await this.packageRepo.findOne({
-        where: { _id: packageId, isDeleted: false },
-      });
-      if (pkg) return pkg;
-    }
-
-    if (plan && plan !== PremiumPlan.FREE) {
-      const pkg = await this.packageRepo.findOne({
-        where: { planType: plan, isActive: true, isDeleted: false },
-        order: { price: 'DESC' },
+        where: { _id: packageId, planType: plan },
+        withDeleted: true,
       });
       if (pkg) return pkg;
     }
@@ -676,7 +669,7 @@ export class UsersService {
     if (!this.isHrPremium(user)) return 1;
 
     const pkg = await this.getUserPackage(user);
-    if (pkg && typeof pkg.hotJobLimit === 'number' && pkg.hotJobLimit > 0) {
+    if (pkg && typeof pkg.hotJobLimit === 'number' && pkg.hotJobLimit >= 0) {
       return pkg.hotJobLimit;
     }
 
@@ -698,7 +691,7 @@ export class UsersService {
     if (
       pkg &&
       typeof pkg.candidateSearchLimit === 'number' &&
-      pkg.candidateSearchLimit > 0
+      pkg.candidateSearchLimit >= 0
     ) {
       return pkg.candidateSearchLimit;
     }
@@ -813,10 +806,9 @@ export class UsersService {
             features: pkg.features,
             hotJobLimit: pkg.hotJobLimit,
             candidateSearchLimit: pkg.candidateSearchLimit,
-            aiQuota: pkg.aiQuota,
+            chatbotDailyLimit: pkg.chatbotDailyLimit,
           }
         : null,
-      aiQuotaRemaining: user?.aiQuotaRemaining ?? (pkg ? pkg.aiQuota : 0),
       limits: {
         hotJobLimit,
         candidateSearchLimit,
@@ -834,20 +826,43 @@ export class UsersService {
   }
 
   /**
-   * Nâng cấp gói Premium cho người dùng (hỗ trợ liên kết packageId và nạp aiQuota)
+   * Gia hạn gói hiện tại hoặc chuyển sang gói được chỉ định.
    */
   async upgradePremiumPlan(
     userId: string,
     plan: string,
     durationDays: number,
     packageId?: string,
-    aiQuota?: number,
   ): Promise<any> {
     const user = await this.userRepo.findOne({ where: { _id: userId } });
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
+    if (!Number.isInteger(durationDays) || durationDays < 1)
+      throw new BadRequestException('Invalid subscription duration');
+    const resolvedId = packageId || user.premiumPackageId;
+    if (!resolvedId)
+      throw new BadRequestException(
+        'Explicit subscription package is required',
+      );
+    const pkg = await this.packageRepo.findOne({
+      where: {
+        _id: resolvedId,
+        planType: plan as PremiumPlan,
+        ...(packageId ? { isActive: true, isDeleted: false } : {}),
+      },
+      withDeleted: !packageId,
+    });
+    if (
+      !pkg ||
+      pkg.planType === PremiumPlan.FREE ||
+      (user.role === Role.HR && pkg.planType !== PremiumPlan.HR_PREMIUM) ||
+      (user.role === Role.USER &&
+        pkg.planType !== PremiumPlan.CANDIDATE_PREMIUM)
+    ) {
+      throw new BadRequestException('Invalid subscription package association');
+    }
     const now = new Date();
     const currentExpiry =
       user.premiumExpiresAt && new Date(user.premiumExpiresAt) > now
@@ -862,25 +877,7 @@ export class UsersService {
     user.premiumPlan = plan as any;
     user.premiumExpiresAt = newExpiry;
 
-    if (packageId) {
-      user.premiumPackageId = packageId;
-    } else {
-      // Auto resolve package if not provided
-      const resolvedPkg = await this.packageRepo.findOne({
-        where: { planType: plan as any, isActive: true, isDeleted: false },
-        order: { price: 'DESC' },
-      });
-      if (resolvedPkg) {
-        user.premiumPackageId = resolvedPkg._id;
-        if (typeof aiQuota !== 'number') {
-          aiQuota = resolvedPkg.aiQuota;
-        }
-      }
-    }
-
-    if (typeof aiQuota === 'number') {
-      user.aiQuotaRemaining = (user.aiQuotaRemaining || 0) + aiQuota;
-    }
+    user.premiumPackageId = pkg._id;
 
     const savedUser = await this.userRepo.save(user);
 

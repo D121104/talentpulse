@@ -36,6 +36,9 @@ export class PaymentOrder {
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
+  @Column({ name: 'package_id', type: 'uuid', nullable: true })
+  packageId: string | null;
+
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;

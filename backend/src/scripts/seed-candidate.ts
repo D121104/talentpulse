@@ -62,7 +62,6 @@ async function runCandidateSeed() {
     isPremium: true,
     premiumPlan: PremiumPlan.CANDIDATE_PREMIUM,
     premiumPackageId: candPackage ? candPackage._id : null,
-    aiQuotaRemaining: candPackage ? candPackage.aiQuota : 500,
     premiumExpiresAt: oneYearLater,
     isJobSeeking: true,
     isJobRecommendation: true,

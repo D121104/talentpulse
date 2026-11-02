@@ -160,9 +160,8 @@ export interface UserEntitlementsResult {
     features: string[];
     hotJobLimit: number;
     candidateSearchLimit: number;
-    aiQuota: number;
+    chatbotDailyLimit: number | null;
   } | null;
-  aiQuotaRemaining: number;
   limits: {
     hotJobLimit: number;
     candidateSearchLimit: number;

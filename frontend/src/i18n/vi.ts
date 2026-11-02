@@ -1,4 +1,12 @@
 export const vi = {
+  pricingChatbot: {
+    name: 'AI Career Assistant',
+    unlimited: 'Không giới hạn tin nhắn',
+    unavailable: 'Chưa tải được chính sách chatbot',
+    disabled: 'Chatbot đã tắt (0 tin nhắn/ngày)',
+    daily: '{{count}} tin nhắn/ngày',
+    reset: 'Đặt lại lúc 00:00 (UTC+7).',
+  },
   nav: {
     jobs: 'Việc làm',
     companies: 'Công ty',
@@ -641,4 +649,3 @@ export const vi = {
     },
   },
 } as const;
-

@@ -63,9 +63,6 @@ export class User {
   @Column({ nullable: true })
   premiumPackageId: string;
 
-  @Column({ type: 'int', default: 0 })
-  aiQuotaRemaining: number;
-
   @Column({ default: false })
   isVerified: boolean;
 

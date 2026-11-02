@@ -6,11 +6,16 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   Index,
+  Check,
 } from 'typeorm';
 import { PremiumPlan } from '../../users/entities/user.entity';
 import { PaymentBillingCycle } from './payment-order.entity';
 
 @Entity('premium_packages')
+@Check(
+  'CHK_package_chatbot_daily_limit',
+  '"chatbot_daily_limit" IS NULL OR "chatbot_daily_limit" >= 0',
+)
 @Index(['planType', 'billingCycle'])
 @Index(['code'], { unique: true })
 export class PremiumPackage {
@@ -68,8 +73,8 @@ export class PremiumPackage {
   @Column({ name: 'duration_days', type: 'int', default: 30 })
   durationDays: number;
 
-  @Column({ name: 'ai_quota', type: 'int', default: 50 })
-  aiQuota: number;
+  @Column({ name: 'chatbot_daily_limit', type: 'int', nullable: true })
+  chatbotDailyLimit: number | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   badge: string | null;

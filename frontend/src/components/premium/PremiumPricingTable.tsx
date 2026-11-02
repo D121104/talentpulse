@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Check,
   X as CloseIcon,
@@ -19,6 +20,7 @@ interface PremiumPricingTableProps {
   currentPlan?: string;
   isUserPremium?: boolean;
   onSelectPlan: (planInfo: {
+    packageId?: string;
     planType: 'CANDIDATE_PREMIUM' | 'HR_PREMIUM';
     billingCycle: BillingCycle;
     price: number;
@@ -32,6 +34,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
   isUserPremium = false,
   onSelectPlan,
 }) => {
+  const { t } = useTranslation();
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('annual');
   const [packages, setPackages] = useState<AdminPackageItem[]>([]);
   const [_isLoadingPackages, setIsLoadingPackages] = useState(false);
@@ -110,6 +113,16 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
   };
 
   const isCandidate = audience === 'candidate';
+  const freePackage = packages.find(
+    (pkg) => pkg.code === 'FREE_DEFAULT' && pkg.planType === 'FREE',
+  );
+  const formatChatbotLimit = (limit: number | null | undefined) => {
+    if (limit === null) return t('pricingChatbot.unlimited');
+    if (limit === undefined) return t('pricingChatbot.unavailable');
+    if (limit === 0) return t('pricingChatbot.disabled');
+    return t('pricingChatbot.daily', { count: limit });
+  };
+  const freeChatbotLimit = formatChatbotLimit(freePackage?.chatbotDailyLimit);
 
   // Find dynamic packages from DB
   const dynamicCandPkg = packages.find(
@@ -149,7 +162,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
     periodText: candPeriodText,
     discount: candDiscount,
     badge: dynamicCandPkg?.badge || defaultPricingData.candidate.premium.badge,
-    aiQuota: dynamicCandPkg?.aiQuota ?? 20,
+    chatbotDailyLimit: dynamicCandPkg?.chatbotDailyLimit,
     features: dynamicCandPkg?.features,
   };
 
@@ -159,7 +172,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
     periodText: hrPeriodText,
     discount: hrDiscount,
     badge: dynamicHrPkg?.badge || defaultPricingData.hr.premium.badge,
-    aiQuota: dynamicHrPkg?.aiQuota ?? 60,
+    chatbotDailyLimit: dynamicHrPkg?.chatbotDailyLimit,
     features: dynamicHrPkg?.features,
   };
 
@@ -207,6 +220,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
     {
       category: '3. Trí tuệ Nhân tạo & Phân tích cơ hội',
       features: [
+        { name: t('pricingChatbot.name'), free: freeChatbotLimit, verified: freeChatbotLimit, premium: formatChatbotLimit(candPricing.chatbotDailyLimit) },
         { name: 'Chấm điểm CV bằng AI (ATS Score)', free: '1 lần/tháng', verified: '3 lần/tháng', premium: 'Không giới hạn' },
         { name: 'Gợi ý từ khóa tối ưu theo vị trí tuyển', free: false, verified: false, premium: true },
         { name: 'Xem thông tin mức độ cạnh tranh việc làm', free: '3 việc làm', verified: '5 việc làm', premium: 'Không giới hạn việc làm' },
@@ -267,6 +281,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
     if (isCandidate) {
       onSelectPlan({
         planType: 'CANDIDATE_PREMIUM',
+        packageId: dynamicCandPkg?._id,
         billingCycle,
         price: candPricing.price,
         originalPrice: candPricing.original,
@@ -275,6 +290,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
     } else {
       onSelectPlan({
         planType: 'HR_PREMIUM',
+        packageId: dynamicHrPkg?._id,
         billingCycle,
         price: hrPricing.price,
         originalPrice: hrPricing.original,
@@ -362,6 +378,12 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
               </div>
             </div>
             <ul className="space-y-3 text-xs text-slate-600 dark:text-slate-300">
+              {isCandidate && (
+                <li className="flex items-start gap-2">
+                  <Bot className="h-4 w-4 text-slate-500 shrink-0" />
+                  <span>{t('pricingChatbot.name')}: {freeChatbotLimit}</span>
+                </li>
+              )}
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4 text-emerald-500 shrink-0" />
                 <span>{isCandidate ? 'Tạo tối đa 3 CV cơ bản' : 'Đăng tối đa 5 tin tuyển dụng/ngày'}</span>
@@ -487,7 +509,11 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
             <div className="mb-4 flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-500/10 via-indigo-500/10 to-primary/10 border border-violet-500/20 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
               <Bot className="h-4 w-4 text-violet-500 shrink-0" />
               <span>
-                Đã bao gồm <strong>{isCandidate ? candPricing.aiQuota : hrPricing.aiQuota} lượt AI</strong> {isCandidate ? 'chấm điểm & tối ưu CV' : 'sourcing & phân tích ứng viên'}
+                {isCandidate ? (
+                  <>{t('pricingChatbot.name')}: <strong>{formatChatbotLimit(candPricing.chatbotDailyLimit)}</strong>. {typeof candPricing.chatbotDailyLimit === 'number' && candPricing.chatbotDailyLimit > 0 && t('pricingChatbot.reset')}</>
+                ) : (
+                  <>AI sourcing & phân tích ứng viên. Chatbot ứng viên không dành cho tài khoản HR.</>
+                )}
               </span>
             </div>
 
