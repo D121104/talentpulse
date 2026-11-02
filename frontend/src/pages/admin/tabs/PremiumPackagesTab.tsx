@@ -173,7 +173,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
     price: 49000,
     originalPrice: 49000,
     durationDays: 30,
-    aiQuota: 20,
+    chatbotDailyLimit: null,
     badge: '',
     features: [],
     hotJobLimit: 0,
@@ -183,6 +183,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
   });
 
   const filteredPackages = packages.filter((pkg) => {
+    if (pkg.planType === 'FREE') return false;
     if (filterType === 'ALL') return true;
     return pkg.planType === filterType;
   });
@@ -201,7 +202,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
       price: isTargetHR ? 199000 : 49000,
       originalPrice: isTargetHR ? 299000 : 79000,
       durationDays: 30,
-      aiQuota: isTargetHR ? 100 : 30,
+      chatbotDailyLimit: isTargetHR ? 0 : null,
       badge: 'Phổ biến',
       features: isTargetHR
         ? [
@@ -228,7 +229,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
     const isHR = pkg.planType === 'HR_PREMIUM';
     setFormData({
       code: pkg.code,
-      planType: pkg.planType,
+      planType: pkg.planType === 'FREE' ? 'CANDIDATE_PREMIUM' : pkg.planType,
       billingCycle: pkg.billingCycle,
       name: pkg.name,
       description: pkg.description || '',
@@ -238,7 +239,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
           ? Number(pkg.originalPrice)
           : undefined,
       durationDays: Number(pkg.durationDays) || 30,
-      aiQuota: Number(pkg.aiQuota) || 0,
+      chatbotDailyLimit: pkg.chatbotDailyLimit,
       badge: pkg.badge || '',
       features: pkg.features || [],
       hotJobLimit: isHR ? Number(pkg.hotJobLimit || 0) : 0,
@@ -292,7 +293,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
           price: numericPrice,
           originalPrice: numericOriginalPrice,
           durationDays: Number(formData.durationDays) || 30,
-          aiQuota: Number(formData.aiQuota || 0),
+          chatbotDailyLimit: formData.chatbotDailyLimit,
           badge: formData.badge?.trim() || undefined,
           features: formData.features || [],
           hotJobLimit: isHR ? Number(formData.hotJobLimit || 0) : 0,
@@ -311,7 +312,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
           price: numericPrice,
           originalPrice: numericOriginalPrice,
           durationDays: Number(formData.durationDays) || 30,
-          aiQuota: Number(formData.aiQuota || 0),
+          chatbotDailyLimit: formData.chatbotDailyLimit,
           badge: formData.badge?.trim() || undefined,
           features: formData.features || [],
           hotJobLimit: isHR ? Number(formData.hotJobLimit || 0) : 0,
@@ -343,6 +344,23 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
   }
 
   return (
+    <>
+    {packages.filter((pkg) => pkg.code === 'FREE_DEFAULT').map((pkg) => (
+      <section key={pkg._id} className="mb-6 rounded-xl border p-4">
+        <h3>Chính sách Free</h3>
+        <p>Chỉ thay đổi hạn mức chatbot. Không thể xóa, tắt hoặc bán gói Free. 0: tắt; đặt lại lúc 00:00 UTC+7.</p>
+        <form onSubmit={async (e) => {
+          e.preventDefault();
+          const data = new FormData(e.currentTarget);
+          const limit = data.has('unlimited') ? null : Number(data.get('limit'));
+          try { await handleUpdatePackage(pkg._id, { chatbotDailyLimit: limit }); } catch { /* Error is displayed by the update handler. */ }
+        }}>
+          <input aria-label="Hạn mức Free mỗi ngày" name="limit" type="number" min="0" step="1" defaultValue={pkg.chatbotDailyLimit ?? 10} required />
+          <label><input name="unlimited" type="checkbox" defaultChecked={pkg.chatbotDailyLimit === null} /> Không giới hạn</label>
+          <button type="submit">Lưu chính sách Free</button>
+        </form>
+      </section>
+    ))}
     <div className="space-y-8">
       {/* Dynamic Pricing Alert Notification */}
       <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50/80 via-white to-purple-50/80 p-5 dark:border-indigo-900/60 dark:bg-slate-900 shadow-xs">
@@ -500,7 +518,11 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
                   <div className="flex items-center gap-2 rounded-xl bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300 border border-violet-200 dark:border-violet-800/50">
                     <Bot className="h-3.5 w-3.5 text-violet-500 shrink-0" />
                     <span>
-                      AI Quota: <strong>{pkg.aiQuota} lượt</strong> {isHR ? 'sourcing & matching' : 'tư vấn & chấm điểm CV'}
+                      {isHR ? (
+                        <>Chatbot ứng viên không dành cho HR</>
+                      ) : (
+                        <>AI Career Assistant: <strong>{pkg.chatbotDailyLimit === null ? 'Không giới hạn' : `${pkg.chatbotDailyLimit} tin nhắn/ngày`}</strong></>
+                      )}
                     </span>
                   </div>
 
@@ -827,17 +849,18 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        AI Quota (Lượt truy vấn AI) *
+                        Chatbot ứng viên (HR không có quyền truy cập)
                       </label>
                       <input
                         type="number"
                         min="0"
                         required
-                        value={formData.aiQuota ?? ''}
+                        disabled
+                        value={0}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
-                            aiQuota: e.target.value === '' ? ('' as any) : Number(e.target.value),
+                            chatbotDailyLimit: Number(e.target.value),
                           })
                         }
                         placeholder="VD: 500"
@@ -898,22 +921,24 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        AI Quota (Lượt tư vấn &amp; chấm điểm CV) *
+                        Tin nhắn chatbot / ngày (0: tắt)
                       </label>
                       <input
                         type="number"
                         min="0"
                         required
-                        value={formData.aiQuota ?? ''}
+                        disabled={formData.chatbotDailyLimit === null}
+                        value={formData.chatbotDailyLimit ?? ''}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
-                            aiQuota: e.target.value === '' ? ('' as any) : Number(e.target.value),
+                            chatbotDailyLimit: Number(e.target.value),
                           })
                         }
-                        placeholder="VD: 50"
+                        placeholder="Không giới hạn"
                         className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 dark:border-blue-800 dark:bg-slate-800 dark:text-blue-300"
                       />
+                      <label><input type="checkbox" checked={formData.chatbotDailyLimit === null} onChange={(e) => setFormData({ ...formData, chatbotDailyLimit: e.target.checked ? null : 10 })} /> Không giới hạn</label>
                     </div>
                     <div className="flex items-center pt-5 text-xs text-blue-700 dark:text-blue-300">
                       <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mr-1.5" />
@@ -1072,5 +1097,6 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
         </div>
       )}
     </div>
+    </>
   );
 };

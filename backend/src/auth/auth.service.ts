@@ -480,7 +480,6 @@ export class AuthService {
       premiumPlan: user.premiumPlan || 'FREE',
       premiumExpiresAt: user.premiumExpiresAt || undefined,
       premiumPackageId: user.premiumPackageId || undefined,
-      aiQuotaRemaining: user.aiQuotaRemaining ?? 0,
       isVerified: user.isVerified || false,
       verifiedAt: user.verifiedAt || undefined,
       lastBoostedAt: user.lastBoostedAt || undefined,

@@ -72,7 +72,6 @@ async function runSeed() {
       isPremium: true,
       premiumPlan: PremiumPlan.HR_PREMIUM,
       premiumPackageId: hrPackage ? hrPackage._id : null,
-      aiQuotaRemaining: hrPackage ? hrPackage.aiQuota : 1500,
       premiumExpiresAt: oneYearLater,
       createdBy: { _id: 'system', email: 'system@talentpulse.com' },
     });
@@ -87,7 +86,6 @@ async function runSeed() {
     hrUser.isPremium = true;
     hrUser.premiumPlan = PremiumPlan.HR_PREMIUM;
     hrUser.premiumPackageId = hrPackage ? hrPackage._id : null;
-    hrUser.aiQuotaRemaining = hrPackage ? hrPackage.aiQuota : 1500;
     hrUser.premiumExpiresAt = oneYearLater;
     hrUser.avatar =
       'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80';
@@ -504,8 +502,6 @@ async function runSeed() {
           ? PremiumPlan.CANDIDATE_PREMIUM
           : PremiumPlan.FREE,
         premiumPackageId: isCandPremium && candPackage ? candPackage._id : null,
-        aiQuotaRemaining:
-          isCandPremium && candPackage ? candPackage.aiQuota : 0,
         premiumExpiresAt: isCandPremium ? oneYearLater : (null as any),
         createdBy: { _id: 'system', email: 'system@talentpulse.com' },
       });
@@ -517,8 +513,6 @@ async function runSeed() {
         : PremiumPlan.FREE;
       candidateUser.premiumPackageId =
         isCandPremium && candPackage ? candPackage._id : null;
-      candidateUser.aiQuotaRemaining =
-        isCandPremium && candPackage ? candPackage.aiQuota : 0;
       candidateUser.premiumExpiresAt = isCandPremium
         ? oneYearLater
         : (null as any);

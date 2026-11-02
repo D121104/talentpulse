@@ -17,7 +17,6 @@ export interface IUser {
   premiumPlan?: string;
   premiumExpiresAt?: Date;
   premiumPackageId?: string;
-  aiQuotaRemaining?: number;
   isVerified?: boolean;
   verifiedAt?: Date;
   lastBoostedAt?: Date;

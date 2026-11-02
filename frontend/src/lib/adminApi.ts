@@ -3,14 +3,14 @@ import { apiRequest } from './api';
 export interface AdminPackageItem {
   _id: string;
   code: string;
-  planType: 'CANDIDATE_PREMIUM' | 'HR_PREMIUM';
+  planType: 'FREE' | 'CANDIDATE_PREMIUM' | 'HR_PREMIUM';
   billingCycle: 'monthly' | 'semi_annual' | 'annual';
   name: string;
   description: string | null;
   price: number;
   originalPrice: number | null;
   durationDays: number;
-  aiQuota: number;
+  chatbotDailyLimit: number | null;
   badge: string | null;
   features: string[];
   hotJobLimit: number;
@@ -28,7 +28,7 @@ export type CreatePackageInput = Partial<AdminPackageItem> & {
   name: string;
   price: number;
   durationDays: number;
-  aiQuota: number;
+  chatbotDailyLimit: number | null;
 };
 
 export type UpdatePackageInput = Partial<AdminPackageItem>;
@@ -65,6 +65,7 @@ export interface AdminSubscriptionItem {
   role: string;
   companyName: string | null;
   premiumPlan: string;
+  premiumPackageId: string | null;
   isPremium: boolean;
   premiumExpiresAt: string | null;
   daysRemaining: number;
@@ -245,10 +246,10 @@ export const adminApi = {
     return Array.isArray(res) ? res : res?.result ?? [];
   },
 
-  extendSubscription: (accessToken: string, userId: string, days: number, note?: string) => {
+  extendSubscription: (accessToken: string, userId: string, days: number, note?: string, packageId?: string) => {
     return apiRequest<{ message: string }>(`/payments/admin/subscriptions/${userId}/extend`, {
       method: 'POST',
-      body: { days, note },
+      body: { days, note, packageId },
       accessToken,
     });
   },

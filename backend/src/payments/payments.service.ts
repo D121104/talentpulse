@@ -31,13 +31,34 @@ import { PremiumPlan, User } from '../users/entities/user.entity';
 import { Company } from 'src/companies/entities/company.entity';
 import { Role } from '../decorator/customize';
 import { IUser } from '../users/users.interface';
+import {
+  IsEnum,
+  IsOptional,
+  IsUUID,
+  IsBoolean,
+  IsString,
+  isUUID,
+} from 'class-validator';
 
-export interface CreatePaymentOrderDto {
+export class CreatePaymentOrderDto {
+  @IsEnum(PremiumPlan)
   planType: PremiumPlan;
+  @IsEnum(PaymentBillingCycle)
   billingCycle: PaymentBillingCycle;
+  @IsOptional()
+  @IsUUID()
+  packageId?: string;
+  @IsOptional()
+  @IsBoolean()
   vatInvoiceRequested?: boolean;
+  @IsOptional()
+  @IsString()
   vatCompanyName?: string;
+  @IsOptional()
+  @IsString()
   vatTaxCode?: string;
+  @IsOptional()
+  @IsString()
   vatAddress?: string;
 }
 
@@ -398,6 +419,8 @@ export class PaymentsService implements OnModuleInit {
     billingCycle: PaymentBillingCycle;
     expiresAt: Date;
   }> {
+    if (dto.packageId !== undefined && !isUUID(dto.packageId))
+      throw new BadRequestException('Invalid subscription package ID');
     const user = await this.userRepo.findOne({ where: { _id: userId } });
     if (!user) {
       throw new NotFoundException('Không tìm thấy người dùng');
@@ -422,9 +445,11 @@ export class PaymentsService implements OnModuleInit {
       );
     }
 
-    // Dynamic package lookup from database with fallback
-    const dynamicPkg = await this.packageRepo.findOne({
+    if (dto.planType === PremiumPlan.FREE)
+      throw new BadRequestException('Free policy is not sellable');
+    const packages = await this.packageRepo.find({
       where: {
+        ...(dto.packageId ? { _id: dto.packageId } : {}),
         planType: dto.planType,
         billingCycle: dto.billingCycle,
         isActive: true,
@@ -432,22 +457,13 @@ export class PaymentsService implements OnModuleInit {
       },
     });
 
-    let amount: number;
-    let durationDays: number;
-
-    if (dynamicPkg) {
-      amount = Number(dynamicPkg.price);
-      durationDays = dynamicPkg.durationDays;
-    } else {
-      const planConfig = this.pricingPlans[dto.planType]?.[dto.billingCycle];
-      if (!planConfig || planConfig.price <= 0) {
-        throw new BadRequestException(
-          'Gói dịch vụ hoặc chu kỳ thanh toán không hợp lệ',
-        );
-      }
-      amount = planConfig.price;
-      durationDays = planConfig.durationDays;
-    }
+    if (packages.length !== 1)
+      throw new BadRequestException(
+        'Select an exact active subscription package',
+      );
+    const dynamicPkg = packages[0];
+    const amount = Number(dynamicPkg.price);
+    const durationDays = dynamicPkg.durationDays;
 
     const orderCode = await this.generateUniqueOrderCode();
     const description = `TP ${orderCode}`.slice(0, 25);
@@ -558,6 +574,7 @@ export class PaymentsService implements OnModuleInit {
       paymentLinkId,
       description,
       expiresAt,
+      packageId: dynamicPkg._id,
       vatInvoiceRequested: dto.vatInvoiceRequested || false,
       vatCompanyName: dto.vatCompanyName || null,
       vatTaxCode: dto.vatTaxCode || null,
@@ -703,7 +720,11 @@ export class PaymentsService implements OnModuleInit {
       }
 
       // Upgrade user's premium plan INSIDE the same transaction
-      const user = await userRepo.findOne({ where: { _id: order.userId } });
+      const user = await userRepo.findOne({
+        where: { _id: order.userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!user) throw new NotFoundException('Payment user not found');
       if (user) {
         const now = new Date();
         const currentExpiry =
@@ -713,24 +734,23 @@ export class PaymentsService implements OnModuleInit {
         const newExpiry = new Date(
           currentExpiry.getTime() + order.durationDays * 24 * 60 * 60 * 1000,
         );
-        const pkg = await manager.getRepository(PremiumPackage).findOne({
-          where: {
-            planType: order.planType,
-            billingCycle: order.billingCycle,
-            isActive: true,
-            isDeleted: false,
-          },
+        if (!order.packageId) {
+          throw new BadRequestException('PAYMENT_PACKAGE_REPAIR_REQUIRED');
+        }
+        const packages = await manager.getRepository(PremiumPackage).find({
+          where: { _id: order.packageId, planType: order.planType },
+          withDeleted: true,
         });
-        const addedAiQuota =
-          pkg?.aiQuota ||
-          (order.planType === PremiumPlan.CANDIDATE_PREMIUM ? 500 : 1500);
+        if (packages.length !== 1 || order.planType === PremiumPlan.FREE) {
+          throw new BadRequestException('PAYMENT_PACKAGE_REPAIR_REQUIRED');
+        }
+        const pkg = packages[0];
 
         await userRepo.update(user._id, {
           isPremium: true,
           premiumPlan: order.planType,
           premiumExpiresAt: newExpiry,
-          premiumPackageId: pkg ? pkg._id : (null as any),
-          aiQuotaRemaining: (user.aiQuotaRemaining || 0) + addedAiQuota,
+          premiumPackageId: pkg._id,
         });
 
         if (user.company?._id && order.planType === PremiumPlan.HR_PREMIUM) {
@@ -1088,7 +1108,25 @@ export class PaymentsService implements OnModuleInit {
    */
   async seedDefaultPackagesIfEmpty(): Promise<void> {
     const count = await this.packageRepo.count({ where: { isDeleted: false } });
-    if (count > 0) return;
+    const free = await this.packageRepo.findOne({
+      where: { code: 'FREE_DEFAULT' },
+      withDeleted: true,
+    });
+    if (!free)
+      await this.packageRepo.save(
+        this.packageRepo.create({
+          code: 'FREE_DEFAULT',
+          planType: PremiumPlan.FREE,
+          billingCycle: PaymentBillingCycle.MONTHLY,
+          name: 'Free',
+          price: 0,
+          durationDays: 30,
+          chatbotDailyLimit: 10,
+          features: [],
+          isActive: true,
+        }),
+      );
+    if (count > (free ? 1 : 0)) return;
 
     this.logger.log('Seeding default premium packages into database...');
 
@@ -1102,14 +1140,14 @@ export class PaymentsService implements OnModuleInit {
         price: 49000,
         originalPrice: 49000,
         durationDays: 30,
-        aiQuota: 50,
+        chatbotDailyLimit: null,
         badge: null,
         features: [
           'Không giới hạn tạo và tải CV chất lượng cao',
           'Đẩy Top hồ sơ 24h mỗi ngày',
           'Xem danh sách NTD đã ghé thăm hồ sơ',
           'Huy hiệu Candidate Premium VIP nổi bật',
-          'AI Career Assistant: 50 lượt phân tích/tháng',
+          'AI Career Assistant theo hạn mức của gói',
         ],
         hotJobLimit: 0,
         candidateSearchLimit: 0,
@@ -1125,13 +1163,13 @@ export class PaymentsService implements OnModuleInit {
         price: 249000,
         originalPrice: 294000,
         durationDays: 180,
-        aiQuota: 200,
+        chatbotDailyLimit: null,
         badge: 'Tiết kiệm 15%',
         features: [
           'Toàn bộ quyền lợi gói Tháng',
           'Đẩy Top hồ sơ mỗi ngày',
           'Ưu tiên kết nối với chuyên viên tuyển dụng',
-          'AI Career Assistant: 200 lượt phân tích',
+          'AI Career Assistant theo hạn mức của gói',
         ],
         hotJobLimit: 0,
         candidateSearchLimit: 0,
@@ -1147,13 +1185,13 @@ export class PaymentsService implements OnModuleInit {
         price: 399000,
         originalPrice: 588000,
         durationDays: 365,
-        aiQuota: 500,
+        chatbotDailyLimit: null,
         badge: 'Khuyên Dùng - Phổ Biến Nhất',
         features: [
           'Toàn bộ quyền lợi gói 6 Tháng',
           'Đẩy Top hồ sơ 365 ngày',
           'Tối ưu CV bởi chuyên gia AI',
-          'AI Career Assistant: 500 lượt phân tích',
+          'AI Career Assistant theo hạn mức của gói',
         ],
         hotJobLimit: 0,
         candidateSearchLimit: 0,
@@ -1169,7 +1207,7 @@ export class PaymentsService implements OnModuleInit {
         price: 299000,
         originalPrice: 299000,
         durationDays: 30,
-        aiQuota: 100,
+        chatbotDailyLimit: 0,
         badge: null,
         features: [
           'Đăng tin tuyển dụng không giới hạn',
@@ -1192,14 +1230,14 @@ export class PaymentsService implements OnModuleInit {
         price: 1490000,
         originalPrice: 1794000,
         durationDays: 180,
-        aiQuota: 500,
+        chatbotDailyLimit: 0,
         badge: 'Tiết kiệm 17%',
         features: [
           'Đăng tin tuyển dụng không giới hạn',
           'Gắn nhãn HOT JOB cho 5 vị trí',
           'Mở khóa tìm kiếm 100 CV ứng viên/ngày',
           'Ưu tiên hiển thị tin tuyển dụng đầu trang tìm kiếm',
-          'AI Matching: 500 lượt phân tích',
+          'AI Matching phân tích độ phù hợp ứng viên',
         ],
         hotJobLimit: 5,
         candidateSearchLimit: 100,
@@ -1216,14 +1254,14 @@ export class PaymentsService implements OnModuleInit {
         price: 2390000,
         originalPrice: 3588000,
         durationDays: 365,
-        aiQuota: 1500,
+        chatbotDailyLimit: 0,
         badge: 'Lựa Chọn Hàng Đầu Của HR Pro',
         features: [
           'Đăng tin tuyển dụng không giới hạn 365 ngày',
           'Gắn nhãn HOT JOB cho 10 vị trí',
           'Không giới hạn mở khóa tìm kiếm CV ứng viên',
           'Tài khoản chuyên biệt chăm sóc 24/7',
-          'AI Sourcing & Matching: 1500 lượt phân tích',
+          'AI Sourcing & Matching hỗ trợ tuyển dụng',
         ],
         hotJobLimit: 10,
         candidateSearchLimit: 999999,
@@ -1268,6 +1306,12 @@ export class PaymentsService implements OnModuleInit {
     dto: CreatePremiumPackageDto,
     admin: IUser,
   ): Promise<PremiumPackage> {
+    if (
+      dto.planType === PremiumPlan.FREE ||
+      dto.code?.trim().toUpperCase() === 'FREE_DEFAULT'
+    ) {
+      throw new BadRequestException('Free policy already exists');
+    }
     const code =
       dto.code?.trim() ||
       `${dto.planType}_${dto.billingCycle}_${Date.now()}`.toUpperCase();
@@ -1309,6 +1353,19 @@ export class PaymentsService implements OnModuleInit {
     }
 
     const { code, planType, billingCycle, ...updateData } = dto;
+    if (
+      pkg.code === 'FREE_DEFAULT' &&
+      Object.keys(dto).some((key) => key !== 'chatbotDailyLimit')
+    ) {
+      throw new BadRequestException(
+        'Only the daily chatbot limit can be changed for Free',
+      );
+    }
+    if (
+      pkg.code !== 'FREE_DEFAULT' &&
+      code?.trim().toUpperCase() === 'FREE_DEFAULT'
+    )
+      throw new BadRequestException('Reserved package code');
     Object.assign(pkg, updateData);
 
     if (code && code.trim() && code.trim() !== pkg.code) {
@@ -1342,6 +1399,8 @@ export class PaymentsService implements OnModuleInit {
       throw new NotFoundException('Không tìm thấy gói Premium');
     }
 
+    if (pkg.code === 'FREE_DEFAULT')
+      throw new BadRequestException('Free policy cannot be deactivated');
     pkg.isActive = !pkg.isActive;
     pkg.updatedBy = {
       _id: admin._id,
@@ -1362,6 +1421,8 @@ export class PaymentsService implements OnModuleInit {
       throw new NotFoundException('Không tìm thấy gói Premium');
     }
 
+    if (pkg.code === 'FREE_DEFAULT')
+      throw new BadRequestException('Free policy cannot be deleted');
     pkg.isDeleted = true;
     pkg.deletedAt = new Date();
     await this.packageRepo.save(pkg);
@@ -1489,6 +1550,7 @@ export class PaymentsService implements OnModuleInit {
         role: u.role,
         companyName: u.company?.name || null,
         premiumPlan: u.premiumPlan,
+        premiumPackageId: u.premiumPackageId,
         isPremium: u.isPremium,
         premiumExpiresAt: u.premiumExpiresAt,
         daysRemaining,
@@ -1510,18 +1572,33 @@ export class PaymentsService implements OnModuleInit {
   /**
    * Gia hạn thuê bao thủ công cho người dùng (Admin)
    */
-  async manualExtendSubscription(userId: string, days: number, admin: IUser) {
+  async manualExtendSubscription(
+    userId: string,
+    days: number,
+    admin: IUser,
+    packageId?: string,
+  ) {
+    if (packageId !== undefined && !isUUID(packageId))
+      throw new BadRequestException('Invalid subscription package ID');
     const user = await this.userRepo.findOne({ where: { _id: userId } });
     if (!user) throw new NotFoundException('Không tìm thấy người dùng');
 
+    const selectedPackage = packageId
+      ? await this.packageRepo.findOne({
+          where: { _id: packageId, isActive: true, isDeleted: false },
+        })
+      : null;
+    if (packageId && !selectedPackage)
+      throw new BadRequestException('Invalid subscription package');
     const plan =
-      user.premiumPlan && user.premiumPlan !== PremiumPlan.FREE
+      selectedPackage?.planType ??
+      (user.premiumPlan && user.premiumPlan !== PremiumPlan.FREE
         ? user.premiumPlan
         : user.role === Role.HR
         ? PremiumPlan.HR_PREMIUM
-        : PremiumPlan.CANDIDATE_PREMIUM;
+        : PremiumPlan.CANDIDATE_PREMIUM);
 
-    await this.usersService.upgradePremiumPlan(userId, plan, days);
+    await this.usersService.upgradePremiumPlan(userId, plan, days, packageId);
     this.logger.log(
       `Admin ${admin.email} manually extended subscription for user ${user.email} by ${days} days.`,
     );

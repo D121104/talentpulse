@@ -1047,8 +1047,6 @@ export class CompaniesService {
         maxDailyJobs,
         hotJobLimit,
         candidateSearchLimit,
-        aiQuota:
-          userInDb.aiQuotaRemaining ?? (userPackage ? userPackage.aiQuota : 0),
         packageName: userPackage
           ? userPackage.name
           : isPremium

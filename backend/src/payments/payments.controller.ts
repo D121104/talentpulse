@@ -12,6 +12,7 @@ import {
   HttpCode,
   HttpStatus,
   ParseIntPipe,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -28,6 +29,7 @@ import { PaymentsService, CreatePaymentOrderDto } from './payments.service';
 import {
   CreatePremiumPackageDto,
   UpdatePremiumPackageDto,
+  ExtendSubscriptionDto,
 } from './dto/premium-package.dto';
 
 @Controller('payments')
@@ -133,7 +135,7 @@ export class PaymentsController {
   @Patch('admin/packages/:id')
   @ResponseMessage('Cập nhật gói Premium thành công')
   updatePackage(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePremiumPackageDto,
     @UserDec() admin: IUser,
   ) {
@@ -144,7 +146,10 @@ export class PaymentsController {
   @Roles(Role.ADMIN)
   @Patch('admin/packages/:id/toggle')
   @ResponseMessage('Thay đổi trạng thái gói Premium thành công')
-  togglePackageActive(@Param('id') id: string, @UserDec() admin: IUser) {
+  togglePackageActive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UserDec() admin: IUser,
+  ) {
     return this.paymentsService.togglePackageActive(id, admin);
   }
 
@@ -152,7 +157,10 @@ export class PaymentsController {
   @Roles(Role.ADMIN)
   @Delete('admin/packages/:id')
   @ResponseMessage('Xóa gói Premium thành công')
-  deletePackage(@Param('id') id: string, @UserDec() admin: IUser) {
+  deletePackage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UserDec() admin: IUser,
+  ) {
     return this.paymentsService.deletePackage(id, admin);
   }
 
@@ -178,13 +186,14 @@ export class PaymentsController {
   @ResponseMessage('Gia hạn thuê bao thành công')
   manualExtendSubscription(
     @Param('userId') userId: string,
-    @Body() body: { days: number },
+    @Body() body: ExtendSubscriptionDto,
     @UserDec() admin: IUser,
   ) {
     return this.paymentsService.manualExtendSubscription(
       userId,
-      body.days || 30,
+      body.days,
       admin,
+      body.packageId,
     );
   }
 

@@ -1,4 +1,13 @@
 export const en = {
+  pricingChatbot: {
+    name: 'AI Career Assistant',
+    unlimited: 'Unlimited messages',
+    unavailable: 'Chatbot policy unavailable',
+    disabled: 'Chatbot disabled (0 messages/day)',
+    daily_one: '{{count}} message/day',
+    daily_other: '{{count}} messages/day',
+    reset: 'Resets at 00:00 (UTC+7).',
+  },
   nav: {
     jobs: 'Jobs',
     companies: 'Companies',
@@ -641,4 +650,3 @@ export const en = {
     },
   },
 } as const;
-

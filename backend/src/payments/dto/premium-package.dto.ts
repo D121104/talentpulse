@@ -7,6 +7,8 @@ import {
   IsString,
   IsArray,
   IsBoolean,
+  IsInt,
+  IsUUID,
   Min,
 } from 'class-validator';
 import { PremiumPlan } from '../../users/entities/user.entity';
@@ -67,10 +69,9 @@ export class CreatePremiumPackageDto {
   durationDays: number;
 
   @IsOptional()
-  @Transform(transformNumberWithDefault(0))
-  @IsNumber()
+  @IsInt()
   @Min(0)
-  aiQuota?: number;
+  chatbotDailyLimit?: number | null;
 
   @IsOptional()
   @IsString()
@@ -141,10 +142,9 @@ export class UpdatePremiumPackageDto {
   durationDays?: number;
 
   @IsOptional()
-  @Transform(transformNumberWithDefault(0))
-  @IsNumber()
+  @IsInt()
   @Min(0)
-  aiQuota?: number;
+  chatbotDailyLimit?: number | null;
 
   @IsOptional()
   @IsString()
@@ -173,4 +173,15 @@ export class UpdatePremiumPackageDto {
   @Transform(transformNumberWithDefault(0))
   @IsNumber()
   displayOrder?: number;
+}
+
+export class ExtendSubscriptionDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  days = 30;
+
+  @IsOptional()
+  @IsUUID()
+  packageId?: string;
 }

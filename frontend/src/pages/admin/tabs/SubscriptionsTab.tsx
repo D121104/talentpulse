@@ -12,12 +12,12 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../../auth/AuthContext';
 import { useToast } from '../../../context/ToastContext';
-import { adminApi, type AdminSubscriptionItem } from '../../../lib/adminApi';
+import { adminApi, type AdminSubscriptionItem, type AdminPackageItem } from '../../../lib/adminApi';
 
 interface SubscriptionsTabProps {
   subscriptions?: AdminSubscriptionItem[];
   isLoading?: boolean;
-  onExtend?: (userId: string, additionalDays: number, note?: string) => Promise<void>;
+  onExtend?: (userId: string, additionalDays: number, note?: string, packageId?: string) => Promise<void>;
   onCancel?: (userId: string, reason?: string) => Promise<void>;
 }
 
@@ -68,6 +68,11 @@ export const SubscriptionsTab: React.FC<SubscriptionsTabProps> = ({
   // Extend Modal State
   const [extendModalUser, setExtendModalUser] = useState<AdminSubscriptionItem | null>(null);
   const [extendDays, setExtendDays] = useState<number>(30);
+  const [packages, setPackages] = useState<AdminPackageItem[]>([]);
+  const [packageId, setPackageId] = useState('');
+  useEffect(() => {
+    if (accessToken) adminApi.getAllPackages(accessToken).then(setPackages).catch(() => error('Không thể tải gói thuê bao'));
+  }, [accessToken, error]);
   const [extendNote, setExtendNote] = useState<string>('');
   const [isSubmittingExtend, setIsSubmittingExtend] = useState(false);
 
@@ -82,9 +87,9 @@ export const SubscriptionsTab: React.FC<SubscriptionsTabProps> = ({
     try {
       setIsSubmittingExtend(true);
       if (externalExtend) {
-        await externalExtend(extendModalUser._id, extendDays, extendNote);
+        await externalExtend(extendModalUser._id, extendDays, extendNote, packageId);
       } else if (accessToken) {
-        await adminApi.extendSubscription(accessToken, extendModalUser._id, extendDays, extendNote);
+        await adminApi.extendSubscription(accessToken, extendModalUser._id, extendDays, extendNote, packageId);
         success(`Đã gia hạn thành công thêm ${extendDays} ngày cho người dùng`);
         fetchSubscriptions();
       }
@@ -368,6 +373,7 @@ export const SubscriptionsTab: React.FC<SubscriptionsTabProps> = ({
                           type="button"
                           onClick={() => {
                             setExtendModalUser(sub);
+                            setPackageId(sub.premiumPackageId || '');
                             setExtendDays(30);
                             setExtendNote('');
                           }}
@@ -410,6 +416,12 @@ export const SubscriptionsTab: React.FC<SubscriptionsTabProps> = ({
             </p>
 
             <form onSubmit={handleConfirmExtend} className="mt-4 space-y-4 text-xs">
+              <label>Gói áp dụng / sửa liên kết thuê bao
+                <select required value={packageId} onChange={(e) => setPackageId(e.target.value)} className="w-full rounded-xl border p-2 dark:bg-slate-800">
+                  <option value="">Chọn gói cụ thể</option>
+                  {packages.filter((pkg) => pkg.isActive && pkg.planType === (extendModalUser.role === 'HR' ? 'HR_PREMIUM' : 'CANDIDATE_PREMIUM')).map((pkg) => <option key={pkg._id} value={pkg._id}>{pkg.name} ({pkg.code})</option>)}
+                </select>
+              </label>
               <div>
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Số ngày muốn cộng thêm:

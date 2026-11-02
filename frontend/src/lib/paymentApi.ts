@@ -36,6 +36,7 @@ export interface PaymentOrder {
 }
 
 export interface CreatePaymentOrderInput {
+  packageId: string;
   planType: 'CANDIDATE_PREMIUM' | 'HR_PREMIUM';
   billingCycle: PaymentBillingCycle;
   vatInvoiceRequested?: boolean;
