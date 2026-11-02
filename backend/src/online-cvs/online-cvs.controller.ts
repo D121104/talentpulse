@@ -7,10 +7,19 @@ import {
   Param,
   Delete,
   UseGuards,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { OnlineCVsService } from './online-cvs.service';
 import { CreateOnlineCVDto } from './dto/create-online-cv.dto';
 import { UpdateOnlineCVDto } from './dto/update-online-cv.dto';
+import {
+  GenerateOnlineCvDto,
+  EnqueueOnlineCvGenerationDto,
+} from './dto/generate-online-cv.dto';
+import { GenerateFromCareerProfileDto } from 'src/candidate-career-profile/dto/update-candidate-career-profile.dto';
 import { User, ResponseMessage } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
@@ -28,6 +37,97 @@ export class OnlineCVsController {
   @ResponseMessage('Tạo CV online thành công')
   create(@Body() createOnlineCVDto: CreateOnlineCVDto, @User() user: IUser) {
     return this.onlineCVsService.create(createOnlineCVDto, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('generate-from-career-profile')
+  @Post('generate-from-profile')
+  @ApiOperation({
+    summary: 'Generate a new editable AI CV from the career profile',
+  })
+  @ApiBearerAuth()
+  @ResponseMessage('Tạo bản nháp CV mới từ hồ sơ nghề nghiệp thành công')
+  generateFromProfile(
+    @Body() dto: GenerateFromCareerProfileDto,
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.generateFromCareerProfile(dto, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/generation-jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Queue editable AI CV generation' })
+  @ApiBearerAuth()
+  enqueueGeneration(
+    @Param('id') id: string,
+    @Body() dto: EnqueueOnlineCvGenerationDto,
+    @Headers('idempotency-key') idempotencyKey: string,
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.enqueueGeneration(
+      id,
+      dto,
+      user,
+      idempotencyKey,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('generation-jobs/from-career-profile')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Queue editable AI CV generation from career profile',
+  })
+  @ApiBearerAuth()
+  enqueueGenerationFromCareerProfile(
+    @Body() dto: GenerateFromCareerProfileDto,
+    @Headers('idempotency-key') idempotencyKey: string,
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.enqueueGenerationFromCareerProfile(
+      dto,
+      user,
+      idempotencyKey,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/generation-jobs/:operationId')
+  @ApiOperation({ summary: 'Get asynchronous CV generation status' })
+  @ApiBearerAuth()
+  getGenerationJob(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('operationId', new ParseUUIDPipe()) operationId: string,
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.getGenerationJob(id, operationId, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/generation-jobs/:operationId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Cancel asynchronous CV generation' })
+  @ApiBearerAuth()
+  cancelGeneration(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('operationId', new ParseUUIDPipe()) operationId: string,
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.cancelGeneration(id, operationId, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/generate')
+  @ApiOperation({ summary: 'Generate an editable AI CV draft' })
+  @ApiBearerAuth()
+  @ResponseMessage('Tạo bản nháp CV bằng AI thành công')
+  generate(
+    @Param('id') id: string,
+    @Body() dto: GenerateOnlineCvDto,
+    @User() user: IUser,
+  ) {
+    return this.onlineCVsService.generate(id, dto, user);
   }
 
   @UseGuards(JwtAuthGuard)

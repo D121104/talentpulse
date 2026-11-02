@@ -72,6 +72,14 @@ export function validateEnvironment(
   const consentPolicyHash = String(config.AI_CV_CONSENT_POLICY_HASH ?? '')
     .trim()
     .toLowerCase();
+  const generationConsentVersion = String(
+    config.AI_CV_GENERATION_CONSENT_VERSION ?? 'phase1-v1',
+  ).trim();
+  const generationConsentPolicyHash = String(
+    config.AI_CV_GENERATION_CONSENT_POLICY_HASH ?? '',
+  )
+    .trim()
+    .toLowerCase();
 
   if (nodeEnv === 'production' && synchronize) {
     throw new Error('DB_SYNCHRONIZE must be false in production');
@@ -93,6 +101,19 @@ export function validateEnvironment(
   }
   if (consentPolicyHash && !/^[a-f0-9]{64}$/.test(consentPolicyHash)) {
     throw new Error('AI_CV_CONSENT_POLICY_HASH must be a SHA-256 hex digest');
+  }
+  if (!/^\w[\w.-]{0,79}$/.test(generationConsentVersion)) {
+    throw new Error(
+      'AI_CV_GENERATION_CONSENT_VERSION must be a simple version with at most 80 characters',
+    );
+  }
+  if (
+    generationConsentPolicyHash &&
+    !/^[a-f0-9]{64}$/.test(generationConsentPolicyHash)
+  ) {
+    throw new Error(
+      'AI_CV_GENERATION_CONSENT_POLICY_HASH must be a SHA-256 hex digest',
+    );
   }
 
   const serviceAuthKeys = [
@@ -200,12 +221,16 @@ export function validateEnvironment(
     REDIS_ENABLED: String(redisEnabled),
     RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
     AI_CV_CONSENT_VERSION: consentVersion,
+    AI_CV_GENERATION_CONSENT_VERSION: generationConsentVersion,
     AI_SERVICE_JWT_SUBJECT: serviceSubject,
     AI_SERVICE_TIMEOUT_MS: timeoutMs,
     AI_JOB_INDEX_SCOPE: jobIndexScope,
     AI_JOB_INDEX_REPRESENTATION_VERSION: representationVersion,
     ...(consentPolicyHash
       ? { AI_CV_CONSENT_POLICY_HASH: consentPolicyHash }
+      : {}),
+    ...(generationConsentPolicyHash
+      ? { AI_CV_GENERATION_CONSENT_POLICY_HASH: generationConsentPolicyHash }
       : {}),
   };
 }

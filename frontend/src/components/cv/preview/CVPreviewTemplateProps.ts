@@ -1,4 +1,4 @@
-import type { OnlineCV, CVThemeOption } from '../../../lib/cvTypes';
+import type { OnlineCV, CVThemeOption, CVTemplateLabels, CVLocale } from '../../../lib/cvTypes';
 
 export interface CVPreviewTemplateProps {
   data: Partial<OnlineCV>;
@@ -6,4 +6,6 @@ export interface CVPreviewTemplateProps {
   fontMultiplier: number;
   isPremium?: boolean;
   langTitles: Record<string, string>;
+  locale: CVLocale;
+  labels: CVTemplateLabels;
 }

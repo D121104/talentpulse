@@ -39,6 +39,7 @@ import { candidateApi, userApi, type BoostStatusResult, type UserEntitlementsRes
 import { authApi } from "../../lib/api";
 import type { OnlineCV, UserCV } from "../../lib/cvTypes";
 import AiCvConsentCard from "../../components/consent/AiCvConsentCard";
+import AiCvGenerationConsentCard from "../../components/consent/AiCvGenerationConsentCard";
 
 function getUploadedCvParseStatus(status: UserCV['parseStatus']) {
   switch (status) {
@@ -939,6 +940,16 @@ export default function MyCVPage() {
                     </h2>
                   </div>
 
+                  <div className="flex items-center gap-2">
+                    <Link
+                      to="/career-profile"
+                      className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-primary/25 bg-primary/5 px-3.5 py-2 text-xs font-bold text-primary transition hover:border-primary/50 hover:bg-primary/10 dark:bg-primary/10 dark:text-primary-light"
+                    >
+                      <Briefcase className="h-4 w-4" />
+                      <span className="hidden sm:inline">Hồ sơ nghề nghiệp</span>
+                    </Link>
+                  </div>
+
                   <button
                     type="button"
                     onClick={handleCreateCvClick}
@@ -1736,6 +1747,7 @@ export default function MyCVPage() {
               </div>
 
               <AiCvConsentCard />
+              <AiCvGenerationConsentCard />
 
               {/* 2. JOB SEARCHING STATUS WIDGET */}
               <div className="rounded-3xl border border-slate-200/80 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">

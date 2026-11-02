@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-qdrant-admin = "app.qdrant_admin:main"
+qdrant-admin = "talentpulse_ai.scripts.qdrant_admin:main"
 
 [dependency-groups]
 dev = [
@@ -33,12 +33,12 @@ default-groups = ["dev"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-pythonpath = ["."]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["app", "tests"]
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
@@ -46,5 +46,5 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "."
-files = ["app"]
+mypy_path = "src"
+files = ["src/talentpulse_ai"]

@@ -76,9 +76,9 @@ describe('validateEnvironment', () => {
     );
     expect(
       validateEnvironment({
-        AI_JOB_INDEX_REPRESENTATION_VERSION: 'local-ollama-v1',
+        AI_JOB_INDEX_REPRESENTATION_VERSION: 'local-ollama-qwen3-embedding-4b-2560-v2',
       }).AI_JOB_INDEX_REPRESENTATION_VERSION,
-    ).toBe('local-ollama-v1');
+    ).toBe('local-ollama-qwen3-embedding-4b-2560-v2');
     expect(() =>
       validateEnvironment({ AI_JOB_INDEX_REPRESENTATION_VERSION: 'local v1' }),
     ).toThrow('AI_JOB_INDEX_REPRESENTATION_VERSION');

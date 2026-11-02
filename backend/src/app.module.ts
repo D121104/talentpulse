@@ -27,6 +27,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
+import { CandidateCareerProfileModule } from './candidate-career-profile/candidate-career-profile.module';
 import { ActiveJobsModule } from './active-jobs/active-jobs.module';
 import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
 import { PaymentsModule } from './payments/payments.module';
@@ -36,12 +37,13 @@ import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
 import { SavedJobsModule } from './saved-jobs/saved-jobs.module';
 import { ChatModule } from './chat/chat.module';
 import { AdminModule } from './admin/admin.module';
-import { areQueueWorkersEnabled } from './config/runtime-flags';
+import { areQueueWorkersEnabled, isRedisEnabled } from './config/runtime-flags';
 import { createRedisConnectionOptions } from './redis/redis.module';
 import { createPostgresSslOptions } from './database/postgres-ssl';
 import { JobIndexingModule } from './job-indexing/job-indexing.module';
 import { JobIndexingSubscriber } from './job-indexing/job-indexing.subscriber';
 
+const redisEnabled = isRedisEnabled();
 const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
@@ -65,7 +67,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     ...(queueWorkersEnabled ? [ScheduleModule.forRoot()] : []),
 
     // Bull Queue with Redis
-    ...(queueWorkersEnabled
+    ...(redisEnabled
       ? [
           BullModule.forRootAsync({
             imports: [ConfigModule],
@@ -121,6 +123,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     RedisModule,
     AIMatchingModule,
     OnlineCVsModule,
+    CandidateCareerProfileModule,
     ActiveJobsModule,
     AiCvConsentsModule,
     PaymentsModule,

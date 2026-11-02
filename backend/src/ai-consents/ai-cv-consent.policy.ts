@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
  */
 export enum AiCvConsentScope {
   CV_MATCHING = 'cv_matching',
+  CV_GENERATION = 'cv_generation',
 }
 
 export interface ActiveAiCvConsentPolicy {
@@ -16,10 +17,16 @@ export interface ActiveAiCvConsentPolicy {
 }
 
 const DEFAULT_CONSENT_VERSION = 'phase0-v1';
-const POLICY_TEXT =
+const DEFAULT_GENERATION_CONSENT_VERSION = 'phase1-v1';
+const MATCHING_POLICY_TEXT =
   'TalentPulse may process the candidate CV for the explicitly selected AI CV matching purpose.';
+const GENERATION_POLICY_TEXT =
+  'TalentPulse may use the candidate profile and selected CV data to generate an editable CV draft for the candidate review.';
 const DEFAULT_POLICY_HASH = createHash('sha256')
-  .update(POLICY_TEXT, 'utf8')
+  .update(MATCHING_POLICY_TEXT, 'utf8')
+  .digest('hex');
+const DEFAULT_GENERATION_POLICY_HASH = createHash('sha256')
+  .update(GENERATION_POLICY_TEXT, 'utf8')
   .digest('hex');
 
 export const AI_CV_CONSENT_ERROR_MESSAGES = {
@@ -39,15 +46,30 @@ export function isAiCvConsentScope(value: unknown): value is AiCvConsentScope {
 
 export function getActiveAiCvConsentPolicy(
   configService?: ConfigService,
+  scope: AiCvConsentScope = AiCvConsentScope.CV_MATCHING,
 ): ActiveAiCvConsentPolicy {
+  const isGeneration = scope === AiCvConsentScope.CV_GENERATION;
   const consentVersion =
-    configService?.get<string>('AI_CV_CONSENT_VERSION')?.trim() ||
-    DEFAULT_CONSENT_VERSION;
+    configService
+      ?.get<string>(
+        isGeneration
+          ? 'AI_CV_GENERATION_CONSENT_VERSION'
+          : 'AI_CV_CONSENT_VERSION',
+      )
+      ?.trim() ||
+    (isGeneration
+      ? DEFAULT_GENERATION_CONSENT_VERSION
+      : DEFAULT_CONSENT_VERSION);
   const policyHash =
     configService
-      ?.get<string>('AI_CV_CONSENT_POLICY_HASH')
+      ?.get<string>(
+        isGeneration
+          ? 'AI_CV_GENERATION_CONSENT_POLICY_HASH'
+          : 'AI_CV_CONSENT_POLICY_HASH',
+      )
       ?.trim()
-      .toLowerCase() || DEFAULT_POLICY_HASH;
+      .toLowerCase() ||
+    (isGeneration ? DEFAULT_GENERATION_POLICY_HASH : DEFAULT_POLICY_HASH);
 
   if (
     !/^\w[\w.-]{0,79}$/.test(consentVersion) ||
@@ -59,7 +81,7 @@ export function getActiveAiCvConsentPolicy(
   }
 
   return {
-    scope: AiCvConsentScope.CV_MATCHING,
+    scope,
     consentVersion,
     policyHash,
   };

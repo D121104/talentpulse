@@ -13,6 +13,7 @@ import {
 import { UsersService } from './users.service';
 import { RegisterUserDto } from './dto/create-user.dto';
 import { UpdateUserDto, UpdateUserPasswordDto } from './dto/update-user.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { IUser } from './users.interface';
 import { User, Roles, Role } from 'src/decorator/customize';
@@ -69,6 +70,14 @@ export class UsersController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.usersService.findOne(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Update the authenticated candidate profile' })
+  @ApiBearerAuth()
+  @Patch('/me/profile')
+  updateProfile(@Body() dto: UpdateProfileDto, @User() user: IUser) {
+    return this.usersService.updateProfile(user._id, dto, user);
   }
 
   @UseGuards(JwtAuthGuard)

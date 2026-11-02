@@ -18,6 +18,7 @@ import MyCVPage from './pages/cv/MyCVPage';
 import { ProfileViewersPage } from './pages/candidate/ProfileViewersPage';
 import CVTemplatePage from './pages/cv/CVTemplatePage';
 import CVEditorPage from './pages/cv/CVEditorPage';
+import CareerProfilePage from './pages/cv/CareerProfilePage';
 import EmployerDashboardPage from './pages/employer/EmployerDashboardPage';
 import PremiumPage from './pages/premium/PremiumPage';
 import PaymentHistoryPage from './pages/payment/PaymentHistoryPage';
@@ -102,6 +103,7 @@ function App() {
                   </Route>
                   <Route element={<ProtectedRoute allowedRoles={['USER', 'ADMIN']} />}>
                     <Route path="/my-cv" element={<MyCVPage />} />
+                     <Route path="/career-profile" element={<CareerProfilePage />} />
                     <Route path="/mycv" element={<Navigate to="/my-cv" replace />} />
                     <Route path="/cv/my-cv" element={<Navigate to="/my-cv" replace />} />
                     <Route path="/cv/mycv" element={<Navigate to="/my-cv" replace />} />

@@ -9,6 +9,7 @@ import {
   Building2,
   CheckCircle2,
   Sparkles,
+  BriefcaseBusiness,
   ArrowRight,
 } from 'lucide-react';
 import Header from '../../components/layout/Header';
@@ -160,6 +161,33 @@ export function SettingsLayout({ children, activeTab }: SettingsLayoutProps) {
                     </>
                   )}
                 </NavLink>
+
+                {user?.role === 'USER' && (
+                  <NavLink
+                    to="/career-profile"
+                    className={({ isActive }) =>
+                      `group flex items-start gap-3.5 p-3.5 rounded-2xl transition-all duration-150 cursor-pointer ${
+                        isActive
+                          ? 'bg-primary text-white shadow-md shadow-primary/25 font-semibold'
+                          : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                      }`
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${isActive ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 group-hover:bg-primary/10 group-hover:text-primary'}`}>
+                          <BriefcaseBusiness className="h-4.5 w-4.5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <span className="block text-sm leading-tight font-bold">Hồ sơ nghề nghiệp</span>
+                          <span className={`block text-xs mt-1 leading-normal ${isActive ? 'text-white/80' : 'text-slate-500 dark:text-slate-400'}`}>
+                            Lưu dữ liệu để tạo nhiều CV AI
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </NavLink>
+                )}
 
                 <NavLink
                   to="/settings/password"

@@ -28,6 +28,11 @@ export class AiCvConsentsController {
     return this.consentsService.revoke(user._id, dto);
   }
 
+  @Get('policy/:scope')
+  policy(@Param('scope') scope: string) {
+    return this.consentsService.getPolicyMetadata(scope);
+  }
+
   @Get('current')
   current(@User() user: IUser) {
     return this.consentsService.getCurrentForActiveScope(user._id);

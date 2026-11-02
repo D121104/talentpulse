@@ -4,13 +4,18 @@ import type {
   WorkExperienceEntry,
   SkillEntry,
   ActivityEntry,
+  ProjectEntry,
   CertificateEntry,
   AwardEntry,
   CVFontOption,
   CVThemeOption,
+  CVLocale,
+  CVTemplateLabels,
 } from '../../../lib/cvTypes';
 
 export interface CVEditorTemplateProps {
+  locale: CVLocale;
+  labels: CVTemplateLabels;
   // Theme & Typography
   currentTheme: CVThemeOption;
   currentFont: CVFontOption;
@@ -42,6 +47,8 @@ export interface CVEditorTemplateProps {
   setSkills: React.Dispatch<React.SetStateAction<SkillEntry[]>>;
   activities: ActivityEntry[];
   setActivities: React.Dispatch<React.SetStateAction<ActivityEntry[]>>;
+  projects: ProjectEntry[];
+  setProjects: React.Dispatch<React.SetStateAction<ProjectEntry[]>>;
   certificates: CertificateEntry[];
   setCertificates: React.Dispatch<React.SetStateAction<CertificateEntry[]>>;
   awards: AwardEntry[];
@@ -54,4 +61,5 @@ export interface CVEditorTemplateProps {
   sectionLabels: Record<string, string>;
   markDirty: () => void;
   pageCount: number;
+  bulletDescriptions: boolean;
 }

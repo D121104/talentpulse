@@ -15,7 +15,7 @@ class DemoDeployWorkflowTests(unittest.TestCase):
     def test_quality_job_covers_history_ai_format_and_release_contract(self) -> None:
         self.assertIn("fetch-depth: 0", self.workflow)
         self.assertIn("git merge-base --is-ancestor \"$COMMIT_SHA\" origin/develop", self.workflow)
-        self.assertIn("uv run ruff format --check app tests", self.workflow)
+        self.assertIn("uv run ruff format --check src tests", self.workflow)
         self.assertIn('npx eslint "{src,apps,libs,test}/**/*.ts" --no-fix', self.workflow)
         self.assertIn("python3 -m unittest discover -s infra/ec2-demo -p 'test_*.py' -v", self.workflow)
 
