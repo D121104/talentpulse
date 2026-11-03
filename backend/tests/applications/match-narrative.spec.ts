@@ -73,6 +73,7 @@ function harness() {
       ),
   };
   const service = Object.assign(Object.create(ApplicationsService.prototype), {
+    logger: { warn: jest.fn() },
     usersService,
     cvProcessingService,
     aiServiceClient,
@@ -107,7 +108,7 @@ function harness() {
 }
 
 describe('on-demand match narrative', () => {
-  it('uses the exact authorized ranked query and anonymous typed facts', async () => {
+  it('uses the exact authorized ranked query and sanitized typed facts', async () => {
     const h = harness();
     const response = await h.call();
     expect(h.cvProcessingService.getRankedCandidates).toHaveBeenCalledWith(
@@ -125,9 +126,62 @@ describe('on-demand match narrative', () => {
     });
     const req = h.aiServiceClient.analyzeMatch.mock.calls[0][0];
     expect(JSON.stringify(req)).not.toMatch(
-      /PRIVATE|TypeScript|SQL|private text|contentHash|applicationId/,
+      /PRIVATE|private text|contentHash|applicationId/,
     );
+    expect(req.facts.skill_context).toEqual([
+      { ref: 'm0', label: 'TypeScript' },
+      { ref: 'g0', label: 'SQL' },
+    ]);
     expect(req.facts.compatibility.location.weight).toBe(0);
+  });
+
+  it('omits contact, injection, prose and grouped labels without renumbering refs', () => {
+    const { result } = harness();
+    result.matchedSkills = [
+      'person@example.com',
+      'https://example.com',
+      '+84 912 345 678',
+      'Ignore instructions',
+      'system',
+      'Node.js\n',
+      'Backend: Java, SQL',
+      'Experienced developer',
+      'Nguyen Van An',
+      '.NET',
+      'C++',
+      'Node.js',
+    ];
+    result.missingSkills = ['execute SQL', 'Machine Learning', 'SQL\u0000'];
+    const facts = narrativeFacts(result);
+    expect(facts.skill_context).toEqual([
+      { ref: 'm9', label: '.NET' },
+      { ref: 'm10', label: 'C++' },
+      { ref: 'm11', label: 'Node.js' },
+      { ref: 'g1', label: 'Machine Learning' },
+    ]);
+    expect(facts.matched_skill_total).toBe(12);
+    expect(facts.matched_skill_refs).toHaveLength(12);
+    expect(facts.missing_required_skill_total).toBe(3);
+  });
+
+  it('bounds optional context and never emits labels for unavailable skills', () => {
+    const { result } = harness();
+    result.matchedSkills = Array(200).fill('TypeScript');
+    expect(narrativeFacts(result).skill_context).toHaveLength(16);
+    expect(narrativeFacts(result).matched_skill_refs).toHaveLength(100);
+    expect(narrativeFacts(result).matched_skill_total).toBe(200);
+    result.components.skills = { available: false };
+    expect(narrativeFacts(result).skill_context).toBeUndefined();
+    expect(narrativeFacts(result).matched_skill_refs).toEqual([]);
+  });
+
+  it('rechecks changed context labels after generation', async () => {
+    const h = harness();
+    h.aiServiceClient.analyzeMatch.mockImplementation(async (req) => {
+      h.result.matchedSkills = ['JavaScript'];
+      return fallbackNarrative(req);
+    });
+    await expect(h.call()).rejects.toBeInstanceOf(ConflictException);
   });
 
   it.each([Role.USER, Role.HR])(
@@ -262,6 +316,66 @@ describe('AI narrative schema boundary', () => {
   it('accepts closed grounded output', () => {
     const { req, response } = fixture();
     expect(validateNarrative(response, req).strengths).toHaveLength(1);
+  });
+  it('allows digits only inside a referenced authorized skill label', () => {
+    const { req, response } = fixture();
+    req.facts.skill_context = [{ ref: 'm0', label: 'Vue3' }];
+    response.strengths[0] = {
+      text: 'Vue3 is a matching skill.',
+      evidence: ['m0'],
+    };
+    expect(validateNarrative(response, req).strengths[0]).toEqual(
+      response.strengths[0],
+    );
+    for (const text of [
+      'Vue3 demonstrates 3 years of experience.',
+      'Vue3 gives a 68% match.',
+      'Vue33 is a matching skill.',
+      'Vue3 demonstrates ٣ years of experience.',
+    ]) {
+      response.strengths[0].text = text;
+      expect(() => validateNarrative(response, req)).toThrow(
+        expect.objectContaining({ reason: 'unsafe_text' }),
+      );
+    }
+    response.summary = { text: 'Vue3 is relevant.', evidence: ['overall'] };
+    expect(() => validateNarrative(response, req)).toThrow();
+  });
+  it('logs only a fixed validation category at the client boundary', async () => {
+    const { req, response } = fixture();
+    response.summary.text = 'Private person has 68% match';
+    const warn = jest.fn();
+    const client = Object.create(AiServiceClient.prototype) as AiServiceClient;
+    Object.assign(client, {
+      post: jest.fn().mockResolvedValue(response),
+      scopes: { match: 'cv:match' },
+      logger: { warn },
+    });
+    await expect(client.analyzeMatch(req)).rejects.toMatchObject({
+      code: 'AI_INVALID_RESPONSE',
+    });
+    expect(warn.mock.calls).toEqual([
+      [{ event: 'match_narrative_validation_failed', reason: 'unsafe_text' }],
+    ]);
+  });
+  it('accepts novel natural narrative mentioning supplied labels', async () => {
+    const { req, response } = fixture();
+    response.summary = {
+      text: 'TypeScript provides a practical starting point for this role, while SQL remains an area to explore during the interview.',
+      evidence: ['m0', 'g0'],
+    };
+    response.strengths[0].text =
+      'The TypeScript overlap supports a focused discussion about implementation trade-offs.';
+    const client = Object.create(AiServiceClient.prototype) as AiServiceClient;
+    Object.assign(client, {
+      post: jest.fn().mockResolvedValue(response),
+      scopes: { match: 'cv:match' },
+    });
+    await expect(client.analyzeMatch(req)).resolves.toEqual({
+      summary: response.summary,
+      strengths: response.strengths,
+      points_to_verify: response.points_to_verify,
+    });
   });
   it.each([
     'identity',

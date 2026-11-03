@@ -834,6 +834,7 @@ export function CandidateManagementTab({
                         key={`${aiRankingData.jobId}/${candidate.applicationId}/${candidate.analysisVersionKey}/${locale}`}
                         jobId={aiRankingData.jobId} applicationId={candidate.applicationId}
                         version={candidate.analysisVersionKey} locale={locale} accessToken={accessToken}
+                        aiAnalysis={candidate.aiAnalysis}
                         onForbidden={() => { closeRanking(); error(t('employer.candidatesTab.aiAnalysisLocked')); }}
                         onRefresh={() => void handleOpenAiRanking(aiRankingData.jobId)}
                       /> : <p className="text-xs text-slate-500">{t('employer.candidatesTab.narrative.refresh')}</p>}

@@ -550,6 +550,9 @@ export const vi = {
         llm: 'Giải thích do LLM tạo từ bằng chứng đối sánh. Điểm số và thứ tự xếp hạng không thay đổi.',
         deterministic_fallback: 'Hiện không có giải thích từ LLM. Đây là bản tóm tắt theo quy tắc từ bằng chứng đối sánh, không phải nội dung do LLM tạo. Điểm số và thứ tự xếp hạng không thay đổi.',
         strengths: 'Điểm mạnh', pointsToVerify: 'Điểm cần xác minh',
+        facts: 'Bằng chứng đối sánh', matched: 'Kỹ năng phù hợp', verify: 'Cần xác minh',
+        matchedSkills: 'Kỹ năng có bằng chứng trong CV', missingRequiredSkills: 'Kỹ năng bắt buộc chưa có bằng chứng',
+        noneListed: 'Không có mục được liệt kê', experienceUnknown: 'Chưa xác định mức phù hợp về kinh nghiệm: chưa đủ bằng chứng để đánh giá.',
       },
       aiAnalysisLocked: 'Phân tích AI chi tiết dành cho HR Premium. Bạn vẫn có thể xem điểm phù hợp tổng thể.',
       analysis: {

@@ -1096,6 +1096,11 @@ export class ApplicationsService implements OnModuleInit {
           ? 'invalid_output'
           : 'provider_unavailable';
       analysis = fallbackNarrative(request);
+      this.logger.warn({
+        event: 'match_narrative_fallback',
+        reason: fallbackReason,
+        accessDenied: denied,
+      });
     }
     await snapshot();
     if (denied) throw new ForbiddenException('AI service access denied');

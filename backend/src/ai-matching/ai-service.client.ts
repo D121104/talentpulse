@@ -6,6 +6,7 @@ import {
   NarrativeRequest,
   MatchNarrative,
   validateNarrative,
+  NarrativeValidationError,
 } from './match-narrative';
 
 const DEFAULT_CV_PARSE_SCOPE = 'cv:parse';
@@ -629,7 +630,12 @@ export class AiServiceClient implements JobIndexingClient {
     );
     try {
       return validateNarrative(response, request);
-    } catch {
+    } catch (error) {
+      this.logger.warn({
+        event: 'match_narrative_validation_failed',
+        reason:
+          error instanceof NarrativeValidationError ? error.reason : 'schema',
+      });
       throw new AiServiceError(
         'AI_INVALID_RESPONSE',
         'Invalid analysis response',

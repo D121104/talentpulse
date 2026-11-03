@@ -2,11 +2,13 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { ApiError } from '../../../lib/api';
-import { employerApi, type MatchNarrative, type NarrativeStatement } from '../../../lib/employerApi';
+import { employerApi, type HRMatchingAnalysis, type MatchNarrative, type NarrativeStatement } from '../../../lib/employerApi';
+import { narrativeEvidence } from '../../../lib/candidateNarrative';
 
-export default function CandidateNarrative({ jobId, applicationId, version, locale, accessToken, onForbidden, onRefresh }: {
+export default function CandidateNarrative({ jobId, applicationId, version, locale, accessToken, aiAnalysis, onForbidden, onRefresh }: {
   jobId: string; applicationId: string; version: string; locale: 'vi' | 'en'; accessToken: string;
   onForbidden: () => void; onRefresh: () => void;
+  aiAnalysis?: HRMatchingAnalysis;
 }) {
   const { t } = useTranslation();
   const id = useId();
@@ -36,10 +38,11 @@ export default function CandidateNarrative({ jobId, applicationId, version, loca
       if (!controller.signal.aborted) { request.current = null; setLoading(false); }
     }
   };
+  const seenGeneric = new Set<string>();
   const statement = (item: NarrativeStatement) => <div className="space-y-2">
     <p className="whitespace-pre-wrap break-words">{item.text}</p>
-    <div className="flex flex-wrap gap-1">{item.evidence.filter(key => Object.prototype.hasOwnProperty.call(result?.evidenceLabels ?? {}, key)).map((key, index) =>
-      <span key={`${key}-${index}`} className="rounded-md bg-primary/10 px-2 py-1 text-xs text-primary">{result?.evidenceLabels[key]}</span>)}</div>
+    <div className="flex flex-wrap gap-1">{narrativeEvidence(item.evidence, result?.evidenceLabels ?? {}, aiAnalysis, seenGeneric).map(({ label, kind }) =>
+      <span key={`${kind}-${label}`} className="rounded-md bg-primary/10 px-2 py-1 text-xs text-primary">{kind !== 'context' && <span className="font-semibold">{t(`employer.candidatesTab.narrative.${kind}`)}: </span>}{label}</span>)}</div>
   </div>;
   return <div className="border-t border-slate-200 pt-3 dark:border-slate-700">
     <button type="button" aria-expanded={expanded} aria-controls={id}
@@ -53,6 +56,11 @@ export default function CandidateNarrative({ jobId, applicationId, version, loca
       {failure && <div role="alert"><p>{t(`employer.candidatesTab.narrative.${failure}`)}</p><button type="button" className="mt-2 rounded-lg px-2 py-2 font-semibold text-primary underline" onClick={() => failure === 'refresh' ? onRefresh() : void load()}>{t(`employer.candidatesTab.narrative.${failure === 'refresh' ? 'refreshButton' : 'retry'}`)}</button></div>}
       {result && <>
         <p className="rounded-lg bg-slate-100 p-3 text-xs dark:bg-slate-800">{t(`employer.candidatesTab.narrative.${result.source}`)}</p>
+        {aiAnalysis && <section className="space-y-2" aria-label={t('employer.candidatesTab.narrative.facts')}>
+          <h5 className="font-bold">{t('employer.candidatesTab.narrative.facts')}</h5>
+          {aiAnalysis.components.skills.available && (['matchedSkills', 'missingRequiredSkills'] as const).map(field => <p key={field} className="break-words"><span className="font-semibold">{t(`employer.candidatesTab.narrative.${field}`)} ({aiAnalysis[field].length}): </span>{aiAnalysis[field].join(', ') || t('employer.candidatesTab.narrative.noneListed')}</p>)}
+          {!aiAnalysis.components.experience.available && <p>{t('employer.candidatesTab.narrative.experienceUnknown')}</p>}
+        </section>}
         {statement(result.analysis.summary)}
         {(['strengths', 'pointsToVerify'] as const).map(section => result.analysis[section].length > 0 && <section key={section} className="space-y-2"><h5 className="font-bold">{t(`employer.candidatesTab.narrative.${section}`)}</h5><ul className="list-disc space-y-3 pl-5">{result.analysis[section].map((item, index) => <li key={index}>{statement(item)}</li>)}</ul></section>)}
       </>}

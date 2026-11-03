@@ -551,6 +551,9 @@ export const en = {
         llm: 'LLM-generated explanation based on matching evidence. Scores and ranking are unchanged.',
         deterministic_fallback: 'The LLM explanation is unavailable. This is a rule-based summary of matching evidence, not LLM-generated text. Scores and ranking are unchanged.',
         strengths: 'Strengths', pointsToVerify: 'Points to verify',
+        facts: 'Matching evidence', matched: 'Matched skill', verify: 'To verify',
+        matchedSkills: 'Skills evidenced in the CV', missingRequiredSkills: 'Required skills not yet evidenced',
+        noneListed: 'None listed', experienceUnknown: 'Experience compatibility is unknown: there is not enough evidence to assess it.',
       },
       aiAnalysisLocked: 'Detailed AI analysis requires HR Premium. Your overall match score is still available.',
       analysis: {
