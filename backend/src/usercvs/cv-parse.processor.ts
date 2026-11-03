@@ -15,6 +15,7 @@ import {
 } from 'src/ai-matching/cv-download';
 import { CVParseStatus } from './cv-parse-status';
 import { UserCV } from './entities/usercv.entity';
+import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
 
 /** Deterministic integer adapter for the FastAPI contract; local fencing remains UUID-based. */
 export function aiContentVersion(contentVersion: string): number {
@@ -74,6 +75,7 @@ export class UserCvParseProcessor {
     private readonly userCvRepo: Repository<UserCV>,
     private readonly aiServiceClient: AiServiceClient,
     private readonly configService: ConfigService,
+    private readonly cvProcessingService: CVProcessingService,
   ) {}
 
   @Process('parse-cv')
@@ -166,6 +168,12 @@ export class UserCvParseProcessor {
         return;
       }
       this.logger.log(`CV parse completed: ${cvId}`);
+      try {
+        await this.cvProcessingService.enqueueReadyCV(cvId);
+      } catch {
+        // Matching is recoverable independently; a parsed CV stays READY.
+        this.logger.warn(`Automatic matching enqueue deferred for CV: ${cvId}`);
+      }
     } catch (error) {
       const errorCode =
         error instanceof AiServiceError || error instanceof CvDownloadError

@@ -348,6 +348,8 @@ export function getCvTimelineEntries(
 }
 
 export interface OnlineCV {
+  expectedSalaryVndMonthly?: number | null;
+  shareExpectedSalary?: boolean;
   _id: string;
   templateType: CVTemplateType;
   generationMode?: CVGenerationMode;
@@ -406,6 +408,8 @@ export function resolveLoadedCvLocale(
 }
 
 export interface CreateOnlineCVDto {
+  expectedSalaryVndMonthly?: number | null;
+  shareExpectedSalary?: boolean;
   templateType: CVTemplateType;
   locale?: CVLocale;
   generationMode?: CVGenerationMode;

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from talentpulse_ai.core.config import Settings, get_settings
 from talentpulse_ai.core.exceptions import ServiceError
 from talentpulse_ai.dependencies import _build_services, _local_environment
+from talentpulse_ai.modules.cv_analysis.analysis import MatchAnalysisService
 from talentpulse_ai.modules.cv_analysis.matching import EmbeddingSemanticScorer, MatchService
 from talentpulse_ai.modules.cv_analysis.router import router
 from talentpulse_ai.modules.cv_generator.router import router as cv_generation_router
@@ -138,6 +139,7 @@ def create_app(
     application.state.embedding_provider = active_embedding
     application.state.vector_provider = active_vector
     application.state.generation_provider = generation_service.provider
+    application.state.match_analysis_service = MatchAnalysisService(generation_service.provider)
     application.state.cv_draft_service = CvDraftGenerationService(
         generation_service.provider, active_settings
     )

@@ -1,24 +1,18 @@
 import { createHash } from 'crypto';
-import { ConfigService } from '@nestjs/config';
 
-const POLICY_TEXT =
-  'The candidate permits AI ranking for this specific job application.';
+export const APPLICATION_AI_RANKING_POLICY_TEXT =
+  'By submitting this application, the candidate authorizes AI analysis and ranking of the selected CV for this job application only. This does not authorize global CV search, processing for other jobs, or AI training. Withdrawing removes the application and its AI matching results and prevents further matching for that application. An AI request already in progress may finish, but its result will not be retained for the withdrawn application.';
 export const APPLICATION_AI_RANKING_CONSENT_PURPOSE = 'application_ai_ranking';
-const DEFAULT_VERSION = 'application-ai-ranking-v1';
+const DEFAULT_VERSION = 'application-ai-ranking-submission-v2';
 const DEFAULT_HASH = createHash('sha256')
-  .update(POLICY_TEXT, 'utf8')
+  .update(APPLICATION_AI_RANKING_POLICY_TEXT, 'utf8')
   .digest('hex');
 
-export function getApplicationAiRankingConsentPolicy(config?: ConfigService) {
+export function getApplicationAiRankingConsentPolicy() {
   return {
     purpose: APPLICATION_AI_RANKING_CONSENT_PURPOSE,
-    consentVersion:
-      config?.get<string>('AI_APPLICATION_RANKING_CONSENT_VERSION')?.trim() ||
-      DEFAULT_VERSION,
-    policyHash:
-      config
-        ?.get<string>('AI_APPLICATION_RANKING_CONSENT_POLICY_HASH')
-        ?.trim()
-        .toLowerCase() || DEFAULT_HASH,
+    // Bind the new submission policy to its actual text, not legacy opt-in overrides.
+    consentVersion: DEFAULT_VERSION,
+    policyHash: DEFAULT_HASH,
   };
 }

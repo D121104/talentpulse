@@ -26,6 +26,10 @@ import { IUser } from 'src/users/users.interface';
 import { Role } from 'src/decorator/customize';
 import { SearchCandidatesDto } from './dto/search-candidate.dto';
 import { UnlockCandidateDto } from './dto/unlock-candidate.dto';
+import { Application } from 'src/applications/entities/application.entity';
+import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
+import { applicationAiScore } from 'src/ai-matching/hr-matching-analysis';
+import { ApplicationAiScoreSummary } from 'src/applications/dto/application-ai-score.dto';
 
 const FREE_HR_DAILY_CV_LIMIT = 5;
 
@@ -148,117 +152,74 @@ const DOMAIN_DICTIONARY: Record<string, string[]> = {
   ],
 };
 
-function estimateMonths(startStr?: string, endStr?: string): number {
-  if (!startStr) return 0;
-  const now = new Date();
-
-  const parseDate = (str: string): Date | null => {
-    if (!str) return null;
-    const clean = str.trim().toLowerCase();
+export function structuredExperienceYears(
+  entries: unknown,
+  now = new Date(),
+): number | null {
+  if (!Array.isArray(entries)) return null;
+  const parseMonth = (value: unknown, end = false): number | null => {
+    if (typeof value !== 'string') return null;
+    const text = value.trim().toLowerCase();
+    if (end && ['present', 'now', 'hiện tại', 'đang làm'].includes(text)) {
+      return now.getUTCFullYear() * 12 + now.getUTCMonth();
+    }
+    const iso = text.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+    const local = text.match(/^(\d{1,2})\/(\d{4})$/);
+    if (!iso && !local) return null;
+    const year = Number(iso ? iso[1] : local[2]);
+    const month = Number(iso ? iso[2] : local[1]);
+    const day = Number(iso?.[3] || 1);
+    const date = new Date(Date.UTC(year, month - 1, day));
     if (
-      [
-        'hiện tại',
-        'hien tai',
-        'present',
-        'now',
-        'nay',
-        'đang làm',
-        'dang lam',
-      ].includes(clean)
-    ) {
-      return now;
-    }
-    const mmYyyy = clean.match(/^(\d{1,2})[\/\-](\d{4})$/);
-    if (mmYyyy) {
-      const m = parseInt(mmYyyy[1], 10) - 1;
-      const y = parseInt(mmYyyy[2], 10);
-      return new Date(y, m, 1);
-    }
-    const yyyyMm = clean.match(/^(\d{4})[\/\-](\d{1,2})$/);
-    if (yyyyMm) {
-      const y = parseInt(yyyyMm[1], 10);
-      const m = parseInt(yyyyMm[2], 10) - 1;
-      return new Date(y, m, 1);
-    }
-    const yyyy = clean.match(/^(\d{4})$/);
-    if (yyyy) {
-      return new Date(parseInt(yyyy[1], 10), 0, 1);
-    }
-    const parsed = new Date(str);
-    return isNaN(parsed.getTime()) ? null : parsed;
+      year < 1900 ||
+      month < 1 ||
+      month > 12 ||
+      day < 1 ||
+      date.getUTCMonth() !== month - 1
+    )
+      return null;
+    return year * 12 + month - 1;
   };
-
-  const startDate = parseDate(startStr);
-  const endDate = parseDate(endStr || '') || now;
-
-  if (!startDate || !endDate || endDate < startDate) return 0;
-
-  const yearsDiff = endDate.getFullYear() - startDate.getFullYear();
-  const monthsDiff = endDate.getMonth() - startDate.getMonth();
-  return Math.max(1, yearsDiff * 12 + monthsDiff);
+  const intervals: [number, number][] = [];
+  const currentMonth = now.getUTCFullYear() * 12 + now.getUTCMonth();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const start = parseMonth(entry.startDate);
+    const end = parseMonth(entry.endDate, true);
+    if (
+      start === null ||
+      end === null ||
+      start > end ||
+      start > currentMonth ||
+      end > currentMonth
+    )
+      continue;
+    intervals.push([start, end]);
+  }
+  if (!intervals.length) return null;
+  intervals.sort((a, b) => a[0] - b[0]);
+  let [start, end] = intervals[0];
+  let months = 0;
+  for (const next of intervals.slice(1)) {
+    if (next[0] <= end) end = Math.max(end, next[1]);
+    else {
+      months += end - start;
+      [start, end] = next;
+    }
+  }
+  return (months + end - start) / 12;
 }
 
-function parseExperienceStats(
-  workExperience: any[],
-  parsedText?: string,
-): { years: number; placesCount: number; summary: string } {
-  if (!Array.isArray(workExperience) || workExperience.length === 0) {
-    if (parsedText) {
-      const match = parsedText.match(
-        /(\d{1,2})\s*(năm|year|years)\s*(kinh nghiệm|experience)?/i,
-      );
-      if (match) {
-        const y = parseInt(match[1], 10);
-        if (y > 0 && y <= 30) {
-          return {
-            years: y,
-            placesCount: 1,
-            summary: `~${y} năm kinh nghiệm`,
-          };
-        }
-      }
-    }
-    return {
-      years: 0,
-      placesCount: 0,
-      summary: 'Mới tốt nghiệp / Fresher',
-    };
-  }
-
-  let totalMonths = 0;
-  const placesCount = workExperience.length;
-
-  for (const exp of workExperience) {
-    if (typeof exp === 'object' && exp !== null) {
-      const start = exp.startDate;
-      const end = exp.endDate;
-      const months = estimateMonths(start, end);
-      if (months > 0) {
-        totalMonths += months;
-      }
-    } else if (typeof exp === 'string') {
-      const match = exp.match(/(\d{1,2})\s*(năm|year|years)/i);
-      if (match) {
-        totalMonths += parseInt(match[1], 10) * 12;
-      }
-    }
-  }
-
-  const computedYears =
-    totalMonths > 0 ? Math.round((totalMonths / 12) * 10) / 10 : 0;
-
-  let summary = '';
-  if (computedYears >= 1) {
-    summary = `${computedYears} năm KN (${placesCount} nơi từng làm)`;
-  } else if (computedYears > 0) {
-    summary = `${Math.round(
-      totalMonths,
-    )} tháng KN (${placesCount} nơi từng làm)`;
-  } else {
-    summary = `Đã làm việc tại ${placesCount} nơi`;
-  }
-
-  return { years: computedYears, placesCount, summary };
+function parseExperienceStats(entries: unknown[]) {
+  const years = structuredExperienceYears(entries);
+  return {
+    years,
+    placesCount: entries.length,
+    summary:
+      years === null
+        ? 'Chưa có dữ liệu kinh nghiệm theo thời gian'
+        : `${Math.round(years * 10) / 10} năm KN`,
+  };
 }
 
 export function extractCandidateSkills(skillsData: any): string[] {
@@ -442,13 +403,30 @@ export class CandidateAccessService {
    * Extract company recruitment profile & field keywords to personalize CV search
    */
   private async getCompanyRecruitmentProfile(hrUserId: string) {
-    const hrUser = await this.userRepo.findOne({ where: { _id: hrUserId } });
-    if (!hrUser || !hrUser.company || !hrUser.company._id) return null;
+    const hrUser = await this.userRepo.findOne({
+      where: { _id: hrUserId, isDeleted: false },
+    });
+    if (!hrUser || hrUser.isDeleted || hrUser.deletedAt) {
+      throw new ForbiddenException('Tài khoản không có công ty hợp lệ');
+    }
+    const isAdmin = hrUser.role === Role.ADMIN;
+    if (!hrUser.company?._id) {
+      if (isAdmin) return null;
+      throw new ForbiddenException(
+        'Bạn cần liên kết công ty hợp lệ để tìm kiếm ứng viên',
+      );
+    }
 
     const companyId = hrUser.company._id;
     const company = await this.companyRepo.findOne({
-      where: { _id: companyId },
+      where: { _id: companyId, isDeleted: false },
     });
+    if (!company || company.isDeleted || company.deletedAt) {
+      if (isAdmin) return null;
+      throw new ForbiddenException(
+        'Bạn cần liên kết công ty hợp lệ để tìm kiếm ứng viên',
+      );
+    }
     const companyJobs = await this.jobRepo.find({
       where: { isDeleted: false },
     });
@@ -502,6 +480,7 @@ export class CandidateAccessService {
     }
 
     return {
+      companyId,
       companyName: company?.name || hrUser.company.name || 'Công ty',
       industryDomains,
       targetSkills: Array.from(new Set(targetSkills)),
@@ -582,13 +561,13 @@ export class CandidateAccessService {
     let reason = '';
     if (isRecommended) {
       if (matchedSkills.length > 0) {
-        reason = `🎯 Khớp ${score}% kỹ năng (${matchedSkills
+        reason = `Có từ khóa kỹ năng chung (${matchedSkills
           .slice(0, 2)
           .join(', ')})`;
       } else if (matchedDomainName) {
-        reason = `✨ Phù hợp lĩnh vực ${matchedDomainName}`;
+        reason = `Có từ khóa lĩnh vực ${matchedDomainName}`;
       } else {
-        reason = `🎯 ${score}% phù hợp định hướng tuyển dụng`;
+        reason = 'Có từ khóa chung với tin tuyển dụng của công ty';
       }
     }
 
@@ -604,6 +583,39 @@ export class CandidateAccessService {
     const keyword = dto.keyword?.trim() || '';
     const skillsKeyword = dto.skills?.trim() || '';
     const locationKeyword = dto.location?.trim() || '';
+    const educationKeyword = dto.education?.trim() || '';
+    const experienceActive =
+      dto.minExperienceYears != null || dto.maxExperienceYears != null;
+    const salaryActive =
+      dto.minExpectedSalary != null || dto.maxExpectedSalary != null;
+    if (
+      skillsKeyword ||
+      locationKeyword ||
+      educationKeyword ||
+      experienceActive ||
+      salaryActive
+    ) {
+      const entitlements = await this.usersService.getUserEntitlements(
+        hrUser._id,
+      );
+      if (!entitlements.limits.canUseAdvancedCandidateSearch) {
+        throw new ForbiddenException(
+          'Tìm kiếm ứng viên nâng cao yêu cầu HR Premium',
+        );
+      }
+    }
+    if (
+      (dto.minExperienceYears != null &&
+        dto.maxExperienceYears != null &&
+        dto.minExperienceYears > dto.maxExperienceYears) ||
+      (dto.minExpectedSalary != null &&
+        dto.maxExpectedSalary != null &&
+        dto.minExpectedSalary > dto.maxExpectedSalary)
+    ) {
+      throw new BadRequestException(
+        'Giá trị tối thiểu không được lớn hơn giá trị tối đa',
+      );
+    }
     const current = Math.max(1, Number(dto.current) || 1);
     const pageSize = Math.max(1, Math.min(50, Number(dto.pageSize) || 20));
 
@@ -611,6 +623,22 @@ export class CandidateAccessService {
 
     // 1.0 Retrieve HR's Company Profile for smart personalized ranking
     const companyProfile = await this.getCompanyRecruitmentProfile(hrUser._id);
+    let selectedJob: Job | null = null;
+    if (dto.jobId) {
+      selectedJob = await this.jobRepo.findOne({
+        where: { _id: dto.jobId, isDeleted: false },
+      });
+      if (!selectedJob || selectedJob.deletedAt)
+        throw new NotFoundException('Công việc không tồn tại');
+      if (
+        !companyProfile?.companyId ||
+        selectedJob.company?._id !== companyProfile.companyId
+      ) {
+        throw new ForbiddenException(
+          'Bạn không có quyền truy cập dữ liệu của công việc này',
+        );
+      }
+    }
 
     // 1.1 Query Online CVs (Publicly searchable)
     const onlineQueryBuilder = this.onlineCVRepo
@@ -623,6 +651,31 @@ export class CandidateAccessService {
         allowRecruiterSearch: true,
       })
       .andWhere('user.isJobSeeking = :isJobSeeking', { isJobSeeking: true });
+
+    onlineQueryBuilder.andWhere(
+      'cv.deletedAt IS NULL AND user.deletedAt IS NULL',
+    );
+    if (educationKeyword) {
+      onlineQueryBuilder.andWhere(
+        `EXISTS (SELECT 1 FROM jsonb_array_elements(cv.education) e WHERE e->>'schoolName' ILIKE :edu OR e->>'degree' ILIKE :edu OR e->>'major' ILIKE :edu)`,
+        { edu: `%${educationKeyword}%` },
+      );
+    }
+    if (salaryActive) {
+      onlineQueryBuilder.andWhere(
+        'cv.shareExpectedSalary = true AND cv.expectedSalaryVndMonthly IS NOT NULL',
+      );
+      if (dto.minExpectedSalary != null)
+        onlineQueryBuilder.andWhere(
+          'cv.expectedSalaryVndMonthly >= :minSalary',
+          { minSalary: dto.minExpectedSalary },
+        );
+      if (dto.maxExpectedSalary != null)
+        onlineQueryBuilder.andWhere(
+          'cv.expectedSalaryVndMonthly <= :maxSalary',
+          { maxSalary: dto.maxExpectedSalary },
+        );
+    }
 
     if (keyword) {
       onlineQueryBuilder.andWhere(
@@ -669,6 +722,18 @@ export class CandidateAccessService {
         allowRecruiterSearch: true,
       })
       .andWhere('user.isJobSeeking = :isJobSeeking', { isJobSeeking: true });
+
+    userCvQueryBuilder.andWhere(
+      'cv.deletedAt IS NULL AND user.deletedAt IS NULL',
+    );
+    // Uploaded CVs have neither structured dated experience nor disclosed salary.
+    if (experienceActive || salaryActive) userCvQueryBuilder.andWhere('1 = 0');
+    if (educationKeyword) {
+      userCvQueryBuilder.andWhere(
+        'EXISTS (SELECT 1 FROM unnest(cv.education) e WHERE e ILIKE :edu)',
+        { edu: `%${educationKeyword}%` },
+      );
+    }
 
     if (keyword) {
       userCvQueryBuilder.andWhere(
@@ -734,6 +799,15 @@ export class CandidateAccessService {
       const skills = extractCandidateSkills(cv.skills);
 
       const expStats = parseExperienceStats(cv.workExperience || []);
+      if (
+        experienceActive &&
+        (expStats.years === null ||
+          (dto.minExperienceYears != null &&
+            expStats.years < dto.minExperienceYears) ||
+          (dto.maxExperienceYears != null &&
+            expStats.years > dto.maxExperienceYears))
+      )
+        continue;
       const title = cv.position || cv.title || 'Ứng viên tiềm năng';
 
       const match = this.calculateCompanyMatch(
@@ -777,10 +851,7 @@ export class CandidateAccessService {
       const isUnlocked = unlockedUserCvIds.has(`${candidate._id}_${cv._id}`);
 
       const skills = extractCandidateSkills(cv.skills);
-      const expStats = parseExperienceStats(
-        cv.experience || [],
-        cv.parsedText || '',
-      );
+      const expStats = parseExperienceStats(cv.experience || []);
       const title = cv.title || 'Hồ sơ CV đính kèm';
 
       const match = this.calculateCompanyMatch(
@@ -834,6 +905,15 @@ export class CandidateAccessService {
       startIndex + pageSize,
     );
 
+    const scores =
+      selectedJob && companyProfile?.companyId
+        ? await this.searchApplicationScores(
+            paginatedResult,
+            selectedJob,
+            companyProfile.companyId,
+          )
+        : new Map<string, ApplicationAiScoreSummary>();
+
     return {
       meta: {
         current,
@@ -844,9 +924,91 @@ export class CandidateAccessService {
         hasCompanyJobs: companyProfile ? companyProfile.jobCount > 0 : false,
         companyJobCount: companyProfile ? companyProfile.jobCount : 0,
         companyName: companyProfile?.companyName,
+        jobId: selectedJob?._id ?? null,
+        jobName: selectedJob?.name ?? null,
       },
-      result: paginatedResult,
+      result: paginatedResult.map((row) => ({
+        ...row,
+        // Deprecated: company keyword relevance is not a CV–Job percentage.
+        companyMatchScore: null,
+        ...(selectedJob
+          ? {
+              aiScore: scores.get(`${row.cvType}:${row.cvId}`) ?? {
+                status: 'UNAVAILABLE',
+                overallScore: null,
+              },
+            }
+          : {}),
+      })),
     };
+  }
+
+  private async searchApplicationScores(
+    rows: {
+      cvType: CandidateAccessType;
+      cvId: string;
+      candidateUserId: string;
+    }[],
+    job: Job,
+    companyId: string,
+  ) {
+    const summaries = new Map<string, ApplicationAiScoreSummary>();
+    if (!rows.length) return summaries;
+    const applications = await this.dataSource.getRepository(Application).find({
+      where: rows.map((row) => ({
+        jobId: job._id,
+        companyId,
+        userId: row.candidateUserId,
+        isDeleted: false,
+        ...(row.cvType === CandidateAccessType.UPLOADED_CV
+          ? { cvId: row.cvId }
+          : { cv: { onlineCvId: row.cvId, userId: row.candidateUserId } }),
+      })),
+      relations: ['cv', 'user', 'company', 'job'],
+    });
+    const results = applications.length
+      ? await this.dataSource.getRepository(CVMatchResult).find({
+          where: applications.map((app) => ({
+            applicationId: app._id,
+            isDeleted: false,
+          })),
+          select: {
+            applicationId: true,
+            cvId: true,
+            userId: true,
+            jobId: true,
+            status: true,
+            matchScore: true,
+            contentHash: true,
+            jobSourceVersion: true,
+            scoringVersion: true,
+            normalizationVersion: true,
+          },
+        })
+      : [];
+    for (const row of rows) {
+      const exact = applications.filter(
+        (app) =>
+          app.jobId === job._id &&
+          app.companyId === companyId &&
+          app.userId === row.candidateUserId &&
+          app.cv?.userId === row.candidateUserId &&
+          (row.cvType === CandidateAccessType.UPLOADED_CV
+            ? app.cvId === row.cvId
+            : app.cv?.onlineCvId === row.cvId),
+      );
+      // No application authority (or ambiguous historical linkage): never infer consent from searchability.
+      if (exact.length !== 1) continue;
+      const app = exact[0];
+      summaries.set(
+        `${row.cvType}:${row.cvId}`,
+        applicationAiScore(
+          app,
+          results.find((result) => result.applicationId === app._id),
+        ),
+      );
+    }
+    return summaries;
   }
 
   /**

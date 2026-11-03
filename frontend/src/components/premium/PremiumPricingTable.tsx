@@ -251,23 +251,21 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
       category: '2. Tìm kiếm & Quản lý Ứng viên',
       features: [
         { name: 'Mở khóa toàn bộ SĐT, Email ứng viên', free: 'Xem CV đã ẩn', verified: '5 liên hệ/tháng', premium: 'Mở khóa 100% không giới hạn' },
-        { name: 'Tìm kiếm ứng viên theo Skill nâng cao', free: 'Cơ bản', verified: 'Nâng cao', premium: 'Bộ lọc chuyên sâu AI' },
-        { name: 'Tải trọn bộ CV ứng viên dạng ZIP/PDF', free: false, verified: true, premium: true },
+        { name: 'Tìm ứng viên bằng bộ lọc kỹ năng, địa điểm, kinh nghiệm', free: 'Cơ bản', verified: 'Bộ lọc nâng cao', premium: 'Bộ lọc nâng cao' },
         { name: 'Huy hiệu Doanh nghiệp VIP Uy tín', free: false, verified: true, premium: true },
       ],
     },
     {
       category: '3. Công nghệ AI Tuyển dụng',
       features: [
-        { name: 'AI Sourcing & Đánh giá độ khớp CV (%)', free: '10 hồ sơ đầu', verified: '20 hồ sơ', premium: 'Tất cả hồ sơ tự động' },
-        { name: 'Tự động gợi ý Top ứng viên tiềm năng', free: false, verified: false, premium: 'Gửi hàng ngày' },
-        { name: 'Gợi ý câu hỏi phỏng vấn chuẩn kỹ năng', free: false, verified: false, premium: true },
+        { name: 'Xếp hạng và điểm phù hợp CV đã xử lý', free: true, verified: true, premium: true },
+        { name: 'Phân tích thành phần điểm, kỹ năng phù hợp và còn thiếu', free: false, verified: false, premium: true },
       ],
     },
     {
       category: '4. Báo cáo & Hỗ trợ Doanh nghiệp',
       features: [
-        { name: 'Xuất báo cáo tuyển dụng Excel/PDF', free: false, verified: true, premium: true },
+        { name: 'Xuất CSV ứng viên trong danh sách hiện đã tải, gồm điểm AI và trạng thái xử lý', free: false, verified: false, premium: true },
         { name: 'Hóa đơn tài chính VAT điện tử hợp lệ', free: false, verified: true, premium: true },
         { name: 'Chuyên viên tư vấn Account Manager 1-1', free: false, verified: false, premium: 'Hỗ trợ 24/7' },
       ],

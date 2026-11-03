@@ -160,6 +160,7 @@ describe('NestJS -> FastAPI CV matching loopback contract', () => {
       level: 'senior',
       location: 'Hanoi',
       company: { _id: ids.company, name: company.name },
+      createdBy: { _id: 'creator' },
       isDeleted: false,
       deletedAt: null,
       updatedAt,
@@ -180,6 +181,7 @@ describe('NestJS -> FastAPI CV matching loopback contract', () => {
       deletedAt: null,
     } as any;
     const application = {
+      companyId: ids.company,
       _id: ids.application,
       cvId: ids.cv,
       userId: ids.user,
@@ -224,6 +226,14 @@ describe('NestJS -> FastAPI CV matching loopback contract', () => {
     };
 
     const resultRepo = {
+      manager: {
+        getRepository: () => ({
+          findOne: async ({ where }) =>
+            where._id === 'creator'
+              ? { role: 'ADMIN', company: { _id: ids.company } }
+              : { _id: ids.user },
+        }),
+      },
       findOne: jest.fn().mockResolvedValue(result),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
@@ -312,9 +322,9 @@ describe('NestJS -> FastAPI CV matching loopback contract', () => {
         matchScore: 1,
         matchedSkills: ['TypeScript', 'Python'],
         missingSkills: [],
-        scoringVersion: 'cv-job-match-v2',
+        scoringVersion: 'cv-job-match-v3',
         modelVersion: 'deterministic-v1',
-        normalizationVersion: 'cv-job-normalization-v1',
+        normalizationVersion: 'skill-normalization-v2',
         degraded: false,
         status: CVProcessingStatus.COMPLETED,
         processedAt: expect.any(Date),

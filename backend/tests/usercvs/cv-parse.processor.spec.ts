@@ -53,11 +53,18 @@ describe('UserCvParseProcessor', () => {
     const aiMatchingService = {
       parseCv: jest.fn(),
     } as any;
+    const matching = { enqueueReadyCV: jest.fn().mockResolvedValue(undefined) };
 
     return {
-      processor: new UserCvParseProcessor(userCvRepo, aiMatchingService, {
-        get: jest.fn().mockReturnValue(undefined),
-      } as any),
+      processor: new UserCvParseProcessor(
+        userCvRepo,
+        aiMatchingService,
+        {
+          get: jest.fn().mockReturnValue(undefined),
+        } as any,
+        matching as any,
+      ),
+      matching,
       userCvRepo,
       aiMatchingService,
     };
@@ -145,47 +152,55 @@ describe('UserCvParseProcessor', () => {
     );
   });
 
-  it('stores parsed content and READY status for the current CV', async () => {
-    const { processor, userCvRepo, aiMatchingService } = setup();
-    const parsedText = 'A sufficiently long parsed resume body';
-    aiMatchingService.parseCv.mockResolvedValue({
-      cv_id: cvId,
-      content_version: aiContentVersion(jobData.contentVersion),
-      media_type: 'application/pdf',
-      content_sha256:
-        '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
-      extracted_text: parsedText,
-      text_char_count: parsedText.length,
-      parser_version: 'test',
-      skills: ['TypeScript', 'NestJS'],
-      education: ['Computer Science'],
-      experience: ['Backend Engineer'],
-      certificates: ['AWS Certified'],
-      warnings: ['Some dates were inferred'],
-    });
-
-    await processor.handleParse({ data: jobData } as any);
-
-    expect(userCvRepo.update).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        _id: cvId,
-        url: jobData.expectedUrl,
-        contentVersion: jobData.contentVersion,
-      }),
-      expect.objectContaining({
-        parsedText,
-        contentHash:
+  it.each([false, true])(
+    'stores READY and triggers matching even with enqueue failure=%s',
+    async (queueFailure) => {
+      const { processor, userCvRepo, aiMatchingService, matching } = setup();
+      if (queueFailure)
+        matching.enqueueReadyCV.mockRejectedValue(
+          new Error('queue unavailable'),
+        );
+      const parsedText = 'A sufficiently long parsed resume body';
+      aiMatchingService.parseCv.mockResolvedValue({
+        cv_id: cvId,
+        content_version: aiContentVersion(jobData.contentVersion),
+        media_type: 'application/pdf',
+        content_sha256:
           '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
-        parseStatus: CVParseStatus.READY,
+        extracted_text: parsedText,
+        text_char_count: parsedText.length,
+        parser_version: 'test',
         skills: ['TypeScript', 'NestJS'],
         education: ['Computer Science'],
         experience: ['Backend Engineer'],
         certificates: ['AWS Certified'],
         warnings: ['Some dates were inferred'],
-        parserVersion: 'test',
-      }),
-    );
-  });
+      });
+
+      await processor.handleParse({ data: jobData } as any);
+
+      expect(matching.enqueueReadyCV).toHaveBeenCalledWith(cvId);
+      expect(userCvRepo.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          _id: cvId,
+          url: jobData.expectedUrl,
+          contentVersion: jobData.contentVersion,
+        }),
+        expect.objectContaining({
+          parsedText,
+          contentHash:
+            '3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63',
+          parseStatus: CVParseStatus.READY,
+          skills: ['TypeScript', 'NestJS'],
+          education: ['Computer Science'],
+          experience: ['Backend Engineer'],
+          certificates: ['AWS Certified'],
+          warnings: ['Some dates were inferred'],
+          parserVersion: 'test',
+        }),
+      );
+    },
+  );
 
   it('does not write a parse result when the CV changes during extraction', async () => {
     const currentCv = {

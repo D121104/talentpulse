@@ -1,9 +1,14 @@
 import { Process, Processor } from '@nestjs/bull';
+import {
+  CURRENT_MATCH_SCORING_VERSION,
+  CURRENT_SKILL_NORMALIZATION_VERSION,
+  hasCurrentMatchingVersions,
+} from './matching-versions';
 import { Logger } from '@nestjs/common';
 import { Job as BullJob } from 'bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Repository } from 'typeorm';
 import {
   AiServiceClient,
   AiServiceError,
@@ -23,6 +28,46 @@ import {
   ApplicationStatus,
 } from 'src/applications/entities/application.entity';
 import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
+import { User, PremiumPlan } from 'src/users/entities/user.entity';
+import { Role } from 'src/decorator/customize';
+
+export async function hasAutomaticMatchingEntitlement(
+  manager: EntityManager,
+  job: RecruitmentJob,
+  company: Company,
+  candidateId: string,
+): Promise<boolean> {
+  if (
+    !job.createdBy?._id ||
+    !company ||
+    company.isDeleted ||
+    company.deletedAt ||
+    !company.isActive
+  )
+    return false;
+  const users = manager.getRepository(User);
+  const [creator, candidate] = await Promise.all([
+    users.findOne({ where: { _id: job.createdBy._id } }),
+    users.findOne({ where: { _id: candidateId } }),
+  ]);
+  return Boolean(
+    candidate &&
+      !candidate.isDeleted &&
+      !candidate.deletedAt &&
+      creator &&
+      !creator.isDeleted &&
+      !creator.deletedAt &&
+      !creator.isLocked &&
+      creator.company?._id === company._id &&
+      company._id === job.company?._id &&
+      (creator.role === Role.ADMIN ||
+        (creator.role === Role.HR &&
+          creator.isPremium &&
+          creator.premiumPlan === PremiumPlan.HR_PREMIUM &&
+          creator.premiumExpiresAt &&
+          new Date(creator.premiumExpiresAt).getTime() > Date.now())),
+  );
+}
 
 /**
  * Queue data is deliberately an opaque capability: workers use these IDs and
@@ -50,7 +95,10 @@ export function consentIdempotencyKey(
   jobSourceVersion: string,
 ): string {
   const fingerprint = createHash('sha256')
-    .update(`${applicationId}:${cvContentVersion}:${jobSourceVersion}`, 'utf8')
+    .update(
+      `${applicationId}:${cvContentVersion}:${jobSourceVersion}:${CURRENT_MATCH_SCORING_VERSION}:${CURRENT_SKILL_NORMALIZATION_VERSION}`,
+      'utf8',
+    )
     .digest('hex');
   return `cv-match:${applicationId}:${fingerprint}`;
 }
@@ -76,7 +124,11 @@ export function cvMatchIdentity(
   >,
   attempt = 0,
 ): CVMatchIdentity {
-  const stableKey = `${data.applicationId}:${data.cvContentVersion}:${data.jobSourceVersion}`;
+  const stableKey = consentIdempotencyKey(
+    data.applicationId,
+    data.cvContentVersion,
+    data.jobSourceVersion,
+  );
   const requestId = deterministicUuid(`cv-match:request:${stableKey}`);
   return {
     request_id: requestId,
@@ -195,7 +247,16 @@ export class CVProcessingProcessor {
           withDeleted: true,
         })
       : null;
-    return { result, cv, recruitmentJob, application, company };
+    const entitled =
+      recruitmentJob && company && application
+        ? await hasAutomaticMatchingEntitlement(
+            this.cvMatchResultRepo.manager,
+            recruitmentJob,
+            company,
+            application.userId,
+          )
+        : false;
+    return { result, cv, recruitmentJob, application, company, entitled };
   }
 
   private isEligible(
@@ -214,6 +275,7 @@ export class CVProcessingProcessor {
         application.cvId === data.cvId &&
         application.jobId === data.jobId &&
         application.userId === data.userId &&
+        application.companyId === company._id &&
         cv.userId === data.userId &&
         result.applicationId === data.applicationId &&
         result.userId === data.userId &&
@@ -372,6 +434,7 @@ export class CVProcessingProcessor {
       !recruitmentJob ||
       !application ||
       !company ||
+      !canonical.entitled ||
       !this.isEligible(data, result, cv, recruitmentJob, application, company)
     ) {
       this.logger.warn(
@@ -387,6 +450,8 @@ export class CVProcessingProcessor {
         cvId: data.cvId,
         jobId: data.jobId,
         applicationId: data.applicationId,
+        contentHash: data.contentHash,
+        jobSourceVersion: data.jobSourceVersion,
         status: In([CVProcessingStatus.PENDING, CVProcessingStatus.FAILED]),
       },
       {
@@ -398,6 +463,7 @@ export class CVProcessingProcessor {
     );
     if (!processing.affected) return { success: false, stale: true };
 
+    let completed = false;
     try {
       const match = await this.aiServiceClient.matchCv(
         this.aiRequest(
@@ -415,6 +481,7 @@ export class CVProcessingProcessor {
         !latest.recruitmentJob ||
         !latest.application ||
         !latest.company ||
+        !latest.entitled ||
         !this.isEligible(
           data,
           latest.result,
@@ -449,7 +516,10 @@ export class CVProcessingProcessor {
           compatibility: this.compatibility(match),
           scoringVersion: match.scoring_version,
           modelVersion: match.semantic_component_version,
-          normalizationVersion: 'cv-job-normalization-v1',
+          normalizationVersion:
+            match.scoring_version === CURRENT_MATCH_SCORING_VERSION
+              ? CURRENT_SKILL_NORMALIZATION_VERSION
+              : null,
           degraded: match.degraded,
           status: CVProcessingStatus.COMPLETED,
           processedAt: new Date(),
@@ -457,6 +527,7 @@ export class CVProcessingProcessor {
         },
       );
       if (!update.affected) return { success: false, stale: true };
+      completed = true;
       return { success: true, matchScore: match.overall_score };
     } catch (error) {
       const code =
@@ -468,6 +539,7 @@ export class CVProcessingProcessor {
         current.recruitmentJob &&
         current.application &&
         current.company &&
+        current.entitled &&
         this.isEligible(
           data,
           current.result,
@@ -490,6 +562,20 @@ export class CVProcessingProcessor {
       }
       this.logger.warn(`CV matching failed: ${data.cvMatchResultId} (${code})`);
       throw error;
+    } finally {
+      // Release an abandoned claim (revocation/expiry/version change) without
+      // touching a newer generation or any successfully completed result.
+      if (!completed)
+        await this.cvMatchResultRepo.update(
+          {
+            _id: data.cvMatchResultId,
+            applicationId: data.applicationId,
+            contentHash: data.contentHash,
+            jobSourceVersion: data.jobSourceVersion,
+            status: CVProcessingStatus.PROCESSING,
+          },
+          { status: CVProcessingStatus.FAILED },
+        );
     }
   }
 
@@ -502,6 +588,9 @@ export class CVProcessingProcessor {
     if (
       !result ||
       !result.job ||
+      result.isDeleted ||
+      result.deletedAt ||
+      result.status === CVProcessingStatus.PROCESSING ||
       !result.cv ||
       !result.application ||
       !result.cv.contentHash
@@ -535,10 +624,34 @@ export class CVProcessingProcessor {
         jobSourceVersion,
       ),
     };
-    await this.cvMatchResultRepo.update(result._id, {
-      contentHash: data.contentHash,
-      jobSourceVersion: data.jobSourceVersion,
-    });
+    if (
+      result.status === CVProcessingStatus.COMPLETED &&
+      result.contentHash === data.contentHash &&
+      result.jobSourceVersion === data.jobSourceVersion &&
+      hasCurrentMatchingVersions(result)
+    )
+      return { success: false, stale: true };
+
+    // Invalidate the old score atomically with its fingerprints. A delayed
+    // legacy message must not relabel a completed score or a newer claim.
+    const invalidated = await this.cvMatchResultRepo.update(
+      {
+        _id: result._id,
+        applicationId: result.applicationId,
+        isDeleted: false,
+        deletedAt: IsNull(),
+        status: result.status,
+        contentHash: result.contentHash ?? IsNull(),
+        jobSourceVersion: result.jobSourceVersion ?? IsNull(),
+      },
+      {
+        status: CVProcessingStatus.PENDING,
+        matchScore: 0,
+        contentHash: data.contentHash,
+        jobSourceVersion: data.jobSourceVersion,
+      },
+    );
+    if (!invalidated.affected) return { success: false, stale: true };
     return this.handleProcessCV({
       ...job,
       data,

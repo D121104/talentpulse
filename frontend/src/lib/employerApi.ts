@@ -2,6 +2,17 @@ import { apiRequest } from "./api";
 
 import { API_URL } from "./api";
 
+export interface NarrativeStatement { text: string; evidence: string[] }
+export interface MatchNarrative {
+  analysisVersionKey: string;
+  locale: 'vi' | 'en';
+  source: 'llm' | 'deterministic_fallback';
+  fallbackReason: null | 'provider_unavailable' | 'provider_timeout' | 'invalid_output';
+  narrativeVersion: 'match-narrative-v1';
+  analysis: { summary: NarrativeStatement; strengths: NarrativeStatement[]; pointsToVerify: NarrativeStatement[] };
+  evidenceLabels: Record<string, string>;
+}
+
 export interface SkillItem {
   _id: string;
   name: string;
@@ -140,6 +151,10 @@ export interface HrJobItem {
 
 export interface ApplicationItem {
   _id: string;
+  aiScore?: {
+    status: 'COMPLETED' | 'PENDING' | 'PROCESSING' | 'FAILED' | 'MISSING' | 'STALE' | 'UNAVAILABLE';
+    overallScore: number | null;
+  } | null;
   status: "PENDING" | "REVIEWING" | "CONSIDERING" | "APPROVED" | "REJECTED";
   coverLetter?: string;
   createdAt: string;
@@ -171,7 +186,29 @@ export interface ApplicationItem {
   };
 }
 
+export interface MatchingAnalysisComponent {
+  score: number | null;
+  weight: number;
+  available: boolean;
+  evidence: string[];
+}
+
+export interface HRMatchingAnalysis {
+  source: 'persisted_cv_match_result';
+  textLocale: 'en' | 'und';
+  components: Record<'semantic' | 'skills' | 'experience', MatchingAnalysisComponent>;
+  compatibility: Record<'location' | 'workMode', MatchingAnalysisComponent>;
+  matchedSkills: string[];
+  missingRequiredSkills: string[];
+  strengths: string[];
+  gaps: string[];
+  versions: { scoring: string | null; model: string | null; normalization: string | null };
+  degraded: boolean | null;
+  explanation: { text: string | null; source: 'deterministic_matching' | 'stored_unknown' | 'unavailable'; locale: 'en' | 'und' };
+}
+
 export interface AIRankedCandidate {
+  analysisVersionKey?: string;
   applicationId: string;
   candidateId: string;
   candidateName: string;
@@ -181,6 +218,8 @@ export interface AIRankedCandidate {
   cvTitle: string;
   cvUrl: string;
   matchScore: number;
+  analysisAvailable: boolean;
+  aiAnalysis?: HRMatchingAnalysis;
   matchedSkills: string[];
   missingSkills: string[];
   shortExplanation: string;
@@ -195,10 +234,15 @@ export interface CandidatePublicItem {
   title: string;
   skills: string[];
   location: string;
-  experienceYears?: number;
+  experienceYears?: number | null;
   experiencePlacesCount?: number;
   experienceSummary?: string;
-  companyMatchScore?: number;
+  companyMatchScore?: number | null;
+  matchedKeywords?: string[];
+  aiScore?: {
+    status: 'COMPLETED' | 'PENDING' | 'PROCESSING' | 'FAILED' | 'STALE' | 'MISSING' | 'UNAVAILABLE';
+    overallScore: number | null;
+  };
   isRecommendedForCompany?: boolean;
   recommendationReason?: string;
   cvType: "ONLINE_CV" | "UPLOADED_CV";
@@ -541,14 +585,25 @@ export const employerApi = {
       accessToken,
     }),
 
-  getAIRankedCandidates: (jobId: string, topN = 10, accessToken: string) =>
+  getMatchNarrative: (jobId: string, applicationId: string, body: { locale: 'vi' | 'en'; analysisVersionKey: string }, accessToken: string, signal: AbortSignal) =>
+    apiRequest<MatchNarrative>(`/applications/by-job/${jobId}/ai-analysis/${applicationId}`, { method: 'POST', body, accessToken, signal }),
+
+  getAIRankedCandidates: (jobId: string, topN = 10, accessToken: string, signal?: AbortSignal) =>
     apiRequest<{
       jobId: string;
       jobName: string;
       totalApplications: number;
       rankedCandidates: AIRankedCandidate[];
+      processingStatus?: {
+        total: number;
+        completed: number;
+        processing: number;
+        pending: number;
+        failed: number;
+        stale?: number;
+      };
       processedAt: string;
-    }>(`/applications/by-job/${jobId}/ai-rank?topN=${topN}`, { accessToken }),
+    }>(`/applications/by-job/${jobId}/ai-rank?topN=${topN}`, { accessToken, signal }),
 
   searchCandidatesByCV: (
     jobId: string,
@@ -648,21 +703,32 @@ export const employerApi = {
   // 9. HR Candidate Search & Unlock Quota System
   searchCandidatesGlobal: (
     query: {
+      jobId?: string;
       keyword?: string;
       skills?: string;
       location?: string;
+      education?: string;
+      minExperienceYears?: number;
+      maxExperienceYears?: number;
+      minExpectedSalary?: number;
+      maxExpectedSalary?: number;
       current?: number;
       pageSize?: number;
     },
     accessToken: string,
   ) => {
     const qs = new URLSearchParams();
+    if (query.jobId) qs.append("jobId", query.jobId);
     if (query.keyword) qs.append("keyword", query.keyword);
     if (query.skills) qs.append("skills", query.skills);
     if (query.location) qs.append("location", query.location);
+    if (query.education) qs.append("education", query.education);
+    for (const key of ['minExperienceYears', 'maxExperienceYears', 'minExpectedSalary', 'maxExpectedSalary'] as const) {
+      if (query[key] !== undefined) qs.append(key, String(query[key]));
+    }
     if (query.current) qs.append("current", String(query.current));
     if (query.pageSize) qs.append("pageSize", String(query.pageSize));
-    return apiRequest<{ meta: any; result: CandidatePublicItem[] }>(
+    return apiRequest<{ meta: { current: number; pageSize: number; pages: number; total: number; hasCompanyJobs?: boolean; jobId: string | null; jobName: string | null }; result: CandidatePublicItem[] }>(
       `/hr/candidates?${qs.toString()}`,
       { accessToken },
     );

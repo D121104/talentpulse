@@ -163,6 +163,11 @@ export interface UserEntitlementsResult {
     chatbotDailyLimit: number | null;
   } | null;
   limits: {
+    canViewAiRanking: boolean;
+    canExportAiScores: boolean;
+    canUseAdvancedCandidateSearch: boolean;
+    canUseAutomaticCandidateMatching: boolean;
+    canViewCandidateAiAnalysis: boolean;
     hotJobLimit: number;
     candidateSearchLimit: number;
     maxActiveJobs: number;

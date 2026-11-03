@@ -1,5 +1,11 @@
 import {
+  applicationAiScore,
+  mapHRMatchingAnalysis,
+} from 'src/ai-matching/hr-matching-analysis';
+import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
@@ -9,19 +15,35 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
+import {
+  AiServiceClient,
+  AiServiceError,
+} from 'src/ai-matching/ai-service.client';
+import {
+  analysisVersionKey,
+  narrativeFacts,
+  fallbackNarrative,
+  NarrativeRequest,
+  MatchNarrative,
+} from 'src/ai-matching/match-narrative';
+import {
+  MatchAnalysisDto,
+  MatchAnalysisResponse,
+} from './dto/match-analysis.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Application, ApplicationStatus } from './entities/application.entity';
 import { Company } from 'src/companies/entities/company.entity';
 import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
+import { ApplicationAiScoreSummary } from './dto/application-ai-score.dto';
 import { IUser } from 'src/users/users.interface';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationStatusDto } from './dto/update-application.dto';
 import { UsersService } from 'src/users/users.service';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
-import { CVParseStatus } from 'src/usercvs/cv-parse-status';
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
 import { OnlineCvGenerationMode } from 'src/online-cvs/entities/online-cv.entity';
 import { Role } from 'src/decorator/customize';
@@ -32,7 +54,6 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
-import { consentIdempotencyKey } from 'src/ai-matching/cv-processing.processor';
 import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { JobsService } from 'src/jobs/jobs.service';
 import {
@@ -65,7 +86,7 @@ export class ApplicationsService implements OnModuleInit {
     private readonly userCVsService: UserCVsService,
     private readonly notificationsService: NotificationsService,
     private readonly cvProcessingService: CVProcessingService,
-    private readonly configService: ConfigService,
+    _configService: ConfigService,
     @Inject(forwardRef(() => JobsService))
     private readonly jobsService: JobsService,
 
@@ -74,6 +95,8 @@ export class ApplicationsService implements OnModuleInit {
 
     @Optional()
     private readonly onlineCVsService?: OnlineCVsService,
+    @Optional()
+    private readonly aiServiceClient?: AiServiceClient,
   ) {}
 
   async onModuleInit() {
@@ -88,8 +111,7 @@ export class ApplicationsService implements OnModuleInit {
 
   // User applies for a job with selected CV (supports both UserCV & OnlineCV)
   async create(createApplicationDto: CreateApplicationDto, user: IUser) {
-    const { cvId, jobId, companyId, coverLetter, aiRankingConsent } =
-      createApplicationDto;
+    const { cvId, jobId, companyId, coverLetter } = createApplicationDto;
 
     // 1. Resolve CV: check if cvId belongs to uploaded UserCV or OnlineCV
     let userCv: any = null;
@@ -168,13 +190,12 @@ export class ApplicationsService implements OnModuleInit {
       },
     });
 
-    if (aiRankingConsent === true) {
-      const policy = getApplicationAiRankingConsentPolicy(this.configService);
-      application.aiRankingConsentGranted = true;
-      application.aiRankingConsentVersion = policy.consentVersion;
-      application.aiRankingConsentPolicyHash = policy.policyHash;
-      application.aiRankingConsentAt = new Date();
-    }
+    const policy = getApplicationAiRankingConsentPolicy();
+    const submittedAt = new Date();
+    application.aiRankingConsentGranted = true;
+    application.aiRankingConsentVersion = policy.consentVersion;
+    application.aiRankingConsentPolicyHash = policy.policyHash;
+    application.aiRankingConsentAt = submittedAt;
 
     const savedApplication = await this.dataSource.transaction(
       async (manager) => {
@@ -183,71 +204,31 @@ export class ApplicationsService implements OnModuleInit {
           ApplicationAiConsentEvent,
         );
         const saved = await applicationRepo.save(application);
-        if (aiRankingConsent === true) {
-          const policy = getApplicationAiRankingConsentPolicy(
-            this.configService,
-          );
-          await consentEventRepo.save(
-            consentEventRepo.create({
-              applicationId: saved._id,
-              userId: user._id,
-              granted: true,
-              consentVersion: policy.consentVersion,
-              policyHash: policy.policyHash,
-              source: 'application',
-            }),
-          );
-        }
+        await consentEventRepo.save(
+          consentEventRepo.create({
+            applicationId: saved._id,
+            userId: user._id,
+            granted: true,
+            consentVersion: policy.consentVersion,
+            policyHash: policy.policyHash,
+            source: 'application_submission_policy',
+            occurredAt: submittedAt,
+          }),
+        );
         return saved;
       },
     );
 
     // Queue only opaque IDs and version/hash consent fences. The worker reloads
     // all CV, application and job content from canonical PostgreSQL records.
-    if (
-      aiRankingConsent === true &&
-      userCv.parseStatus === CVParseStatus.READY &&
-      Boolean(userCv.contentHash)
-    ) {
-      try {
-        const company = job.company?._id
-          ? await this.companyRepo.findOne({
-              where: { _id: job.company._id },
-              withDeleted: true,
-            })
-          : null;
-        if (!company) {
-          this.logger.warn(
-            `Skipping CV processing queue for application ${savedApplication._id}: canonical company not found`,
-          );
-        } else {
-          const policy = getApplicationAiRankingConsentPolicy(
-            this.configService,
-          );
-          const jobSourceVersion = getJobSourceVersion(job, company);
-          await this.cvProcessingService.queueCVProcessing({
-            cvId: userCv._id.toString(),
-            userId: user._id,
-            applicationId: savedApplication._id.toString(),
-            cvContentVersion: userCv.contentVersion,
-            contentHash: userCv.contentHash || '',
-            jobId: job._id.toString(),
-            jobSourceVersion,
-            aiRankingConsentGranted: true,
-            aiRankingConsentVersion: policy.consentVersion,
-            aiRankingConsentPolicyHash: policy.policyHash,
-            consentIdempotencyKey: consentIdempotencyKey(
-              savedApplication._id.toString(),
-              userCv.contentVersion,
-              jobSourceVersion,
-            ),
-          });
-        }
-      } catch {
-        this.logger.warn(
-          `Failed to queue CV processing for application ${savedApplication._id}`,
-        );
-      }
+    try {
+      await this.cvProcessingService.enqueueEligibleApplication(
+        savedApplication._id,
+      );
+    } catch {
+      this.logger.warn(
+        `Failed to queue CV processing for application ${savedApplication._id}`,
+      );
     }
 
     const applicationInDb = await this.applicationRepo.findOne({
@@ -303,6 +284,7 @@ export class ApplicationsService implements OnModuleInit {
 
   // Get all applications (Admin/HR)
   async findAll(qs: any, user: IUser) {
+    user = { ...user, role: await this.assertApplicationListRole(user) };
     const { filter, sort } = aqp(qs);
     delete filter.current;
     delete filter.pageSize;
@@ -321,7 +303,7 @@ export class ApplicationsService implements OnModuleInit {
       .leftJoinAndSelect('app.job', 'job')
       .where('app.isDeleted = :isDeleted', { isDeleted: false });
 
-    if (userInfo.role === Role.HR) {
+    if (user.role === Role.HR) {
       if (!userInfo.company || !userInfo.company._id) {
         return {
           meta: {
@@ -363,10 +345,12 @@ export class ApplicationsService implements OnModuleInit {
       .getManyAndCount();
 
     const totalPage = Math.ceil(totalRecord / limit);
+    const scores = await this.loadApplicationScores(applications);
 
     // Format fields with populated aliases for backward compatibility
     const formatted = applications.map((app) => ({
-      ...app,
+      ...this.applicationListFields(app),
+      aiScore: scores.get(app._id),
       cvId: app.cv
         ? {
             _id: app.cv._id,
@@ -414,6 +398,7 @@ export class ApplicationsService implements OnModuleInit {
 
   // Get applications by job (for HR to review)
   async findByJob(jobId: string, qs: any, user: IUser) {
+    user = { ...user, role: await this.assertApplicationListRole(user) };
     const job = await this.jobsService.findOneForInternal(jobId);
 
     if (user.role === Role.HR) {
@@ -445,6 +430,7 @@ export class ApplicationsService implements OnModuleInit {
       .leftJoinAndSelect('app.cv', 'cv')
       .leftJoinAndSelect('app.user', 'user')
       .where('app.jobId = :jobId', { jobId })
+      .leftJoinAndSelect('app.company', 'company')
       .andWhere('app.isDeleted = :isDeleted', { isDeleted: false });
 
     if (qs.status) {
@@ -459,9 +445,13 @@ export class ApplicationsService implements OnModuleInit {
       .getManyAndCount();
 
     const totalPage = Math.ceil(totalRecord / limit);
+    const scores = await this.loadApplicationScores(
+      applications.map((app) => Object.assign(app, { job })),
+    );
 
     const formatted = applications.map((app) => ({
-      ...app,
+      ...this.applicationListFields(app),
+      aiScore: scores.get(app._id),
       cvId: app.cv
         ? {
             _id: app.cv._id,
@@ -491,6 +481,72 @@ export class ApplicationsService implements OnModuleInit {
       },
       result: formatted,
     };
+  }
+
+  private async assertApplicationListRole(user: IUser): Promise<Role> {
+    const { role, limits } = await this.usersService.getUserEntitlements(user);
+    if (
+      (role !== Role.HR && role !== Role.ADMIN) ||
+      !limits.canExportAiScores
+    ) {
+      throw new ForbiddenException('Only HR and admins can list applications');
+    }
+    return role;
+  }
+
+  private applicationListFields(app: Application) {
+    return {
+      _id: app._id,
+      cvId: app.cvId,
+      userId: app.userId,
+      companyId: app.companyId,
+      jobId: app.jobId,
+      coverLetter: app.coverLetter,
+      status: app.status,
+      history: app.history,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+      createdBy: app.createdBy,
+      updatedBy: app.updatedBy,
+      deletedBy: app.deletedBy,
+      isDeleted: app.isDeleted,
+      deletedAt: app.deletedAt,
+      aiRankingConsentGranted: app.aiRankingConsentGranted,
+      aiRankingConsentVersion: app.aiRankingConsentVersion,
+      aiRankingConsentPolicyHash: app.aiRankingConsentPolicyHash,
+      aiRankingConsentAt: app.aiRankingConsentAt,
+    };
+  }
+
+  private async loadApplicationScores(
+    applications: Application[],
+  ): Promise<Map<string, ApplicationAiScoreSummary>> {
+    const summaries = new Map<string, ApplicationAiScoreSummary>();
+    if (!applications.length) return summaries;
+    const results = await this.cvMatchResultRepo.find({
+      where: {
+        applicationId: In(applications.map((app) => app._id)),
+        isDeleted: false,
+      },
+      select: {
+        applicationId: true,
+        cvId: true,
+        userId: true,
+        jobId: true,
+        status: true,
+        matchScore: true,
+        contentHash: true,
+        jobSourceVersion: true,
+        scoringVersion: true,
+        normalizationVersion: true,
+      },
+    });
+    const byApplication = new Map(results.map((r) => [r.applicationId, r]));
+    for (const app of applications) {
+      const result = byApplication.get(app._id);
+      summaries.set(app._id, applicationAiScore(app, result));
+    }
+    return summaries;
   }
 
   // Get user's own applications
@@ -842,12 +898,19 @@ export class ApplicationsService implements OnModuleInit {
     topN = 10,
     user: IUser,
   ): Promise<IAIRankingResponse> {
+    if (!Number.isInteger(topN) || topN < 1) {
+      throw new BadRequestException('topN must be a positive integer');
+    }
+    const entitlements = await this.usersService.getUserEntitlements(user._id);
+    if (!entitlements.limits.canViewAiRanking) {
+      throw new ForbiddenException('Bạn không có quyền xem xếp hạng AI');
+    }
     const job = await this.jobsService.findOneForInternal(jobId);
     if (!job) {
       throw new NotFoundException('Công việc không tồn tại');
     }
 
-    if (user.role === Role.HR) {
+    if (entitlements.role === Role.HR) {
       const userInfo = await this.usersService.findOne(user._id);
       if (
         !userInfo.company ||
@@ -894,7 +957,7 @@ export class ApplicationsService implements OnModuleInit {
     );
 
     const candidateResults: ICandidateMatchResult[] = rankedResults.map(
-      (result: any) => {
+      (result) => {
         const userInfo = result.user;
         const cvInfo = result.cv;
         const appInfo = result.application;
@@ -909,9 +972,22 @@ export class ApplicationsService implements OnModuleInit {
           cvTitle: cvInfo?.title || 'CV',
           cvUrl: cvInfo?.url || '',
           matchScore: result.matchScore,
-          matchedSkills: result.matchedSkills || [],
-          missingSkills: result.missingSkills || [],
-          shortExplanation: result.explanation || '',
+          matchedSkills: entitlements.limits.canViewCandidateAiAnalysis
+            ? result.matchedSkills || []
+            : [],
+          missingSkills: entitlements.limits.canViewCandidateAiAnalysis
+            ? result.missingSkills || []
+            : [],
+          shortExplanation: entitlements.limits.canViewCandidateAiAnalysis
+            ? result.explanation || ''
+            : '',
+          analysisAvailable: entitlements.limits.canViewCandidateAiAnalysis,
+          ...(entitlements.limits.canViewCandidateAiAnalysis
+            ? {
+                aiAnalysis: mapHRMatchingAnalysis(result),
+                analysisVersionKey: analysisVersionKey(result),
+              }
+            : {}),
           applicationStatus: appInfo?.status || 'PENDING',
           appliedAt: appInfo?.createdAt
             ? new Date(appInfo.createdAt).toISOString()
@@ -931,12 +1007,147 @@ export class ApplicationsService implements OnModuleInit {
       rankedCandidates: candidateResults,
       processedAt: new Date().toISOString(),
       processingStatus,
-    } as IAIRankingResponse;
+    };
   }
 
-  /**
-   * Search applications by CV content
-   */
+  async getMatchAnalysis(
+    jobId: string,
+    applicationId: string,
+    dto: MatchAnalysisDto,
+    user: IUser,
+  ): Promise<MatchAnalysisResponse> {
+    const snapshot = async () => {
+      const entitlement = await this.usersService.getUserEntitlements(user._id);
+      if (
+        ![Role.HR, Role.ADMIN].includes(entitlement.role as Role) ||
+        !entitlement.limits.canViewCandidateAiAnalysis
+      ) {
+        throw new ForbiddenException(
+          'Candidate AI analysis requires Premium access',
+        );
+      }
+      const job = await this.jobsService
+        .findOneForInternal(jobId)
+        .catch((error: unknown) => {
+          if (error instanceof NotFoundException)
+            throw new ConflictException('Analysis is no longer current');
+          throw error;
+        });
+      if (!job || job.isDeleted || job.deletedAt)
+        throw new ConflictException('Analysis is no longer current');
+      if (entitlement.role === Role.HR) {
+        const hr = await this.usersService.findOne(user._id);
+        if (!hr.company?._id || hr.company._id !== job.company?._id)
+          throw new ForbiddenException('Job access denied');
+      }
+      const company = job.company?._id
+        ? await this.companyRepo.findOne({
+            where: { _id: job.company._id },
+            withDeleted: true,
+          })
+        : null;
+      if (!company || company.isDeleted || company.deletedAt)
+        throw new ConflictException('Analysis is no longer current');
+      const results = await this.cvProcessingService.getRankedCandidates(
+        jobId,
+        1,
+        getJobSourceVersion(job, company),
+        applicationId,
+      );
+      const result = results.find(
+        (r) => r.applicationId === applicationId && r.jobId === jobId,
+      );
+      if (!result || analysisVersionKey(result) !== dto.analysisVersionKey)
+        throw new ConflictException('Analysis is no longer current');
+      return result;
+    };
+    const result = await snapshot();
+    const request: NarrativeRequest = {
+      identity: {
+        request_id: randomUUID(),
+        trace_id: randomUUID(),
+        operation_attempt_id: randomUUID(),
+      },
+      analysis_version_key: dto.analysisVersionKey,
+      locale: dto.locale,
+      narrative_version: 'match-narrative-v1',
+      facts: narrativeFacts(result),
+    };
+    let analysis: MatchNarrative;
+    let fallbackReason:
+      | null
+      | 'provider_unavailable'
+      | 'provider_timeout'
+      | 'invalid_output' = null;
+    let denied = false;
+    try {
+      if (!this.aiServiceClient)
+        throw new AiServiceError('AI_SERVICE_NOT_CONFIGURED');
+      analysis = await this.aiServiceClient.analyzeMatch(request);
+    } catch (error) {
+      denied =
+        error instanceof AiServiceError &&
+        error.code === 'AI_SERVICE_AUTH_FAILED';
+      fallbackReason =
+        error instanceof AiServiceError && error.code === 'AI_SERVICE_TIMEOUT'
+          ? 'provider_timeout'
+          : error instanceof AiServiceError &&
+            error.code === 'AI_INVALID_RESPONSE'
+          ? 'invalid_output'
+          : 'provider_unavailable';
+      analysis = fallbackNarrative(request);
+      this.logger.warn({
+        event: 'match_narrative_fallback',
+        reason: fallbackReason,
+        accessDenied: denied,
+      });
+    }
+    await snapshot();
+    if (denied) throw new ForbiddenException('AI service access denied');
+    const vi = dto.locale === 'vi';
+    const evidenceLabels: Record<string, string> = {
+      overall: vi ? 'Độ phù hợp tổng thể' : 'Overall match',
+    };
+    const componentLabels = {
+      semantic: vi ? 'Nội dung chuyên môn' : 'Semantic relevance',
+      skills: vi ? 'Kỹ năng' : 'Skills',
+      experience: vi ? 'Kinh nghiệm' : 'Experience',
+      location: vi ? 'Địa điểm (không tính điểm)' : 'Location (not scored)',
+      work_mode: vi
+        ? 'Hình thức làm việc (không tính điểm)'
+        : 'Work mode (not scored)',
+    };
+    for (const [name, component] of Object.entries({
+      ...request.facts.components,
+      ...request.facts.compatibility,
+    })) {
+      if (component.available) evidenceLabels[name] = componentLabels[name];
+    }
+    const mapped = mapHRMatchingAnalysis(result);
+    request.facts.matched_skill_refs.forEach((ref, i) => {
+      evidenceLabels[ref] = mapped.matchedSkills[i];
+    });
+    request.facts.missing_required_skill_refs.forEach((ref, i) => {
+      evidenceLabels[ref] = mapped.missingRequiredSkills[i];
+    });
+    return {
+      analysisVersionKey: dto.analysisVersionKey,
+      locale: dto.locale,
+      source: fallbackReason
+        ? ('deterministic_fallback' as const)
+        : ('llm' as const),
+      fallbackReason,
+      narrativeVersion: 'match-narrative-v1' as const,
+      analysis: {
+        summary: analysis.summary,
+        strengths: analysis.strengths,
+        pointsToVerify: analysis.points_to_verify,
+      },
+      evidenceLabels,
+    };
+  }
+
+  /** Search applications by CV content. */
   async searchByCV(
     jobId: string,
     query: {
@@ -947,12 +1158,16 @@ export class ApplicationsService implements OnModuleInit {
     },
     user: IUser,
   ) {
+    const entitlements = await this.usersService.getUserEntitlements(user._id);
+    if (!entitlements.limits.canUseAdvancedCandidateSearch) {
+      throw new ForbiddenException('Tìm kiếm CV nâng cao yêu cầu HR Premium');
+    }
     const job = await this.jobsService.findOneForInternal(jobId);
     if (!job) {
       throw new NotFoundException('Công việc không tồn tại');
     }
 
-    if (user.role === Role.HR) {
+    if (entitlements.role === Role.HR) {
       const userInfo = await this.usersService.findOne(user._id);
       if (
         !userInfo.company ||

@@ -4,9 +4,11 @@ import {
   ApplicationStatus,
 } from 'src/applications/entities/application.entity';
 import { CVParseStatus } from 'src/usercvs/cv-parse-status';
-import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
-import { consentIdempotencyKey } from 'src/ai-matching/cv-processing.processor';
-import { getApplicationAiRankingConsentPolicy } from 'src/applications/application-ai-consent.policy';
+import { createHash } from 'crypto';
+import {
+  APPLICATION_AI_RANKING_POLICY_TEXT,
+  getApplicationAiRankingConsentPolicy,
+} from 'src/applications/application-ai-consent.policy';
 
 const ids = {
   application: '00000000-0000-4000-8000-000000000001',
@@ -78,6 +80,8 @@ function createHarness({
       createdAt,
     })),
     findOne: jest.fn(),
+    update: jest.fn().mockResolvedValue(undefined),
+    softDelete: jest.fn().mockResolvedValue({ affected: 1 }),
   };
   const createdApplication = {
     _id: ids.application,
@@ -109,6 +113,7 @@ function createHarness({
     findOne: jest.fn().mockResolvedValue(canonicalCompany),
   };
   const queueCVProcessing = jest.fn().mockResolvedValue(undefined);
+  const cvMatchResultRepo = { delete: jest.fn().mockResolvedValue(undefined) };
   const configService = {
     get: jest.fn((key: string) => {
       if (key === 'AI_APPLICATION_RANKING_CONSENT_VERSION') {
@@ -123,14 +128,14 @@ function createHarness({
 
   const service = new ApplicationsService(
     applicationRepo as any,
-    {} as any,
+    cvMatchResultRepo as any,
     companyRepo as any,
     {} as any,
     dataSource as any,
     { findAllByCompanyId: jest.fn().mockResolvedValue([]) } as any,
     { findOne: jest.fn().mockResolvedValue(cv) } as any,
     { create: jest.fn() } as any,
-    { queueCVProcessing } as any,
+    { enqueueEligibleApplication: queueCVProcessing } as any,
     configService as any,
     { findOne: jest.fn().mockResolvedValue(job) } as any,
     {} as any,
@@ -147,11 +152,12 @@ function createHarness({
     cv,
     job,
     canonicalCompany,
+    cvMatchResultRepo,
   };
 }
 
 describe('ApplicationsService.create AI ranking consent fencing', () => {
-  it('uses the canonical company timestamp for the queued job source version', async () => {
+  it('persists the submission policy snapshot and audit atomically before queueing', async () => {
     const harness = createHarness();
     const dto = {
       cvId: ids.cv,
@@ -159,13 +165,7 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
       companyId: ids.company,
       aiRankingConsent: true,
     };
-    const policy = getApplicationAiRankingConsentPolicy(
-      harness.configService as any,
-    );
-    const expectedJobSourceVersion = getJobSourceVersion(
-      harness.job,
-      harness.canonicalCompany,
-    );
+    const policy = getApplicationAiRankingConsentPolicy();
 
     const result = await harness.service.create(dto as any, user);
 
@@ -173,28 +173,11 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
       _id: ids.application,
       createdAt: new Date('2026-03-04T00:00:00.000Z'),
     });
-    expect(harness.companyRepo.findOne).toHaveBeenCalledWith({
-      where: { _id: ids.company },
-      withDeleted: true,
-    });
     expect(harness.queueCVProcessing).toHaveBeenCalledTimes(1);
-    expect(harness.queueCVProcessing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cvId: ids.cv,
-        applicationId: ids.application,
-        jobId: ids.job,
-        contentHash: harness.cv.contentHash,
-        jobSourceVersion: expectedJobSourceVersion,
-        aiRankingConsentGranted: true,
-        aiRankingConsentVersion: policy.consentVersion,
-        aiRankingConsentPolicyHash: policy.policyHash,
-        consentIdempotencyKey: consentIdempotencyKey(
-          ids.application,
-          harness.cv.contentVersion,
-          expectedJobSourceVersion,
-        ),
-      }),
-    );
+    expect(harness.queueCVProcessing).toHaveBeenCalledWith(ids.application);
+    expect(
+      harness.consentEventRepo.save.mock.invocationCallOrder[0],
+    ).toBeLessThan(harness.queueCVProcessing.mock.invocationCallOrder[0]);
     expect(harness.cv.contentHash).toBe('a'.repeat(64));
 
     const createdApplication =
@@ -214,7 +197,8 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
         granted: true,
         consentVersion: policy.consentVersion,
         policyHash: policy.policyHash,
-        source: 'application',
+        source: 'application_submission_policy',
+        occurredAt: createdApplication.aiRankingConsentAt,
       }),
     );
   });
@@ -235,26 +219,99 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
     expect(harness.applicationRepo.create).not.toHaveBeenCalled();
   });
 
-  it('creates the application without queueing CV processing when consent is absent', async () => {
-    const harness = createHarness();
-    const dto = {
-      cvId: ids.cv,
-      jobId: ids.job,
-      companyId: ids.company,
-      aiRankingConsent: false,
-    };
+  it.each([undefined, true, false])(
+    'authorizes only the submitted application when legacy consent is %s',
+    async (aiRankingConsent) => {
+      const harness = createHarness();
+      const dto = {
+        cvId: ids.cv,
+        jobId: ids.job,
+        companyId: ids.company,
+        ...(aiRankingConsent === undefined ? {} : { aiRankingConsent }),
+      };
 
-    const result = await harness.service.create(dto as any, user);
+      const result = await harness.service.create(dto as any, user);
 
-    expect(result._id).toBe(ids.application);
-    expect(harness.transactionApplicationRepo.save).toHaveBeenCalledTimes(1);
-    expect(harness.queueCVProcessing).not.toHaveBeenCalled();
-    expect(harness.consentEventRepo.save).not.toHaveBeenCalled();
-    expect(harness.companyRepo.findOne).not.toHaveBeenCalled();
+      expect(result._id).toBe(ids.application);
+      expect(harness.transactionApplicationRepo.save).toHaveBeenCalledTimes(1);
+      expect(harness.queueCVProcessing).toHaveBeenCalledWith(ids.application);
+      const snapshot = harness.applicationRepo.create.mock.results[0].value;
+      expect(snapshot).toEqual(
+        expect.objectContaining({
+          cvId: ids.cv,
+          jobId: ids.job,
+          companyId: ids.company,
+          aiRankingConsentGranted: true,
+          aiRankingConsentVersion: expect.any(String),
+          aiRankingConsentPolicyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          aiRankingConsentAt: expect.any(Date),
+        }),
+      );
+      expect(harness.consentEventRepo.save).toHaveBeenCalledWith({
+        applicationId: ids.application,
+        userId: ids.user,
+        granted: true,
+        consentVersion: snapshot.aiRankingConsentVersion,
+        policyHash: snapshot.aiRankingConsentPolicyHash,
+        source: 'application_submission_policy',
+        occurredAt: snapshot.aiRankingConsentAt,
+      });
+      expect(harness.transactionApplicationRepo.save).toHaveBeenCalledWith(
+        snapshot,
+      );
+      expect(harness.cv).not.toHaveProperty('aiRankingConsentGranted');
+      expect(harness.applicationRepo.update).not.toHaveBeenCalled();
+      expect(harness.companyRepo.findOne).not.toHaveBeenCalled();
+    },
+  );
+
+  it('binds new submissions to the disclosed policy, not legacy configured checkbox metadata', () => {
+    expect(getApplicationAiRankingConsentPolicy()).toEqual({
+      purpose: 'application_ai_ranking',
+      consentVersion: 'application-ai-ranking-submission-v2',
+      policyHash: createHash('sha256')
+        .update(APPLICATION_AI_RANKING_POLICY_TEXT, 'utf8')
+        .digest('hex'),
+    });
   });
 
-  it('keeps the application when consented CV processing has no canonical company', async () => {
+  it('does not update historical applications during initialization', async () => {
+    const harness = createHarness();
+    await harness.service.onModuleInit();
+    expect(harness.applicationRepo.update).not.toHaveBeenCalled();
+    expect(harness.transactionApplicationRepo.save).not.toHaveBeenCalled();
+    expect(harness.consentEventRepo.save).not.toHaveBeenCalled();
+    expect(harness.queueCVProcessing).not.toHaveBeenCalled();
+  });
+
+  it('preserves withdrawal and removes only the withdrawn application matching result', async () => {
+    const harness = createHarness();
+    await harness.service.create(
+      { cvId: ids.cv, jobId: ids.job, companyId: ids.company },
+      user,
+    );
+    harness.queueCVProcessing.mockClear();
+    await harness.service.remove(ids.application, user);
+    expect(harness.applicationRepo.findOne).toHaveBeenLastCalledWith({
+      where: { _id: ids.application, userId: ids.user, isDeleted: false },
+    });
+    expect(harness.applicationRepo.update).toHaveBeenCalledWith(
+      ids.application,
+      expect.objectContaining({ isDeleted: true, deletedAt: expect.any(Date) }),
+    );
+    expect(harness.cvMatchResultRepo.delete).toHaveBeenCalledWith({
+      applicationId: ids.application,
+    });
+    expect(harness.applicationRepo.softDelete).toHaveBeenCalledWith(
+      ids.application,
+    );
+    expect(harness.queueCVProcessing).not.toHaveBeenCalled();
+    expect(harness.consentEventRepo.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the application when the matching queue is unavailable', async () => {
     const harness = createHarness({ canonicalCompany: null });
+    harness.queueCVProcessing.mockRejectedValue(new Error('queue unavailable'));
     const dto = {
       cvId: ids.cv,
       jobId: ids.job,
@@ -265,11 +322,7 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
     const result = await harness.service.create(dto as any, user);
 
     expect(result._id).toBe(ids.application);
-    expect(harness.companyRepo.findOne).toHaveBeenCalledWith({
-      where: { _id: ids.company },
-      withDeleted: true,
-    });
-    expect(harness.queueCVProcessing).not.toHaveBeenCalled();
+    expect(harness.queueCVProcessing).toHaveBeenCalledWith(ids.application);
     expect(harness.consentEventRepo.save).toHaveBeenCalledTimes(1);
   });
 });

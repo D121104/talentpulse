@@ -7,6 +7,9 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  IsInt,
+  Min,
+  Max,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -14,6 +17,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OnlineCvGenerationMode } from '../entities/online-cv.entity';
 
 export class EducationEntryDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  degree?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -164,6 +172,26 @@ export class ProjectEntryDto {
 }
 
 export class CreateOnlineCVDto {
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Expected salary in VND/month; null clears it. No currency conversion.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(2147483647)
+  expectedSalaryVndMonthly?: number | null;
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'Explicit consent to recruiter salary filtering on this searchable CV.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  shareExpectedSalary?: boolean;
+
   @ApiProperty({ enum: ['template1', 'template2'] })
   @IsNotEmpty()
   @IsEnum(['template1', 'template2'])

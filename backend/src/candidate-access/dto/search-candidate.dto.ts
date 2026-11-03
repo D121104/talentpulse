@@ -1,7 +1,62 @@
-import { IsOptional, IsString, IsNumber, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import {
+  IsOptional,
+  IsUUID,
+  IsString,
+  IsNumber,
+  IsInt,
+  Min,
+  Max,
+  MaxLength,
+} from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 
 export class SearchCandidatesDto {
+  @IsOptional()
+  @IsUUID()
+  jobId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  education?: string;
+
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' && value.trim() !== '' ? Number(value) : value,
+  )
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  minExperienceYears?: number;
+
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' && value.trim() !== '' ? Number(value) : value,
+  )
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  maxExperienceYears?: number;
+
+  // Inclusive bounds on a disclosed single expected salary, VND/month.
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' && value.trim() !== '' ? Number(value) : value,
+  )
+  @IsInt()
+  @Min(0)
+  @Max(2147483647)
+  minExpectedSalary?: number;
+
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' && value.trim() !== '' ? Number(value) : value,
+  )
+  @IsInt()
+  @Min(0)
+  @Max(2147483647)
+  maxExpectedSalary?: number;
+
   @IsOptional()
   @IsString()
   keyword?: string;

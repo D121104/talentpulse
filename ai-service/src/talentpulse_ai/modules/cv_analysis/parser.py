@@ -31,6 +31,7 @@ from talentpulse_ai.modules.cv_analysis.schemas import (
     MAX_STRUCTURED_ITEMS,
     MediaType,
 )
+from talentpulse_ai.modules.cv_analysis.skills import split_skills
 
 _OOXML_CONTENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
@@ -84,7 +85,7 @@ class CVParseResult:
     experience: list[str]
     certificates: list[str]
     warnings: list[str]
-    parser_version: str = "structured-parser-v1"
+    parser_version: str = "structured-parser-v2"
 
 
 class CVParser:
@@ -190,7 +191,7 @@ class CVParser:
                 return self._parse_pdf_with_optional_ocr(content, native)
             if not text:
                 raise ServiceError("no_extractable_text", "The CV contains no extractable text.")
-            return self._to_result(content, native, "structured-parser-v1")
+            return self._to_result(content, native, "structured-parser-v2")
         if media_type is MediaType.DOCX:
             self._inspect_docx_package(content)
             text = self._normalize_text(self._parse_docx(content))
@@ -204,7 +205,7 @@ class CVParser:
             raise ServiceError(
                 "extracted_text_too_large", "Extracted CV text exceeds the configured limit.", 413
             )
-        return self._to_result(content, self._candidate(text), "structured-parser-v1")
+        return self._to_result(content, self._candidate(text), "structured-parser-v2")
 
     @property
     def _text_limit(self) -> int:
@@ -271,10 +272,10 @@ class CVParser:
                 warnings, "Local OCR was selected because it improved structured extraction."
             )
             selected = _ParseCandidate(ocr.extracted_text, ocr.sections, warnings)
-            return self._to_result(content, selected, "structured-parser-v1+local-ocr-v1")
+            return self._to_result(content, selected, "structured-parser-v2+local-ocr-v1")
         if not native.extracted_text:
             raise ServiceError("no_extractable_text", "The CV contains no extractable text.")
-        return self._to_result(content, native, "structured-parser-v1")
+        return self._to_result(content, native, "structured-parser-v2")
 
     def _handle_ocr_failure(
         self, content: bytes, native: _ParseCandidate, code: str
@@ -290,7 +291,7 @@ class CVParser:
             return self._to_result(
                 content,
                 _ParseCandidate(native.extracted_text, native.sections, warnings),
-                "structured-parser-v1",
+                "structured-parser-v2",
             )
         if code == "ocr_unavailable":
             raise ServiceError(code, "Local OCR is unavailable; retry the CV parse later.", 503)
@@ -437,7 +438,7 @@ class CVParser:
     def _inline_section_items(cls, section: str, content: str) -> list[str]:
         content = re.sub(r"\s*\|\s*$", "", content).strip()
         if section == "skills":
-            return re.split(r"\s*(?:[,;|•·▪►→◆●○■□])\s*", content)
+            return split_skills([content])
         return [content]
 
     @classmethod
@@ -458,6 +459,8 @@ class CVParser:
                 if lines:
                     saw_unclassified = True
                 return
+            if current_section == "skills":
+                lines = split_skills(lines)
             for raw_line in lines:
                 item = cls._normalize_item(raw_line)
                 if not item:

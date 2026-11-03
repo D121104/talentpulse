@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { userApi, type UserEntitlementsResult } from '../../../lib/userApi';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -29,6 +31,8 @@ import { useToast } from '../../../context/ToastContext';
 import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate } from '../../../lib/dateUtils';
 import { UserAvatar } from '../../../components/common/UserAvatar';
+import { candidateSearchQuery, emptyCandidateSearch } from '../../../lib/candidateSearch';
+import { analysisTexts, storedCandidateScore } from '../../../lib/hrMatchingAnalysis';
 
 interface CVSearchTabProps {
   accessToken: string | null;
@@ -42,13 +46,53 @@ export function CVSearchTab({
   onNavigateTab,
 }: CVSearchTabProps) {
   const { success, error } = useToast();
+  const { t } = useTranslation();
+  const [entitlementState, setEntitlementState] = useState<{
+    token: string;
+    limits: UserEntitlementsResult['limits'];
+  } | null>(null);
+  const [entitlementsFailed, setEntitlementsFailed] = useState(false);
+  const canUseAdvancedSearch = entitlementState?.token === accessToken &&
+    entitlementState?.limits.canUseAdvancedCandidateSearch === true;
+
+  useEffect(() => {
+    let cancelled = false;
+    setEntitlementState(null);
+    setEntitlementsFailed(false);
+    if (accessToken && hasCompany) {
+      void userApi.getMyEntitlements(accessToken).then((result) => {
+        if (!cancelled) setEntitlementState({ token: accessToken, limits: result.limits });
+      }).catch(() => {
+        if (!cancelled) setEntitlementsFailed(true);
+      });
+    }
+    return () => { cancelled = true; };
+  }, [accessToken, hasCompany]);
 
   // Search filter criteria
-  const [searchCriteria, setSearchCriteria] = useState({
-    keyword: '',
-    skills: '',
-    location: '',
-  });
+  const [searchCriteria, setSearchCriteria] = useState(emptyCandidateSearch);
+  const [appliedCriteria, setAppliedCriteria] = useState(emptyCandidateSearch);
+  const [filterError, setFilterError] = useState('');
+  const [jobs, setJobs] = useState<{ _id: string; name: string }[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsFailed, setJobsFailed] = useState(false);
+  const [resultJob, setResultJob] = useState<{ jobId: string | null; jobName: string | null }>({ jobId: null, jobName: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    setJobs([]);
+    setJobsFailed(false);
+    if (!accessToken || !hasCompany) return;
+    setJobsLoading(true);
+    void employerApi.getHrJobs({ current: 1, pageSize: 100 }, accessToken).then(res => {
+      if (!cancelled) setJobs(res.result);
+    }).catch(() => {
+      if (!cancelled) setJobsFailed(true);
+    }).finally(() => {
+      if (!cancelled) setJobsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [accessToken, hasCompany]);
 
   // State
   const [results, setResults] = useState<CandidatePublicItem[]>([]);
@@ -79,8 +123,16 @@ export function CVSearchTab({
   };
 
   // Perform search
-  const performSearch = async (pageNum = 1) => {
+  const performSearch = async (pageNum = 1, criteria = appliedCriteria) => {
     if (!accessToken || !hasCompany) return;
+    let query;
+    try {
+      query = candidateSearchQuery(criteria, canUseAdvancedSearch);
+      setFilterError('');
+    } catch {
+      setFilterError(t('employer.searchCvTab.invalidFilters', { defaultValue: 'Use experience from 0–100 years and whole-number salary from 0–2,147,483,647 VND/month. Minimum must not exceed maximum.' }));
+      return;
+    }
 
     setIsSearching(true);
     setPage(pageNum);
@@ -88,9 +140,7 @@ export function CVSearchTab({
     try {
       const res = await employerApi.searchCandidatesGlobal(
         {
-          keyword: searchCriteria.keyword.trim() || undefined,
-          skills: searchCriteria.skills.trim() || undefined,
-          location: searchCriteria.location.trim() || undefined,
+          ...query,
           current: pageNum,
           pageSize: 12,
         },
@@ -98,6 +148,8 @@ export function CVSearchTab({
       );
 
       setResults(res.result || []);
+      setResultJob({ jobId: res.meta?.jobId ?? null, jobName: res.meta?.jobName ?? null });
+      setAppliedCriteria(criteria);
       setTotalPages(res.meta?.pages || 1);
       setTotalCount(res.meta?.total || 0);
       setHasCompanyJobs(res.meta?.hasCompanyJobs !== undefined ? res.meta.hasCompanyJobs : true);
@@ -111,7 +163,8 @@ export function CVSearchTab({
 
   useEffect(() => {
     void loadQuota();
-    void performSearch(1);
+    setSearchCriteria(emptyCandidateSearch);
+    void performSearch(1, emptyCandidateSearch);
   }, [accessToken, hasCompany]);
 
   if (!hasCompany) {
@@ -126,14 +179,14 @@ export function CVSearchTab({
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    void performSearch(1);
+    void performSearch(1, searchCriteria);
   };
 
   const handleResetSearch = () => {
-    setSearchCriteria({ keyword: '', skills: '', location: '' });
-    setTimeout(() => {
-      void performSearch(1);
-    }, 0);
+    const resetCriteria = { ...emptyCandidateSearch, jobId: searchCriteria.jobId };
+    setSearchCriteria(resetCriteria);
+    setFilterError('');
+    void performSearch(1, resetCriteria);
   };
 
   // Handler when HR clicks to unlock / view
@@ -264,6 +317,19 @@ export function CVSearchTab({
       {/* 2. Search Criteria Card */}
       <div className="rounded-3xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
         <form onSubmit={handleSearchSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="candidate-job-context" className="text-xs font-bold text-slate-700 dark:text-slate-300">{t('employer.searchCvTab.jobContext')}</label>
+            <select id="candidate-job-context" value={searchCriteria.jobId} disabled={jobsLoading || isSearching}
+              onChange={e => setSearchCriteria({ ...searchCriteria, jobId: e.target.value })}
+              aria-describedby="candidate-score-scope"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800">
+              <option value="">{t('employer.searchCvTab.noJobContext')}</option>
+              {jobs.map(job => <option key={job._id} value={job._id}>{job.name}</option>)}
+            </select>
+            <p id="candidate-score-scope" className="text-xs text-slate-500">{t('employer.searchCvTab.scoreScope')}</p>
+            {jobsLoading && <p role="status" className="text-xs text-slate-500">{t('employer.searchCvTab.jobsLoading')}</p>}
+            {jobsFailed && <p role="alert" className="text-xs text-red-600">{t('employer.searchCvTab.jobsFailed')}</p>}
+          </div>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
             {/* Keyword */}
             <div className="space-y-1">
@@ -290,6 +356,8 @@ export function CVSearchTab({
               <input
                 type="text"
                 value={searchCriteria.skills}
+                disabled={!canUseAdvancedSearch}
+                aria-describedby="advanced-search-status"
                 onChange={(e) => setSearchCriteria({ ...searchCriteria, skills: e.target.value })}
                 placeholder="Ví dụ: React, Java, NodeJS, UI/UX..."
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:bg-white focus:outline-none dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-white dark:placeholder:text-slate-500 dark:focus:bg-slate-800 dark:focus:border-primary transition-colors"
@@ -306,6 +374,8 @@ export function CVSearchTab({
                 <input
                   type="text"
                   value={searchCriteria.location}
+                  disabled={!canUseAdvancedSearch}
+                  aria-describedby="advanced-search-status"
                   onChange={(e) => setSearchCriteria({ ...searchCriteria, location: e.target.value })}
                   placeholder="Ví dụ: Hà Nội, TP.HCM, Đà Nẵng..."
                   className="w-full rounded-2xl border border-slate-200 bg-slate-50/70 pl-10 pr-3.5 py-2.5 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary focus:bg-white focus:outline-none dark:border-slate-700/80 dark:bg-slate-800/80 dark:text-white dark:placeholder:text-slate-500 dark:focus:bg-slate-800 dark:focus:border-primary transition-colors"
@@ -314,6 +384,34 @@ export function CVSearchTab({
             </div>
           </div>
 
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(['education', 'minExperienceYears', 'maxExperienceYears', 'minExpectedSalary', 'maxExpectedSalary'] as const).map((field) => (
+              <label key={field} className="space-y-1 text-xs font-bold text-slate-700 dark:text-slate-300">
+                <span>{t(`employer.searchCvTab.${field}`)}</span>
+                <input type={field === 'education' ? 'text' : 'number'}
+                  min={field === 'education' ? undefined : 0}
+                  max={field === 'education' ? undefined : field.includes('Experience') ? 100 : 2147483647}
+                  step={field.includes('Experience') ? 'any' : 1} maxLength={field === 'education' ? 200 : undefined}
+                  disabled={!canUseAdvancedSearch} value={searchCriteria[field]}
+                  onChange={(e) => setSearchCriteria({ ...searchCriteria, [field]: e.target.value })}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800 disabled:opacity-50" />
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">{t('employer.searchCvTab.filterSemantics')}</p>
+          {(appliedCriteria.minExpectedSalary !== '' || appliedCriteria.maxExpectedSalary !== '') && canUseAdvancedSearch &&
+            <p role="status" className="text-xs text-primary">{t('employer.searchCvTab.salaryActive')}</p>}
+          {filterError && <p role="alert" className="text-sm text-red-600">{filterError}</p>}
+          {!canUseAdvancedSearch && (
+            <div id="advanced-search-status" role="status" className="text-xs text-slate-600 dark:text-slate-300">
+              <p>{t(entitlementsFailed ? 'employer.searchCvTab.entitlementsFailed' : entitlementState?.token === accessToken ? 'employer.searchCvTab.advancedLocked' : 'employer.searchCvTab.entitlementsLoading')}</p>
+              {entitlementState?.token === accessToken && (
+                <button type="button" onClick={() => onNavigateTab('premium')} className="mt-2 font-bold text-primary underline">
+                  {t('employer.searchCvTab.upgradeAdvanced')}
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
@@ -466,23 +564,18 @@ export function CVSearchTab({
                       <div className="flex items-center gap-1">
                         <Briefcase className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500" />
                         <span className="font-semibold text-slate-700 dark:text-slate-300">
-                          {candidate.experienceSummary ||
-                            (candidate.experienceYears && candidate.experienceYears > 0
-                              ? `${candidate.experienceYears} năm kinh nghiệm`
-                              : 'Mới tốt nghiệp / Fresher')}
+                          {candidate.experienceYears == null
+                            ? t('employer.searchCvTab.experienceUnknown')
+                            : t('employer.searchCvTab.experienceValue', { count: Math.round(candidate.experienceYears * 10) / 10 })}
                         </span>
                       </div>
                     </div>
 
-                    {/* Company Smart Personalization Match */}
-                    {candidate.isRecommendedForCompany && (
-                      <div className="flex items-center gap-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 text-[11px] font-bold text-blue-700 dark:text-blue-300">
-                        <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                        <span className="truncate">
-                          {candidate.recommendationReason || 'Phù hợp định hướng tuyển dụng của công ty'}
-                        </span>
-                      </div>
-                    )}
+                    {resultJob.jobId && <div className="rounded-xl bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
+                      <p>{t('employer.searchCvTab.storedScore', { job: resultJob.jobName ?? '' })}</p>
+                      <p className="font-bold">{storedCandidateScore(resultJob.jobId, candidate.aiScore) ?? t(`employer.searchCvTab.scoreStates.${candidate.aiScore?.status === 'COMPLETED' ? 'MISSING' : candidate.aiScore?.status ?? 'UNAVAILABLE'}`)}</p>
+                    </div>}
+                    {analysisTexts(candidate.matchedKeywords).length > 0 && <p className="text-xs text-slate-500">{t('employer.searchCvTab.matchedKeywords')}: {analysisTexts(candidate.matchedKeywords).join(', ')}</p>}
 
                     {/* Skills Badges */}
                     {candidate.skills && candidate.skills.length > 0 && (

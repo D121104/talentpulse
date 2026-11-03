@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import CandidateNarrative from './CandidateNarrative';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -29,6 +30,9 @@ import {
 import { useToast } from '../../../context/ToastContext';
 import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate, formatDateTime } from '../../../lib/dateUtils';
+import { applicationCsv } from '../../../lib/applicationCsv';
+import { userApi } from '../../../lib/userApi';
+import { analysisPercent } from '../../../lib/hrMatchingAnalysis';
 
 interface CandidateManagementTabProps {
   company: CompanyInfo | null;
@@ -42,6 +46,7 @@ interface CandidateManagementTabProps {
 }
 
 export function CandidateManagementTab({
+  company,
   hasCompany,
   accessToken,
   filterJobId,
@@ -50,12 +55,29 @@ export function CandidateManagementTab({
   onNavigateTab,
   onRefreshStats,
 }: CandidateManagementTabProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage?.startsWith('en') ? 'en' : 'vi';
+  const rankingRequest = useRef<AbortController | null>(null);
   const { success, error, info } = useToast();
 
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
   const [jobs, setJobs] = useState<HrJobItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [exportAccess, setExportAccess] = useState<{ token: string; allowed: boolean } | null>(null);
+  const canExportAiScores = exportAccess?.token === accessToken && exportAccess?.allowed === true;
+
+  useEffect(() => {
+    let cancelled = false;
+    setExportAccess(null);
+    if (accessToken && hasCompany) {
+      void userApi.getMyEntitlements(accessToken).then((result) => {
+        if (!cancelled) setExportAccess({ token: accessToken, allowed: result.limits.canExportAiScores });
+      }).catch(() => {
+        if (!cancelled) setExportAccess({ token: accessToken, allowed: false });
+      });
+    }
+    return () => { cancelled = true; };
+  }, [accessToken, hasCompany]);
 
   // Filters
   const [selectedJobId, setSelectedJobId] = useState<string>(filterJobId || 'ALL');
@@ -75,6 +97,20 @@ export function CandidateManagementTab({
     processedAt: string;
   } | null>(null);
   const [isLoadingAiRank, setIsLoadingAiRank] = useState(false);
+
+  useEffect(() => {
+    rankingRequest.current?.abort();
+    setAiRankingData(null);
+    setIsAiRankModalOpen(false);
+    setIsLoadingAiRank(false);
+    return () => { rankingRequest.current?.abort(); };
+  }, [accessToken, company?._id, hasCompany, locale]);
+
+  const closeRanking = () => {
+    rankingRequest.current?.abort();
+    setAiRankingData(null);
+    setIsAiRankModalOpen(false);
+  };
 
   // Interview Modal
   const [interviewApp, setInterviewApp] = useState<ApplicationItem | null>(null);
@@ -196,16 +232,22 @@ export function CandidateManagementTab({
 
   const handleOpenAiRanking = async (jobId: string) => {
     if (!accessToken) return;
+    rankingRequest.current?.abort();
+    const controller = new AbortController();
+    rankingRequest.current = controller;
+    setAiRankingData(null);
     setIsLoadingAiRank(true);
     setIsAiRankModalOpen(true);
     try {
-      const res = await employerApi.getAIRankedCandidates(jobId, 15, accessToken);
+      const res = await employerApi.getAIRankedCandidates(jobId, 15, accessToken, controller.signal);
+      if (controller.signal.aborted) return;
       setAiRankingData(res);
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       console.error(err);
       error('Không thể lấy kết quả phân tích AI');
     } finally {
-      setIsLoadingAiRank(false);
+      if (!controller.signal.aborted) setIsLoadingAiRank(false);
     }
   };
 
@@ -239,29 +281,21 @@ export function CandidateManagementTab({
   };
 
   const handleExportCSV = () => {
+    if (!canExportAiScores || isLoading) return;
     if (applications.length === 0) {
       info(t('employer.candidatesTab.noCandidatesFound'));
       return;
     }
 
-    const headers = ['Họ tên', 'Email', 'Vị trí nộp', 'Trạng thái', 'Ngày nộp', 'Link CV'];
-    const rows = applications.map((app) => [
-      `"${app.userId?.name || ''}"`,
-      `"${app.userId?.email || ''}"`,
-      `"${app.jobId?.name || ''}"`,
-      app.status,
-      formatDate(app.createdAt),
-      `"${app.cvId?.url || ''}"`,
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = applicationCsv(applications, t, formatDate);
+    const url = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `Bao_cao_ung_vien_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 
     success(t('employer.candidatesTab.exportCsvBtn'));
   };
@@ -354,6 +388,8 @@ export function CandidateManagementTab({
           <button
             type="button"
             onClick={handleExportCSV}
+            disabled={!canExportAiScores || isLoading || applications.length === 0}
+            title={t(!canExportAiScores ? 'employer.candidatesTab.exportAccessUnavailable' : 'employer.candidatesTab.exportScope')}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm font-bold text-slate-700 hover:bg-slate-50 shadow-xs dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 cursor-pointer"
           >
             <Download className="h-4 w-4 text-slate-500" />
@@ -361,6 +397,10 @@ export function CandidateManagementTab({
           </button>
         </div>
       </div>
+
+      <p className="text-xs text-slate-500 dark:text-slate-400">
+        {t('employer.candidatesTab.exportScope')}
+      </p>
 
       {/* 2. Filters Row */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -723,7 +763,7 @@ export function CandidateManagementTab({
 
                 <button
                   type="button"
-                  onClick={() => setIsAiRankModalOpen(false)}
+                  onClick={closeRanking}
                   className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition dark:hover:bg-slate-800 cursor-pointer"
                 >
                   <X className="h-5 w-5" />
@@ -733,7 +773,7 @@ export function CandidateManagementTab({
               {isLoadingAiRank ? (
                 <div className="py-20 text-center">
                   <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
-                  <p className="mt-2 text-xs text-slate-400">{t('employer.searchCvTab.searchingBtn')}</p>
+                  <p className="mt-2 text-xs text-slate-400">{t('employer.candidatesTab.modalAiRankLoading')}</p>
                 </div>
               ) : aiRankingData?.rankedCandidates && aiRankingData.rankedCandidates.length > 0 ? (
                 <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
@@ -766,7 +806,7 @@ export function CandidateManagementTab({
                         <div className="flex items-center gap-3">
                           <div className="text-right">
                             <span className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
-                              {Math.round(candidate.matchScore * 100)}% {t('employer.candidatesTab.aiMatchScore')}
+                              {analysisPercent(candidate.matchScore) ?? t('employer.candidatesTab.analysis.unavailable')} {t('employer.candidatesTab.aiMatchScore')}
                             </span>
                           </div>
                           {candidate.cvUrl && (
@@ -784,22 +824,20 @@ export function CandidateManagementTab({
                       </div>
 
                       {/* Explanation & Skills */}
-                      {candidate.shortExplanation && (
-                        <p className="text-xs text-slate-600 dark:text-slate-300 italic bg-white/70 dark:bg-slate-900/50 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800">
-                          &ldquo;{candidate.shortExplanation}&rdquo;
-                        </p>
-                      )}
 
-                      <div className="flex flex-wrap gap-1">
-                        {candidate.matchedSkills.map((sk) => (
-                          <span
-                            key={sk}
-                            className="rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-                          >
-                            +{sk}
-                          </span>
-                        ))}
-                      </div>
+                      {!candidate.analysisAvailable ? (
+                        <div className="text-xs text-slate-600 dark:text-slate-300">
+                          <p>{t('employer.candidatesTab.aiAnalysisLocked')}</p>
+                          {onNavigateTab && <button type="button" onClick={() => { closeRanking(); onNavigateTab('premium'); }} className="mt-2 font-bold text-primary underline">{t('employer.searchCvTab.upgradeAdvanced')}</button>}
+                        </div>
+                      ) : candidate.analysisVersionKey && accessToken ? <CandidateNarrative
+                        key={`${aiRankingData.jobId}/${candidate.applicationId}/${candidate.analysisVersionKey}/${locale}`}
+                        jobId={aiRankingData.jobId} applicationId={candidate.applicationId}
+                        version={candidate.analysisVersionKey} locale={locale} accessToken={accessToken}
+                        aiAnalysis={candidate.aiAnalysis}
+                        onForbidden={() => { closeRanking(); error(t('employer.candidatesTab.aiAnalysisLocked')); }}
+                        onRefresh={() => void handleOpenAiRanking(aiRankingData.jobId)}
+                      /> : <p className="text-xs text-slate-500">{t('employer.candidatesTab.narrative.refresh')}</p>}
                     </div>
                   ))}
                 </div>
@@ -916,4 +954,3 @@ export function CandidateManagementTab({
     </div>
   );
 }
-

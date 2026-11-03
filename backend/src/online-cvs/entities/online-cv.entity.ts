@@ -201,6 +201,12 @@ export class OnlineCV {
   @Column({ default: true })
   isSearchable: boolean;
 
+  @Column({ type: 'integer', nullable: true })
+  expectedSalaryVndMonthly: number | null;
+
+  @Column({ default: false })
+  shareExpectedSalary: boolean;
+
   @Column({ default: false })
   isPrimary: boolean;
 
