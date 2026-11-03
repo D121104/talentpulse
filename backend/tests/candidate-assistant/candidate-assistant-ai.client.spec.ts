@@ -61,6 +61,76 @@ function comparisonRequest() {
 }
 
 describe('CandidateAssistantAiServiceClient', () => {
+  it.each<[Record<string, unknown>, boolean]>([
+    [{ source: 'llm', fallbackReason: null }, true],
+    ...[
+      'provider_error',
+      'validation_error',
+      'locale_mismatch',
+      'insufficient_evidence',
+      'empty_answer',
+    ].map((fallbackReason): [Record<string, unknown>, boolean] => [
+      { source: 'deterministic_fallback', fallbackReason },
+      true,
+    ]),
+    [{}, true],
+    [{ source: 'provider secret' }, false],
+    [{ source: 'llm', fallbackReason: 'raw exception with PII' }, false],
+    [{ fallbackReason: 'provider_error' }, false],
+  ])('validates and preserves provenance %j', async (provenance, valid) => {
+    const aiServiceClient = {
+      retrieveRag: jest.fn().mockResolvedValue({
+        request_id: requestIds.requestId,
+        trace_id: requestIds.traceId,
+        job_ids: [],
+        results: [],
+        applied_filters: {},
+        unsupported_filters: [],
+      }),
+      generateRag: jest.fn().mockResolvedValue({
+        request_id: requestIds.requestId,
+        trace_id: requestIds.traceId,
+        client_message_id: requestIds.clientMessageId,
+        answer_status: 'COMPLETE',
+        answer_blocks: [{ kind: 'ADVICE', text: 'ok' }],
+        claims: [],
+        citation_keys: [],
+        referenced_job_ids: [],
+        filters: {
+          company: null,
+          location: null,
+          level: null,
+          salary_min: null,
+          salary_max: null,
+          skills: [],
+        },
+        state_delta: {},
+        degraded: false,
+        ...provenance,
+      }),
+    };
+    const result = new CandidateAssistantAiServiceClient(
+      aiServiceClient as any,
+    ).generate({
+      ...requestIds,
+      mode: AiChatSessionMode.ADVICE,
+      message: 'Give advice',
+      history: [],
+      jobs: [],
+      filters: {},
+    });
+    if (!valid) {
+      await expect(result).rejects.toThrow();
+      return;
+    }
+    const response = await result;
+    expect(response).toMatchObject(provenance);
+    if (Object.keys(provenance).length === 0) {
+      expect(response).not.toHaveProperty('source');
+      expect(response).not.toHaveProperty('fallbackReason');
+    }
+  });
+
   it('defaults locale for legacy requests that omit it', async () => {
     const aiServiceClient = {
       retrieveRag: jest.fn().mockResolvedValue({

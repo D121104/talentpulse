@@ -1,5 +1,5 @@
 import { apiRequest, ApiError } from "./api";
-import type { UserCV, OnlineCV } from "./cvTypes";
+import type { OnlineCV, UserCV } from "./cvTypes";
 
 export type AssistantMode =
   | "JOB_SEARCH"
@@ -63,6 +63,11 @@ export interface AssistantBlock {
   data?: Record<string, unknown>;
 }
 
+export interface AssistantGenerationMetadata {
+  source: "llm" | "deterministic_fallback";
+  fallbackReason: null | "provider_error" | "validation_error" | "locale_mismatch" | "insufficient_evidence" | "empty_answer";
+}
+
 export interface AssistantMessage {
   _id: string;
   role: "USER" | "ASSISTANT";
@@ -71,6 +76,7 @@ export interface AssistantMessage {
   clientMessageId: string | null;
   blocks: AssistantBlock[] | null;
   citations: AssistantCitation[] | null;
+  generationMetadata: AssistantGenerationMetadata | null;
   filterState?: Record<string, unknown> | null;
   errorCode?: string | null;
   createdAt: string;
@@ -89,9 +95,12 @@ export interface AssistantSessionResponse {
 }
 
 export interface AssistantCvOption {
+  key: string;
   id: string;
   title: string;
-  source: "online" | "uploaded";
+  source: "online" | "upload";
+  disabled: boolean;
+  status?: string;
 }
 
 export interface AssistantConsentPolicy {
@@ -137,6 +146,7 @@ export const assistantApi = {
       clientMessageId: string;
       jobIds?: string[];
       cvId?: string;
+      cvSource?: "upload" | "online";
       filters?: AssistantFilterInput;
       /** Optional for backwards compatibility; UI callers send an explicit locale. */
       locale?: string;
@@ -162,20 +172,35 @@ export const assistantApi = {
     }),
 
   listCvOptions: async (accessToken: string): Promise<AssistantCvOption[]> => {
-    const [online, uploaded] = await Promise.all([
-      apiRequest<OnlineCV[]>("/online-cvs", { accessToken }),
+    const [uploaded, online] = await Promise.all([
       apiRequest<UserCV[]>("/user-cvs", { accessToken }),
+      apiRequest<OnlineCV[]>("/online-cvs", { accessToken }),
     ]);
+    const onlineIds = new Set(online.map((cv) => cv._id));
     return [
-      ...online.map((cv) => ({
+      ...uploaded.filter((cv) => !cv.onlineCvId || !onlineIds.has(cv.onlineCvId)).map((cv): AssistantCvOption => {
+        // Linked CVs are refreshed from current online content by the server.
+        const ready = Boolean(cv.onlineCvId) || (cv.parseStatus === "READY" &&
+          Boolean(cv.contentHash?.trim()) && Boolean(cv.parsedText?.trim()));
+        const status = ready ? undefined : cv.parseStatus === "PENDING"
+          ? "Đang chờ xử lý" : cv.parseStatus === "PROCESSING"
+            ? "Đang xử lý" : cv.parseStatus === "FAILED"
+              ? "Xử lý thất bại · hãy tải lại CV" : "Không đọc được nội dung · hãy tải lại CV";
+        return {
+        key: `upload:${cv._id}`,
         id: cv._id,
-        title: cv.title || cv.fullName || "Online CV",
-        source: "online" as const,
-      })),
-      ...uploaded.map((cv) => ({
+        title: cv.title || "CV của tôi",
+        source: "upload",
+        disabled: !ready,
+        status,
+      };
+      }),
+      ...online.map((cv): AssistantCvOption => ({
+        key: `online:${cv._id}`,
         id: cv._id,
-        title: cv.title || "Uploaded CV",
-        source: "uploaded" as const,
+        title: cv.title || cv.fullName || "CV online",
+        source: "online",
+        disabled: false,
       })),
     ];
   },

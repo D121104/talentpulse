@@ -9,6 +9,7 @@ import {
   IsString,
   Matches,
   IsUUID,
+  IsIn,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -39,6 +40,11 @@ export class SendAiChatMessageDto {
   @IsOptional()
   @IsUUID('4')
   cvId?: string;
+
+  /** Omitted source retains the canonical UserCV ID contract. */
+  @IsOptional()
+  @IsIn(['upload', 'online'])
+  cvSource?: 'upload' | 'online';
 
   @IsOptional()
   @IsObject()

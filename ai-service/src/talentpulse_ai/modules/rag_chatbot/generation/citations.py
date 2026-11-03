@@ -39,6 +39,12 @@ def parse_and_validate(value: object, request: RagGenerateRequest) -> ProviderGe
         referenced_job_ids = set(parsed.referenced_job_ids)
         if cited_job_ids != referenced_job_ids:
             raise ValueError("provider citations and job references are not paired")
+        if (
+            request.retrieval_evidence
+            and not cited_job_ids
+            and any(block.kind != "REFUSAL" for block in parsed.answer_blocks)
+        ):
+            raise ValueError("job search answer is missing evidence references")
     else:
         citation_to_job = {}
     if (

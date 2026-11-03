@@ -9,6 +9,26 @@ const base = {
 };
 
 describe('SendAiChatMessageDto locale', () => {
+  it('accepts explicit CV sources and preserves the legacy canonical-ID contract', async () => {
+    for (const cvSource of [undefined, 'upload', 'online']) {
+      const dto = plainToInstance(SendAiChatMessageDto, {
+        ...base,
+        cvId: base.clientMessageId,
+        cvSource,
+      });
+      expect(await validate(dto, { whitelist: true })).toEqual([]);
+    }
+  });
+
+  it('rejects unknown CV sources', async () => {
+    const dto = plainToInstance(SendAiChatMessageDto, {
+      ...base,
+      cvSource: 'external',
+    });
+    expect(
+      (await validate(dto)).some((error) => error.property === 'cvSource'),
+    ).toBe(true);
+  });
   it('accepts a locale while keeping it optional for legacy clients', async () => {
     for (const value of [undefined, 'vi', 'vi-VN', 'en-US']) {
       const dto = plainToInstance(SendAiChatMessageDto, {

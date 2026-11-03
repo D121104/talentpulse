@@ -13,6 +13,7 @@ import {
   CandidateAssistantResponse,
   CandidateAssistantBlock,
   AiChatSessionMode,
+  generationMetadata,
 } from './candidate-assistant.types';
 import { CandidateAssistantProviderError } from './candidate-assistant.errors';
 import type { MatchResponse } from 'src/ai-matching/ai-service.client';
@@ -443,7 +444,11 @@ export class CandidateAssistantAiServiceClient
       'filters',
       'state_delta',
       'degraded',
+      ...('source' in value ? ['source'] : []),
+      ...('fallbackReason' in value ? ['fallbackReason'] : []),
     ]);
+    const provenance = generationMetadata(value.source, value.fallbackReason);
+    if (provenance === undefined) invalidResponse();
     if (
       value.request_id !== identity.request_id ||
       value.trace_id !== identity.trace_id ||
@@ -564,7 +569,12 @@ export class CandidateAssistantAiServiceClient
         };
       },
     );
-    return { blocks, citations, filterState: responseFilterState };
+    return {
+      blocks,
+      citations,
+      filterState: responseFilterState,
+      ...provenance,
+    };
   }
 
   private toGenerationMatchingEvidence(

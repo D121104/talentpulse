@@ -340,6 +340,11 @@ class ProviderGeneration(StrictModel):
     referenced_job_ids: list[UuidValue] = Field(default_factory=list, max_length=20)
 
 
+FallbackReason = Literal[
+    "provider_error", "validation_error", "locale_mismatch", "insufficient_evidence", "empty_answer"
+]
+
+
 class RagGenerateResponse(StrictModel):
     request_id: UuidValue
     trace_id: UuidValue
@@ -352,6 +357,8 @@ class RagGenerateResponse(StrictModel):
     filters: StructuredFilterState
     state_delta: dict[str, object] = Field(default_factory=dict, max_length=30)
     degraded: bool
+    source: Literal["llm", "deterministic_fallback"] = "llm"
+    fallbackReason: FallbackReason | None = None
 
 
 class EmbeddingProvider(Protocol):

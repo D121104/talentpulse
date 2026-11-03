@@ -9,12 +9,13 @@ import { AiCvConsentsModule } from 'src/ai-consents/ai-cv-consents.module';
 import { UserCvParseProcessor } from './cv-parse.processor';
 import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 import { createNoopQueueProvider } from 'src/queues/queue-runtime';
+import { OnlineCV } from 'src/online-cvs/entities/online-cv.entity';
 
 const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([UserCV]),
+    TypeOrmModule.forFeature([UserCV, OnlineCV]),
     ...(queueWorkersEnabled
       ? [BullModule.registerQueue({ name: 'user-cv-parse' })]
       : []),

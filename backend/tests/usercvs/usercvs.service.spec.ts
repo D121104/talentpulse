@@ -40,7 +40,7 @@ describe('UserCVsService.createAiSnapshot', () => {
       hasValidConsent: jest.fn().mockResolvedValue(validConsent),
     } as any;
     return {
-      service: new UserCVsService(cvRepo, {} as any, consentService),
+      service: new UserCVsService(cvRepo, {} as any, consentService, {} as any),
       cvRepo,
       consentService,
     };
@@ -80,6 +80,145 @@ describe('UserCVsService.createAiSnapshot', () => {
       response: { code: 'CV_NOT_READY' },
     });
     expect(consentService.hasValidConsent).not.toHaveBeenCalled();
+  });
+
+  it('resolves an owned online CV without looking up its raw ID as an upload', async () => {
+    const { service, cvRepo } = setup();
+    const onlineRepo = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ _id: cvId, userId, skills: ['Updated'] }),
+    };
+    const canonicalize = jest
+      .spyOn(service, 'findOrCreateForOnlineCv')
+      .mockResolvedValue({ ...readyCv, skills: ['Updated'] } as any);
+    (service as any).onlineCVRepo = onlineRepo;
+    const snapshot = await service.createCandidateAssistantSnapshot(
+      userId,
+      cvId,
+      'online',
+    );
+    expect(snapshot.skills).toEqual(['Updated']);
+    expect(cvRepo.findOne).not.toHaveBeenCalled();
+    expect(onlineRepo.findOne).toHaveBeenCalledWith({
+      where: {
+        _id: cvId,
+        userId,
+        isDeleted: false,
+        deletedAt: expect.anything(),
+      },
+    });
+    expect(canonicalize).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects missing, foreign or deleted online CVs before canonicalization', async () => {
+    const { service, cvRepo } = setup();
+    (service as any).onlineCVRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    const canonicalize = jest.spyOn(service, 'findOrCreateForOnlineCv');
+    await expect(
+      service.createCandidateAssistantSnapshot(userId, cvId, 'online'),
+    ).rejects.toThrow(NotFoundException);
+    expect(cvRepo.findOne).not.toHaveBeenCalled();
+    expect(canonicalize).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a legacy linked UserCV from its current owned online content', async () => {
+    const { service } = setup({ ...readyCv, onlineCvId: cvId } as any);
+    (service as any).onlineCVRepo = {
+      findOne: jest.fn().mockResolvedValue({ _id: cvId, userId }),
+    };
+    jest.spyOn(service, 'findOrCreateForOnlineCv').mockResolvedValue({
+      ...readyCv,
+      contentHash: 'new',
+      skills: ['Current'],
+    } as any);
+    expect(
+      await service.createCandidateAssistantSnapshot(userId, cvId),
+    ).toMatchObject({ contentHash: 'new', skills: ['Current'] });
+  });
+
+  it('rejects a linked UserCV if its online source was deleted or is no longer owned', async () => {
+    const { service } = setup({ ...readyCv, onlineCvId: cvId } as any);
+    (service as any).onlineCVRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    await expect(
+      service.createCandidateAssistantSnapshot(userId, cvId),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('does not treat an unreadable selected online CV as usable', async () => {
+    const { service } = setup();
+    (service as any).onlineCVRepo = {
+      findOne: jest.fn().mockResolvedValue({ _id: cvId, userId }),
+    };
+    jest
+      .spyOn(service, 'findOrCreateForOnlineCv')
+      .mockResolvedValue({ ...readyCv, parsedText: '' } as any);
+    await expect(
+      service.createCandidateAssistantSnapshot(userId, cvId, 'online'),
+    ).rejects.toMatchObject({ response: { code: 'CV_NOT_READY' } });
+  });
+
+  it('keeps uploaded CV ownership checks and canonical snapshot IDs', async () => {
+    const { service, cvRepo } = setup();
+    expect(
+      await service.createCandidateAssistantSnapshot(userId, cvId, 'upload'),
+    ).toMatchObject({ cvId, contentHash: readyCv.contentHash });
+    expect(cvRepo.findOne).toHaveBeenCalledWith({
+      where: {
+        _id: cvId,
+        userId,
+        isDeleted: false,
+        deletedAt: expect.anything(),
+      },
+    });
+    cvRepo.findOne.mockResolvedValue(null);
+    await expect(
+      service.createCandidateAssistantSnapshot(userId, cvId, 'upload'),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('updates canonical content and version when an online CV is edited', async () => {
+    const stored = { ...readyCv, contentVersion: 'old-version' };
+    const cvRepo = {
+      findOne: jest.fn().mockImplementation(async () => stored),
+      update: jest
+        .fn()
+        .mockImplementation(async (_id, update) =>
+          Object.assign(stored, update),
+        ),
+    } as any;
+    const onlineRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        _id: cvId,
+        userId,
+        skills: [{ name: 'Current skill' }],
+      }),
+    } as any;
+    const service = new UserCVsService(
+      cvRepo,
+      {} as any,
+      {} as any,
+      onlineRepo,
+    );
+    const snapshot = await service.createCandidateAssistantSnapshot(
+      userId,
+      cvId,
+      'online',
+    );
+    expect(snapshot.skills).toEqual(['Current skill']);
+    expect(snapshot.sanitizedText).toContain('Current skill');
+    expect(snapshot.contentHash).not.toBe(readyCv.contentHash);
+    expect(snapshot.contentVersion).not.toBe('old-version');
+    const unchanged = await service.createCandidateAssistantSnapshot(
+      userId,
+      cvId,
+      'online',
+    );
+    expect(unchanged.contentVersion).toBe(snapshot.contentVersion);
   });
 
   it('denies a ready CV without valid consent', async () => {
@@ -184,7 +323,12 @@ describe('UserCVsService.update uploaded source', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     } as any;
     const cvParseQueue = { add: jest.fn().mockResolvedValue(undefined) } as any;
-    const service = new UserCVsService(cvRepo, cvParseQueue, {} as any);
+    const service = new UserCVsService(
+      cvRepo,
+      cvParseQueue,
+      {} as any,
+      {} as any,
+    );
     return { service, cvRepo, cvParseQueue };
   }
 

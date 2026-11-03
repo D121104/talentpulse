@@ -46,9 +46,43 @@ export interface CandidateAssistantBlock {
   data?: Record<string, unknown>;
 }
 export interface CandidateAssistantResponse {
+  source?: GenerationMetadata['source'];
+  fallbackReason?: GenerationMetadata['fallbackReason'];
   blocks: CandidateAssistantBlock[];
   citations: CandidateAssistantCitation[];
   filterState?: Record<string, unknown> | null;
+}
+
+export interface GenerationMetadata {
+  source: 'llm' | 'deterministic_fallback';
+  fallbackReason:
+    | null
+    | 'provider_error'
+    | 'validation_error'
+    | 'locale_mismatch'
+    | 'insufficient_evidence'
+    | 'empty_answer';
+}
+
+/** Null means legacy/unknown; undefined means invalid untrusted provenance. */
+export function generationMetadata(
+  source: unknown,
+  reason: unknown,
+): GenerationMetadata | null | undefined {
+  if (source === undefined && (reason === undefined || reason === null))
+    return null;
+  if (source !== 'llm' && source !== 'deterministic_fallback') return undefined;
+  if (reason === undefined || reason === null)
+    return { source, fallbackReason: null };
+  if (
+    reason === 'provider_error' ||
+    reason === 'validation_error' ||
+    reason === 'locale_mismatch' ||
+    reason === 'insufficient_evidence' ||
+    reason === 'empty_answer'
+  )
+    return { source, fallbackReason: reason };
+  return undefined;
 }
 
 export interface CandidateAssistantAiRequest {
