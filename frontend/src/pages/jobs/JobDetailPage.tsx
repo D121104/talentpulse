@@ -10,6 +10,7 @@ import {
   Flame,
   Zap,
   Share2,
+  Copy,
   ArrowLeft,
   CheckCircle2,
   Send,
@@ -224,6 +225,17 @@ export default function JobDetailPage() {
     }
   };
 
+  const handleCopyJobId = async () => {
+    if (!job) return;
+
+    try {
+      await navigator.clipboard.writeText(job._id);
+      success('Đã sao chép mã công việc.');
+    } catch {
+      error('Không thể sao chép mã công việc. Vui lòng thử lại.');
+    }
+  };
+
   const handleShare = () => {
     if (navigator.share) {
       navigator.share({
@@ -317,9 +329,20 @@ export default function JobDetailPage() {
               {/* 1. HERO JOB HEADER CARD */}
               <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 sm:p-7 border border-slate-200/80 dark:border-slate-800 shadow-sm">
                 {/* Title */}
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white leading-snug tracking-tight">
-                  {job.name}
-                </h1>
+                <div className="flex items-start justify-between gap-3">
+                  <h1 className="min-w-0 text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white leading-snug tracking-tight">
+                    {job.name}
+                  </h1>
+                  <button
+                    type="button"
+                    onClick={handleCopyJobId}
+                    title="Sao chép mã công việc"
+                    aria-label="Sao chép mã công việc"
+                    className="shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 dark:text-slate-400 hover:text-primary hover:bg-slate-100 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 transition-colors cursor-pointer"
+                  >
+                    <Copy className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                </div>
 
                 {/* Salary Row */}
                 <div className="mt-3 flex flex-wrap items-center gap-3">

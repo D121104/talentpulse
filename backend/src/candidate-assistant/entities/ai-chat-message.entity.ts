@@ -9,6 +9,7 @@ import {
 import {
   AiChatMessageRole,
   AiChatMessageStatus,
+  GenerationMetadata,
 } from '../candidate-assistant.types';
 
 @Entity('ai_chat_messages')
@@ -58,6 +59,8 @@ export class AiChatMessage {
     | null;
   @Column({ type: 'jsonb', nullable: true }) blocks: unknown[] | null;
   @Column({ type: 'jsonb', nullable: true }) citations: unknown[] | null;
+  @Column({ type: 'jsonb', nullable: true })
+  generationMetadata: GenerationMetadata | null;
   @Column({ type: 'jsonb', nullable: true }) filterState: Record<
     string,
     unknown

@@ -85,6 +85,103 @@ function setup(
   };
 }
 describe('CandidateAssistantService', () => {
+  it.each([
+    { source: 'llm', fallbackReason: null },
+    { source: 'deterministic_fallback', fallbackReason: 'provider_error' },
+    {},
+  ])(
+    'persists provenance through response and history: %j',
+    async (provenance) => {
+      const { service, aiClient, messageRepo } = setup();
+      aiClient.generate.mockResolvedValue({
+        blocks: [{ type: 'ADVICE', text: 'ok' }],
+        citations: [],
+        ...provenance,
+      });
+      const result = await service.sendMessage(
+        'session-1',
+        { content: 'advice', clientMessageId: 'provenance-test' },
+        user,
+      );
+      const expected = 'source' in provenance ? provenance : null;
+      expect(result.assistantMessage.generationMetadata).toEqual(expected);
+      expect(messageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: AiChatMessageRole.ASSISTANT,
+          generationMetadata: expected,
+        }),
+      );
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([result.assistantMessage]),
+      };
+      messageRepo.createQueryBuilder.mockReturnValue(qb);
+      const history = await service.listMessages(
+        'session-1',
+        { limit: 30 },
+        user,
+      );
+      expect(history.items[0].generationMetadata).toEqual(expected);
+    },
+  );
+
+  it('rejects untrusted provenance without persisting provider details', async () => {
+    const { service, aiClient, messageRepo } = setup();
+    aiClient.generate.mockResolvedValue({
+      blocks: [{ type: 'ADVICE', text: 'ok' }],
+      citations: [],
+      source: 'llm',
+      fallbackReason: 'provider exception containing private data',
+    });
+    await expect(
+      service.sendMessage(
+        'session-1',
+        { content: 'advice', clientMessageId: 'invalid-provenance' },
+        user,
+      ),
+    ).rejects.toThrow('AI response was invalid');
+    expect(JSON.stringify(messageRepo.save.mock.calls)).not.toContain(
+      'provider exception',
+    );
+  });
+
+  it('resolves online selection with the authenticated owner and sends only the canonical snapshot', async () => {
+    const { service, userCVsService, aiClient } = setup({
+      _id: 'session-1',
+      userId: user._id,
+      archivedAt: null,
+      mode: AiChatSessionMode.CV_ANALYSIS,
+    });
+    const cvId = '44444444-4444-4444-8444-444444444444';
+    const snapshot = {
+      cvId: '55555555-5555-4555-8555-555555555555',
+      contentHash: 'current',
+    };
+    userCVsService.createCandidateAssistantSnapshot.mockResolvedValue(snapshot);
+    aiClient.generate.mockResolvedValue({
+      blocks: [{ type: 'ADVICE', text: 'ok' }],
+      citations: [],
+      filterState: null,
+    });
+    await service.sendMessage(
+      'session-1',
+      {
+        content: 'Review my CV',
+        clientMessageId: '33333333-3333-4333-8333-333333333333',
+        cvId,
+        cvSource: 'online',
+      },
+      user,
+    );
+    expect(
+      userCVsService.createCandidateAssistantSnapshot,
+    ).toHaveBeenCalledWith(user._id, cvId, 'online', user.email);
+    expect(aiClient.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ cv: snapshot, consentVersion: 'v1' }),
+    );
+  });
   it('rejects HR before reading a session', async () => {
     const { service, sessionRepo } = setup();
     await expect(service.listSessions(hr)).rejects.toThrow(ForbiddenException);

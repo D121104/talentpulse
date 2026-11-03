@@ -19,6 +19,7 @@ import { AiCvConsentsService } from 'src/ai-consents/ai-cv-consents.service';
 import { UserCvParseJobData } from './cv-parse.processor';
 import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 import { AI_CV_CONSENT_ERROR_MESSAGES } from 'src/ai-consents/ai-cv-consent.policy';
+import { OnlineCV } from 'src/online-cvs/entities/online-cv.entity';
 
 export interface CandidateCvSnapshot {
   cvId: string;
@@ -41,6 +42,8 @@ export class UserCVsService {
     @InjectQueue('user-cv-parse')
     private readonly cvParseQueue: Queue<UserCvParseJobData>,
     private readonly aiCvConsentsService: AiCvConsentsService,
+    @InjectRepository(OnlineCV)
+    private readonly onlineCVRepo: Repository<OnlineCV>,
   ) {}
 
   private getUploadedFileType(url: string): 'pdf' | 'docx' {
@@ -213,13 +216,36 @@ export class UserCVsService {
   async createCandidateAssistantSnapshot(
     userId: string,
     cvId: string,
+    source: 'upload' | 'online' = 'upload',
+    actorEmail = '',
   ): Promise<CandidateCvSnapshot> {
     if (!isUUID(userId) || !isUUID(cvId)) {
       throw new BadRequestException('Invalid user or CV id');
     }
-    const cv = await this.userCVRepo.findOne({
-      where: { _id: cvId, userId, isDeleted: false, deletedAt: IsNull() },
-    });
+    let cv =
+      source === 'online'
+        ? null
+        : await this.userCVRepo.findOne({
+            where: { _id: cvId, userId, isDeleted: false, deletedAt: IsNull() },
+          });
+    const onlineCvId = source === 'online' ? cvId : cv?.onlineCvId;
+    if (onlineCvId) {
+      const onlineCv = await this.onlineCVRepo.findOne({
+        where: {
+          _id: onlineCvId,
+          userId,
+          isDeleted: false,
+          deletedAt: IsNull(),
+        },
+      });
+      if (!onlineCv) {
+        throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
+      }
+      cv = await this.findOrCreateForOnlineCv(onlineCv, {
+        _id: userId,
+        email: actorEmail,
+      });
+    }
     if (!cv) {
       throw new NotFoundException('CV không tồn tại hoặc không thuộc về bạn');
     }
@@ -255,7 +281,10 @@ export class UserCVsService {
     });
   }
 
-  async findOrCreateForOnlineCv(onlineCv: any, user: IUser): Promise<UserCV> {
+  async findOrCreateForOnlineCv(
+    onlineCv: any,
+    user: Pick<IUser, '_id' | 'email'>,
+  ): Promise<UserCV> {
     const skills = (onlineCv.skills || [])
       .map((s: any) => (typeof s === 'string' ? s : s?.name))
       .filter(Boolean);
@@ -320,6 +349,10 @@ export class UserCVsService {
         certificates,
         parsedText: textBlocks,
         contentHash,
+        contentVersion:
+          existingCv.contentHash === contentHash
+            ? existingCv.contentVersion
+            : randomUUID(),
         parseStatus: CVParseStatus.READY,
         parsedAt: new Date(),
         updatedBy: { _id: user._id, email: user.email },

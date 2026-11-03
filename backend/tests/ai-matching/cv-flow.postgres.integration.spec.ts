@@ -500,6 +500,7 @@ integrationDescribe(
         fixture.cvRepo,
         {} as any,
         {} as any,
+        {} as any,
       );
       const applicationsService = new ApplicationsService(
         applicationRepo,

@@ -532,6 +532,7 @@ export interface UserCV {
   onlineCvId?: string;
   fileType: string;
   parseStatus?: UserCvParseStatus;
+  contentHash?: string | null;
   parseErrorCode?: string | null;
   parsedText?: string;
   skills?: string[];

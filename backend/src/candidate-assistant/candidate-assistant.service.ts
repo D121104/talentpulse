@@ -37,6 +37,7 @@ import {
   CandidateAssistantCitation,
   CandidateAssistantResponse,
   CANDIDATE_ASSISTANT_AI_CLIENT,
+  generationMetadata,
 } from './candidate-assistant.types';
 import { mapCandidateAssistantProviderError } from './candidate-assistant.errors';
 
@@ -205,6 +206,9 @@ export class CandidateAssistantService {
       throw error;
     }
     try {
+      if (dto.cvSource && !dto.cvId) {
+        throw new BadRequestException('cvSource requires cvId');
+      }
       const jobs = await this.loadJobs(dto.jobIds);
       if (
         session.mode === AiChatSessionMode.CV_JOB_COMPARISON &&
@@ -235,6 +239,8 @@ export class CandidateAssistantService {
         ? await this.userCVsService.createCandidateAssistantSnapshot(
             user._id,
             dto.cvId,
+            dto.cvSource,
+            user.email,
           )
         : undefined;
       const history = await this.messageRepo.find({
@@ -270,6 +276,10 @@ export class CandidateAssistantService {
               status: AiChatMessageStatus.COMPLETED,
               content: this.assistantText(response),
               blocks: response.blocks,
+              generationMetadata: generationMetadata(
+                response.source,
+                response.fallbackReason,
+              ),
               citations: response.citations,
               filterState: response.filterState || null,
               errorCode: null,
@@ -282,6 +292,10 @@ export class CandidateAssistantService {
               content: this.assistantText(response),
               clientMessageId: null,
               blocks: response.blocks,
+              generationMetadata: generationMetadata(
+                response.source,
+                response.fallbackReason,
+              ),
               citations: response.citations,
               filterState: response.filterState || null,
             }),
@@ -301,6 +315,7 @@ export class CandidateAssistantService {
               status: AiChatMessageStatus.FAILED,
               content: null,
               blocks: null,
+              generationMetadata: null,
               citations: null,
               filterState: null,
               errorCode: this.failureCode(error),
@@ -313,6 +328,7 @@ export class CandidateAssistantService {
               content: null,
               clientMessageId: null,
               blocks: null,
+              generationMetadata: null,
               citations: null,
               filterState: null,
               errorCode: this.failureCode(error),
@@ -445,6 +461,12 @@ export class CandidateAssistantService {
       !Array.isArray(response.citations)
     )
       throw new ConflictException('AI response was invalid');
+    const provenance = generationMetadata(
+      response.source,
+      response.fallbackReason,
+    );
+    if (provenance === undefined)
+      throw new ConflictException('AI response was invalid');
     const blocks = response.blocks
       .slice(0, MAX_BLOCKS)
       .filter((b): b is CandidateAssistantBlock =>
@@ -479,6 +501,7 @@ export class CandidateAssistantService {
       blocks,
       citations,
       filterState: this.boundFilters(response.filterState || undefined),
+      ...provenance,
     };
   }
   private assistantText(response: CandidateAssistantResponse) {
