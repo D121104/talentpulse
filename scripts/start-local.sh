@@ -26,15 +26,15 @@ readonly JWT_SUBJECT="talentpulse-backend"
 # Qwen3-Embedding-4B exposes 2560 dimensions (official model metadata; see scripts/README.md).
 # Keep the embedding model/version stable so the local Qdrant representation stays compatible.
 readonly LOCAL_OLLAMA_EMBEDDING_MODEL="${AI_OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}"
-readonly LOCAL_OLLAMA_GENERATION_MODEL="${AI_OLLAMA_GENERATION_MODEL:-qwen3:4b}"
+readonly LOCAL_OLLAMA_GENERATION_MODEL="${AI_OLLAMA_GENERATION_MODEL:-qwen3:8b}"
 readonly LOCAL_OLLAMA_EMBEDDING_DIMENSIONS="${AI_OLLAMA_EMBEDDING_DIMENSIONS:-2560}"
 readonly LOCAL_QDRANT_COLLECTION="jobs_ollama_qwen3_embedding_4b_2560_local_v2"
 readonly LOCAL_QDRANT_ALIAS="jobs_current_local_qwen3_embedding_4b_2560"
 readonly LOCAL_QDRANT_INDEX_VERSION="local-ollama-qwen3-embedding-4b-2560-v2"
-# qwen3:4b requires more than its ~3.2 GB loaded footprint for inference workspace.
+# qwen3:8b Q4_K_M weights are ~5.2 GB; allow headroom for KV cache and inference workspace.
 # This affects only the repo-managed local Compose profile.
-readonly LOCAL_OLLAMA_MEMORY_LIMIT="${OLLAMA_MEMORY_LIMIT:-4g}"
-readonly LOCAL_OLLAMA_MEMORY_SWAP_LIMIT="${OLLAMA_MEMORY_SWAP_LIMIT:-6g}"
+readonly LOCAL_OLLAMA_MEMORY_LIMIT="${OLLAMA_MEMORY_LIMIT:-8g}"
+readonly LOCAL_OLLAMA_MEMORY_SWAP_LIMIT="${OLLAMA_MEMORY_SWAP_LIMIT:-10g}"
 readonly LOCAL_OLLAMA_TIMEOUT_SECONDS=120
 readonly DETERMINISTIC_AI_SERVICE_TIMEOUT_MS=10000
 readonly OLLAMA_AI_SERVICE_TIMEOUT_MS=180000
@@ -63,7 +63,7 @@ Usage: scripts/start-local.sh [--ai-profile=deterministic|ollama] [--cv-ocr] [--
 
 Starts local PostgreSQL and Redis, then FastAPI, NestJS, and the Vite frontend.
 The Ollama profile additionally starts local Ollama and Qdrant and pulls missing models.
-CV generation defaults to qwen3:4b; set AI_OLLAMA_GENERATION_MODEL to preserve a
+CV generation defaults to qwen3:8b; set AI_OLLAMA_GENERATION_MODEL to preserve a
 different local model when needed. Embeddings default to qwen3-embedding:4b
 (2560 dimensions). OCR is disabled by default; --cv-ocr opts the
 local FastAPI child into host-local OCR.
