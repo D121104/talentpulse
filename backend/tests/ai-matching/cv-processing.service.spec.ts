@@ -11,6 +11,8 @@ import { Company } from 'src/companies/entities/company.entity';
 import { Role } from 'src/decorator/customize';
 import { CVParseStatus } from 'src/usercvs/cv-parse-status';
 import * as runtimeFlags from 'src/config/runtime-flags';
+import { consentIdempotencyKey } from 'src/ai-matching/cv-processing.processor';
+import { createHash } from 'crypto';
 
 describe('automatic matching reconciliation', () => {
   afterEach(() => jest.restoreAllMocks());
@@ -69,6 +71,108 @@ describe('automatic matching reconciliation', () => {
 });
 
 describe('CVProcessingService queue payloads', () => {
+  it('reports old completed versions separately as stale rather than current completed', async () => {
+    const qb = {
+      select: jest.fn().mockReturnThis(),
+      setParameters: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        { status: 'STALE', count: '2' },
+        { status: 'COMPLETED', count: '1' },
+      ]),
+    };
+    const service = new CVProcessingService(
+      { createQueryBuilder: () => qb } as never,
+      {} as never,
+    );
+    expect(await service.getProcessingStatus('job')).toEqual({
+      total: 3,
+      completed: 1,
+      stale: 2,
+      pending: 0,
+      processing: 0,
+      failed: 0,
+    });
+    expect(qb.select).toHaveBeenCalledWith(
+      expect.stringContaining('IS DISTINCT FROM :scoringVersion'),
+      'status',
+    );
+    expect(qb.setParameters).toHaveBeenCalledWith({
+      scoringVersion: 'cv-job-match-v3',
+      normalizationVersion: 'skill-normalization-v2',
+    });
+  });
+  it.each(['cv-job-match-v3', 'cv-job-match-v2'])(
+    'deduplicates only current completed pipeline: %s',
+    async (scoringVersion) => {
+      const params = {
+        cvId: 'cv',
+        userId: 'user',
+        applicationId: 'app',
+        cvContentVersion: 'cv-version',
+        contentHash: 'hash',
+        jobId: 'job',
+        jobSourceVersion: 'job-version',
+        aiRankingConsentGranted: true as const,
+        aiRankingConsentVersion: 'v1',
+        aiRankingConsentPolicyHash: 'policy',
+        consentIdempotencyKey: 'ignored',
+      };
+      const existing = {
+        _id: 'result',
+        ...params,
+        status: CVProcessingStatus.COMPLETED,
+        scoringVersion,
+        normalizationVersion: 'skill-normalization-v2',
+      };
+      const repo = {
+        findOne: jest.fn().mockResolvedValue(existing),
+        create: jest.fn((r) => r),
+        save: jest.fn(async (r) => r),
+      };
+      Object.assign(repo, {
+        manager: {
+          transaction: async (run) =>
+            run({ query: jest.fn(), getRepository: () => repo }),
+        },
+      });
+      const queue = { add: jest.fn() };
+      const service = new CVProcessingService(repo as never, queue as never);
+      await service.queueCVProcessing(params);
+      if (scoringVersion === 'cv-job-match-v3') {
+        expect(queue.add).not.toHaveBeenCalled();
+        expect(repo.save).not.toHaveBeenCalled();
+      } else {
+        expect(repo.save).toHaveBeenCalledWith(
+          expect.objectContaining({ status: 'PENDING' }),
+        );
+        expect(queue.add).toHaveBeenCalledWith(
+          'process-cv',
+          expect.anything(),
+          expect.objectContaining({
+            jobId: consentIdempotencyKey('app', 'cv-version', 'job-version'),
+          }),
+        );
+      }
+    },
+  );
+
+  it('version-fences queue identity against legacy identical CV/job hashes', () => {
+    const legacy = `cv-match:app:${createHash('sha256')
+      .update('app:cv:job')
+      .digest('hex')}`;
+    const current = consentIdempotencyKey('app', 'cv', 'job');
+    expect(current).not.toBe(legacy);
+    expect(current).toBe(
+      `cv-match:app:${createHash('sha256')
+        .update('app:cv:job:cv-job-match-v3:skill-normalization-v2')
+        .digest('hex')}`,
+    );
+    expect(consentIdempotencyKey('app', 'cv', 'job')).toBe(current);
+  });
   it('queues application matching by IDs and fences, never by CV URL/text or snapshots', async () => {
     const result = { _id: 'result-1', status: CVProcessingStatus.PENDING };
     const resultRepo = {
@@ -237,45 +341,79 @@ describe('automatic application eligibility', () => {
   });
 });
 
-it('returns only completed matches fresh for the current job and CV versions', async () => {
-  const queryBuilder = {
-    leftJoinAndSelect: jest.fn().mockReturnThis(),
-    where: jest.fn().mockReturnThis(),
-    andWhere: jest.fn().mockReturnThis(),
-    orderBy: jest.fn().mockReturnThis(),
-    addOrderBy: jest.fn().mockReturnThis(),
-    take: jest.fn().mockReturnThis(),
-    getMany: jest.fn().mockResolvedValue([]),
-  };
-  const resultRepo = {
-    createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
-  };
-  const service = new CVProcessingService(resultRepo as any, {} as any);
+it.each([undefined, 'exact-application'])(
+  'returns only fresh consented matches with optional application filter %s',
+  async (applicationId) => {
+    const queryBuilder = {
+      leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const resultRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    };
+    const service = new CVProcessingService(resultRepo as any, {} as any);
 
-  await service.getRankedCandidates('job-1', 10, 'job-source-v2');
+    await service.getRankedCandidates(
+      'job-1',
+      10,
+      'job-source-v2',
+      applicationId,
+    );
+    if (applicationId) {
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'result.applicationId = :applicationId',
+        { applicationId },
+      );
+    }
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'application.aiRankingConsentGranted = true',
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'application.deletedAt IS NULL',
+    );
 
-  expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-    'result.jobSourceVersion = :jobSourceVersion',
-    { jobSourceVersion: 'job-source-v2' },
-  );
-  expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-    'result.contentHash = cv.contentHash',
-  );
-  for (const predicate of [
-    'application.aiRankingConsentGranted = true',
-    'application.aiRankingConsentVersion IS NOT NULL',
-    'application.aiRankingConsentPolicyHash IS NOT NULL',
-    'application.aiRankingConsentAt IS NOT NULL',
-    'application.isDeleted = false',
-    'application.deletedAt IS NULL',
-    'user.isDeleted = false',
-    'user.deletedAt IS NULL',
-  ]) {
-    expect(queryBuilder.andWhere).toHaveBeenCalledWith(predicate);
-  }
-  expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-    'application.status IN (:...eligibleStatuses)',
-    { eligibleStatuses: ['PENDING', 'REVIEWING', 'CONSIDERING', 'APPROVED'] },
-  );
-  expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('result._id', 'ASC');
-});
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'result.jobSourceVersion = :jobSourceVersion',
+      { jobSourceVersion: 'job-source-v2' },
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'result.contentHash = cv.contentHash',
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'result.scoringVersion = :scoringVersion',
+      { scoringVersion: 'cv-job-match-v3' },
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'result.normalizationVersion = :normalizationVersion',
+      { normalizationVersion: 'skill-normalization-v2' },
+    );
+    for (const predicate of [
+      'application.aiRankingConsentGranted = true',
+      'application.aiRankingConsentVersion IS NOT NULL',
+      'application.aiRankingConsentPolicyHash IS NOT NULL',
+      'application.aiRankingConsentAt IS NOT NULL',
+      'application.isDeleted = false',
+      'application.deletedAt IS NULL',
+      'user.isDeleted = false',
+      'user.deletedAt IS NULL',
+      'application.cvId = result.cvId AND application.userId = result.userId AND application.jobId = result.jobId',
+      'cv.userId = result.userId',
+      'result.deletedAt IS NULL',
+      'job.isDeleted = false AND job.deletedAt IS NULL',
+      "CAST(application.companyId AS text) = job.company->>'_id'",
+    ]) {
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(predicate);
+    }
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'application.status IN (:...eligibleStatuses)',
+      { eligibleStatuses: ['PENDING', 'REVIEWING', 'CONSIDERING', 'APPROVED'] },
+    );
+    expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('result._id', 'ASC');
+  },
+);

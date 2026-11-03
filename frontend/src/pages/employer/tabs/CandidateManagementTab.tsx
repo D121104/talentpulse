@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import MatchingAnalysis from './MatchingAnalysis';
+import CandidateNarrative from './CandidateNarrative';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -32,6 +32,7 @@ import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate, formatDateTime } from '../../../lib/dateUtils';
 import { applicationCsv } from '../../../lib/applicationCsv';
 import { userApi } from '../../../lib/userApi';
+import { analysisPercent } from '../../../lib/hrMatchingAnalysis';
 
 interface CandidateManagementTabProps {
   company: CompanyInfo | null;
@@ -45,6 +46,7 @@ interface CandidateManagementTabProps {
 }
 
 export function CandidateManagementTab({
+  company,
   hasCompany,
   accessToken,
   filterJobId,
@@ -53,7 +55,9 @@ export function CandidateManagementTab({
   onNavigateTab,
   onRefreshStats,
 }: CandidateManagementTabProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage?.startsWith('en') ? 'en' : 'vi';
+  const rankingRequest = useRef<AbortController | null>(null);
   const { success, error, info } = useToast();
 
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
@@ -93,6 +97,20 @@ export function CandidateManagementTab({
     processedAt: string;
   } | null>(null);
   const [isLoadingAiRank, setIsLoadingAiRank] = useState(false);
+
+  useEffect(() => {
+    rankingRequest.current?.abort();
+    setAiRankingData(null);
+    setIsAiRankModalOpen(false);
+    setIsLoadingAiRank(false);
+    return () => { rankingRequest.current?.abort(); };
+  }, [accessToken, company?._id, hasCompany, locale]);
+
+  const closeRanking = () => {
+    rankingRequest.current?.abort();
+    setAiRankingData(null);
+    setIsAiRankModalOpen(false);
+  };
 
   // Interview Modal
   const [interviewApp, setInterviewApp] = useState<ApplicationItem | null>(null);
@@ -214,16 +232,22 @@ export function CandidateManagementTab({
 
   const handleOpenAiRanking = async (jobId: string) => {
     if (!accessToken) return;
+    rankingRequest.current?.abort();
+    const controller = new AbortController();
+    rankingRequest.current = controller;
+    setAiRankingData(null);
     setIsLoadingAiRank(true);
     setIsAiRankModalOpen(true);
     try {
-      const res = await employerApi.getAIRankedCandidates(jobId, 15, accessToken);
+      const res = await employerApi.getAIRankedCandidates(jobId, 15, accessToken, controller.signal);
+      if (controller.signal.aborted) return;
       setAiRankingData(res);
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       console.error(err);
       error('Không thể lấy kết quả phân tích AI');
     } finally {
-      setIsLoadingAiRank(false);
+      if (!controller.signal.aborted) setIsLoadingAiRank(false);
     }
   };
 
@@ -739,7 +763,7 @@ export function CandidateManagementTab({
 
                 <button
                   type="button"
-                  onClick={() => setIsAiRankModalOpen(false)}
+                  onClick={closeRanking}
                   className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition dark:hover:bg-slate-800 cursor-pointer"
                 >
                   <X className="h-5 w-5" />
@@ -782,7 +806,7 @@ export function CandidateManagementTab({
                         <div className="flex items-center gap-3">
                           <div className="text-right">
                             <span className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
-                              {Math.round(candidate.matchScore * 100)}% {t('employer.candidatesTab.aiMatchScore')}
+                              {analysisPercent(candidate.matchScore) ?? t('employer.candidatesTab.analysis.unavailable')} {t('employer.candidatesTab.aiMatchScore')}
                             </span>
                           </div>
                           {candidate.cvUrl && (
@@ -804,9 +828,15 @@ export function CandidateManagementTab({
                       {!candidate.analysisAvailable ? (
                         <div className="text-xs text-slate-600 dark:text-slate-300">
                           <p>{t('employer.candidatesTab.aiAnalysisLocked')}</p>
-                          {onNavigateTab && <button type="button" onClick={() => { setIsAiRankModalOpen(false); onNavigateTab('premium'); }} className="mt-2 font-bold text-primary underline">{t('employer.searchCvTab.upgradeAdvanced')}</button>}
+                          {onNavigateTab && <button type="button" onClick={() => { closeRanking(); onNavigateTab('premium'); }} className="mt-2 font-bold text-primary underline">{t('employer.searchCvTab.upgradeAdvanced')}</button>}
                         </div>
-                      ) : <MatchingAnalysis candidate={candidate} />}
+                      ) : candidate.analysisVersionKey && accessToken ? <CandidateNarrative
+                        key={`${aiRankingData.jobId}/${candidate.applicationId}/${candidate.analysisVersionKey}/${locale}`}
+                        jobId={aiRankingData.jobId} applicationId={candidate.applicationId}
+                        version={candidate.analysisVersionKey} locale={locale} accessToken={accessToken}
+                        onForbidden={() => { closeRanking(); error(t('employer.candidatesTab.aiAnalysisLocked')); }}
+                        onRefresh={() => void handleOpenAiRanking(aiRankingData.jobId)}
+                      /> : <p className="text-xs text-slate-500">{t('employer.candidatesTab.narrative.refresh')}</p>}
                     </div>
                   ))}
                 </div>

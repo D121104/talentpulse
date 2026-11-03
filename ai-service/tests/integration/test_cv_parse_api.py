@@ -42,7 +42,7 @@ def test_parser_returns_bounded_structured_sections(client, settings) -> None:
     assert body["experience"] == ["Backend Engineer - Acme (2022-2025)"]
     assert body["certificates"] == ["AWS Certified Developer"]
     assert body["warnings"] == ["Some CV content was outside recognized sections."]
-    assert body["parser_version"] == "structured-parser-v1"
+    assert body["parser_version"] == "structured-parser-v2"
     assert len(body["skills"]) <= 50
     assert all(len(item) <= 500 for item in body["skills"])
 

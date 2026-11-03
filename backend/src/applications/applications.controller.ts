@@ -10,6 +10,10 @@ import {
   Query,
   DefaultValuePipe,
   ParseIntPipe,
+  ParseUUIDPipe,
+  Header,
+  HttpCode,
+  ValidationPipe,
 } from '@nestjs/common';
 import { ApplicationsService } from './applications.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
@@ -19,6 +23,8 @@ import { IUser } from 'src/users/users.interface';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { RolesGuard } from 'src/guards/roles.guard';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { MatchAnalysisDto } from './dto/match-analysis.dto';
 
 @Controller('applications')
 @ApiTags('Applications Controller')
@@ -102,6 +108,27 @@ export class ApplicationsController {
   @ResponseMessage('Lấy chi tiết đơn ứng tuyển')
   findOne(@Param('id') id: string) {
     return this.applicationsService.findOne(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard, ThrottlerGuard)
+  @Roles(Role.ADMIN, Role.HR)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Header('Cache-Control', 'no-store')
+  @HttpCode(200)
+  @Post('by-job/:jobId/ai-analysis/:applicationId')
+  getMatchAnalysis(
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Param('applicationId', ParseUUIDPipe) applicationId: string,
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+    dto: MatchAnalysisDto,
+    @User() user: IUser,
+  ) {
+    return this.applicationsService.getMatchAnalysis(
+      jobId,
+      applicationId,
+      dto,
+      user,
+    );
   }
 
   // HR marks application as viewed -> transitions PENDING to REVIEWING and notifies candidate in realtime

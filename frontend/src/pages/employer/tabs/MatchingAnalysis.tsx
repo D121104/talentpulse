@@ -7,6 +7,9 @@ export default function MatchingAnalysis({ candidate }: { candidate: AIRankedCan
   const label = (key: string) => t(`employer.candidatesTab.analysis.${key}`);
   if (!candidate.analysisAvailable) return null;
   const analysis = candidate.aiAnalysis;
+  if (analysis?.versions?.scoring !== 'cv-job-match-v3' || analysis?.versions?.normalization !== 'skill-normalization-v2') {
+    return <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{t('employer.searchCvTab.scoreStates.STALE')}</p>;
+  }
   const list = (key: string, value: unknown) => {
     const items = analysisTexts(value);
     return <section><h5 className="font-semibold">{label(key)}</h5>{items.length ? <ul lang={analysis?.textLocale === 'en' ? 'en' : undefined} className="list-disc pl-4 break-words">{items.map((text, index) => <li key={index}>{text}</li>)}</ul> : <p>{label('noRecordedEvidence')}</p>}</section>;
@@ -33,8 +36,7 @@ export default function MatchingAnalysis({ candidate }: { candidate: AIRankedCan
       </div>
     </>}
     <div className="grid gap-3 sm:grid-cols-2">
-      {list('matchedSkills', analysis ? analysis.matchedSkills : candidate.matchedSkills)}
-      {list('missingRequiredSkills', analysis ? analysis.missingRequiredSkills : candidate.missingSkills)}
+      {analysis.components?.skills?.available === true ? <>{list('matchedSkills', analysis.matchedSkills)}{list('missingRequiredSkills', analysis.missingRequiredSkills)}</> : <p>{label('skills')}: {label('unavailable')}</p>}
       {list('strengths', analysis?.strengths)}
       {list('gaps', analysis?.gaps)}
     </div>

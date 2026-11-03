@@ -11,6 +11,7 @@ from talentpulse_ai.modules.cv_analysis.schemas import (
     MatchRequest,
     MatchResponse,
 )
+from talentpulse_ai.modules.cv_analysis.skills import canonical_skill, split_skills
 
 
 class SemanticScorer(Protocol):
@@ -105,24 +106,9 @@ def _bounded_items(values: list[str], max_chars: int) -> list[str]:
 
 
 class MatchService:
-    SCORING_VERSION = "cv-job-match-v2"
+    SCORING_VERSION = "cv-job-match-v3"
     _base_weights = {"semantic": 0.50, "skills": 0.35, "experience": 0.15}
     _level_order = {"intern": 0, "junior": 1, "mid": 2, "senior": 3, "lead": 4, "principal": 5}
-    _skill_aliases = {
-        "postgres": "postgresql",
-        "postgre sql": "postgresql",
-        "js": "javascript",
-        "ts": "typescript",
-        "node js": "nodejs",
-        "react js": "reactjs",
-        "vue js": "vuejs",
-        "next js": "nextjs",
-        "express js": "expressjs",
-        "tailwind css": "tailwindcss",
-        "k8s": "kubernetes",
-        "amazon web services": "aws",
-        "google cloud platform": "gcp",
-    }
 
     def __init__(self, semantic_scorer: SemanticScorer | None = None) -> None:
         self._semantic = semantic_scorer or UnavailableSemanticScorer()
@@ -131,11 +117,15 @@ class MatchService:
         if not isinstance(request, MatchRequest):
             raise TypeError("request must be MatchRequest")
         candidate, job = request.candidate, request.job
-        candidate_skills = {self._normalize(skill) for skill in candidate.skills}
+        candidate_skills = {self._normalize(skill) for skill in split_skills(candidate.skills)}
         required = self._ordered_unique(job.required_skills)
         preferred = self._ordered_unique(job.preferred_skills)
         matched_required = [raw for key, raw in required if key in candidate_skills]
-        missing_required = [raw for key, raw in required if key not in candidate_skills]
+        missing_required = (
+            [raw for key, raw in required if key not in candidate_skills]
+            if candidate_skills
+            else []
+        )
         matched_preferred = [raw for key, raw in preferred if key in candidate_skills]
         matched_skills = self._merge_unique(matched_required, matched_preferred)
 
@@ -149,6 +139,8 @@ class MatchService:
         skill_score, skill_evidence = self._skill_score(
             required, preferred, matched_required, matched_preferred
         )
+        if not candidate_skills:
+            skill_score = None
         if skill_score is not None:
             components["skills"] = (skill_score, skill_evidence)
 
@@ -174,6 +166,13 @@ class MatchService:
             )
             for name, (score, evidence) in components.items()
         }
+        if (required or preferred) and not candidate_skills:
+            response_components["skills"] = MatchComponent(
+                score=0.0,
+                weight=0.0,
+                available=False,
+                evidence=["Candidate skills unavailable; required-skill coverage is unknown."],
+            )
         location_score, location_evidence, location_available = self._location_compatibility(
             candidate, job
         )
@@ -264,21 +263,12 @@ class MatchService:
 
     @staticmethod
     def _normalize(value: str) -> str:
-        normalized = (
-            value.casefold()
-            .strip()
-            .replace(".", "")
-            .replace("-", " ")
-            .replace("_", " ")
-            .replace("/", " ")
-        )
-        normalized = " ".join(normalized.split())
-        return MatchService._skill_aliases.get(normalized, normalized)
+        return canonical_skill(value)
 
     def _ordered_unique(self, values: list[str]) -> list[tuple[str, str]]:
         result: list[tuple[str, str]] = []
         seen: set[str] = set()
-        for value in values:
+        for value in split_skills(values):
             key = self._normalize(value)
             if key and key not in seen:
                 seen.add(key)

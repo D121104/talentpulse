@@ -106,8 +106,7 @@ export default function JobSidebarWidgets({
           </h3>
 
           <p className="mt-1.5 text-xs text-blue-100/90 leading-relaxed">
-            AI tự động phân tích kỹ năng, số năm kinh nghiệm và gợi ý công việc
-            khớp đến 95%.
+            AI phân tích kỹ năng và kinh nghiệm trong CV để gợi ý công việc.
           </p>
 
           <div className="mt-4 flex flex-col gap-2">

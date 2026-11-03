@@ -58,3 +58,36 @@ def test_semantic_component_is_optional_and_versioned() -> None:
     assert result.degraded is False
     assert result.semantic_component_version == "fake-v1"
     assert result.components["semantic"].weight == 1.0
+
+
+def test_grouped_skills_match_atomic_aliases() -> None:
+    result = MatchService().match(
+        request(
+            CVProfile(
+                skills=[
+                    "Front-end NextJS, TypeScript, HTML, CSS, Ant Design.",
+                    "Database PostgreSQL, MySQL, MongoDB, Redis, ClickHouse",
+                ]
+            ),
+            JobProfile(required_skills=["Next.js", "TypeScript", "Postgres", "Redis"]),
+        )
+    )
+    assert result.components["skills"].score == 1.0
+    assert result.matched_skills == ["Next.js", "TypeScript", "Postgres", "Redis"]
+    assert result.missing_required_skills == []
+    assert result.scoring_version == "cv-job-match-v3"
+
+
+def test_missing_extraction_is_not_known_skill_mismatch() -> None:
+    unknown = MatchService().match(request(CVProfile(), JobProfile(required_skills=["Java"])))
+    assert unknown.components["skills"].available is False
+    assert unknown.missing_required_skills == []
+    mismatch = MatchService().match(
+        request(
+            CVProfile(skills=["JavaScript"]),
+            JobProfile(required_skills=["Java"]),
+        )
+    )
+    assert mismatch.components["skills"].available is True
+    assert mismatch.components["skills"].score == 0.0
+    assert mismatch.missing_required_skills == ["Java"]

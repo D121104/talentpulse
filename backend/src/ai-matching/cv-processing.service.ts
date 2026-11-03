@@ -5,6 +5,11 @@ import { Queue } from 'bull';
 import { Repository } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import {
+  CURRENT_MATCH_SCORING_VERSION,
+  CURRENT_SKILL_NORMALIZATION_VERSION,
+  hasCurrentMatchingVersions,
+} from './matching-versions';
+import {
   Application,
   ApplicationStatus,
 } from 'src/applications/entities/application.entity';
@@ -218,7 +223,9 @@ export class CVProcessingService {
         !existing.deletedAt &&
         existing.applicationId === params.applicationId &&
         existing.contentHash === params.contentHash &&
-        existing.jobSourceVersion === params.jobSourceVersion
+        existing.jobSourceVersion === params.jobSourceVersion &&
+        (existing.status !== CVProcessingStatus.COMPLETED ||
+          hasCurrentMatchingVersions(existing))
       ) {
         this.logger.log(
           `CV match result already exists for CV ${params.cvId} and Job ${params.jobId}`,
@@ -296,22 +303,41 @@ export class CVProcessingService {
     jobId: string,
     topN = 10,
     currentJobSourceVersion: string,
+    applicationId?: string,
   ): Promise<CVMatchResult[]> {
     return this.cvMatchResultRepo
       .createQueryBuilder('result')
       .leftJoinAndSelect('result.user', 'user')
       .leftJoinAndSelect('result.cv', 'cv')
       .leftJoinAndSelect('result.application', 'application')
+      .leftJoin('result.job', 'job')
       .where('result.jobId = :jobId', { jobId })
+      .andWhere(
+        applicationId ? 'result.applicationId = :applicationId' : '1=1',
+        { applicationId },
+      )
       .andWhere('result.status = :status', {
         status: CVProcessingStatus.COMPLETED,
       })
       .andWhere('result.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('result.deletedAt IS NULL')
+      .andWhere('job.isDeleted = false AND job.deletedAt IS NULL')
+      .andWhere("CAST(application.companyId AS text) = job.company->>'_id'")
       .andWhere('result.jobSourceVersion = :jobSourceVersion', {
         jobSourceVersion: currentJobSourceVersion,
       })
       .andWhere('cv.contentHash IS NOT NULL')
       .andWhere('result.contentHash = cv.contentHash')
+      .andWhere('result.scoringVersion = :scoringVersion', {
+        scoringVersion: CURRENT_MATCH_SCORING_VERSION,
+      })
+      .andWhere('result.normalizationVersion = :normalizationVersion', {
+        normalizationVersion: CURRENT_SKILL_NORMALIZATION_VERSION,
+      })
+      .andWhere(
+        'application.cvId = result.cvId AND application.userId = result.userId AND application.jobId = result.jobId',
+      )
+      .andWhere('cv.userId = result.userId')
       .andWhere('(cv.isDeleted = false OR cv.isDeleted IS NULL)')
       .andWhere('cv.deletedAt IS NULL')
       .andWhere('application.aiRankingConsentGranted = true')
@@ -342,14 +368,23 @@ export class CVProcessingService {
     processing: number;
     pending: number;
     failed: number;
+    stale: number;
   }> {
+    const reportedStatus = `CASE WHEN result.status = 'COMPLETED' AND
+      (result.scoringVersion IS DISTINCT FROM :scoringVersion OR
+       result.normalizationVersion IS DISTINCT FROM :normalizationVersion)
+      THEN 'STALE' ELSE result.status::text END`;
     const stats = await this.cvMatchResultRepo
       .createQueryBuilder('result')
-      .select('result.status', 'status')
+      .select(reportedStatus, 'status')
+      .setParameters({
+        scoringVersion: CURRENT_MATCH_SCORING_VERSION,
+        normalizationVersion: CURRENT_SKILL_NORMALIZATION_VERSION,
+      })
       .addSelect('COUNT(result._id)', 'count')
       .where('result.jobId = :jobId', { jobId })
       .andWhere('result.isDeleted = :isDeleted', { isDeleted: false })
-      .groupBy('result.status')
+      .groupBy('1')
       .getRawMany();
     const output = {
       total: 0,
@@ -357,11 +392,15 @@ export class CVProcessingService {
       processing: 0,
       pending: 0,
       failed: 0,
+      stale: 0,
     };
     for (const stat of stats) {
       const count = parseInt(stat.count, 10);
       output.total += count;
       switch (stat.status) {
+        case 'STALE':
+          output.stale = count;
+          break;
         case CVProcessingStatus.COMPLETED:
           output.completed = count;
           break;

@@ -26,6 +26,10 @@ import { IUser } from 'src/users/users.interface';
 import { Role } from 'src/decorator/customize';
 import { SearchCandidatesDto } from './dto/search-candidate.dto';
 import { UnlockCandidateDto } from './dto/unlock-candidate.dto';
+import { Application } from 'src/applications/entities/application.entity';
+import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
+import { applicationAiScore } from 'src/ai-matching/hr-matching-analysis';
+import { ApplicationAiScoreSummary } from 'src/applications/dto/application-ai-score.dto';
 
 const FREE_HR_DAILY_CV_LIMIT = 5;
 
@@ -476,6 +480,7 @@ export class CandidateAccessService {
     }
 
     return {
+      companyId,
       companyName: company?.name || hrUser.company.name || 'Công ty',
       industryDomains,
       targetSkills: Array.from(new Set(targetSkills)),
@@ -556,13 +561,13 @@ export class CandidateAccessService {
     let reason = '';
     if (isRecommended) {
       if (matchedSkills.length > 0) {
-        reason = `🎯 Khớp ${score}% kỹ năng (${matchedSkills
+        reason = `Có từ khóa kỹ năng chung (${matchedSkills
           .slice(0, 2)
           .join(', ')})`;
       } else if (matchedDomainName) {
-        reason = `✨ Phù hợp lĩnh vực ${matchedDomainName}`;
+        reason = `Có từ khóa lĩnh vực ${matchedDomainName}`;
       } else {
-        reason = `🎯 ${score}% phù hợp định hướng tuyển dụng`;
+        reason = 'Có từ khóa chung với tin tuyển dụng của công ty';
       }
     }
 
@@ -618,6 +623,22 @@ export class CandidateAccessService {
 
     // 1.0 Retrieve HR's Company Profile for smart personalized ranking
     const companyProfile = await this.getCompanyRecruitmentProfile(hrUser._id);
+    let selectedJob: Job | null = null;
+    if (dto.jobId) {
+      selectedJob = await this.jobRepo.findOne({
+        where: { _id: dto.jobId, isDeleted: false },
+      });
+      if (!selectedJob || selectedJob.deletedAt)
+        throw new NotFoundException('Công việc không tồn tại');
+      if (
+        !companyProfile?.companyId ||
+        selectedJob.company?._id !== companyProfile.companyId
+      ) {
+        throw new ForbiddenException(
+          'Bạn không có quyền truy cập dữ liệu của công việc này',
+        );
+      }
+    }
 
     // 1.1 Query Online CVs (Publicly searchable)
     const onlineQueryBuilder = this.onlineCVRepo
@@ -884,6 +905,15 @@ export class CandidateAccessService {
       startIndex + pageSize,
     );
 
+    const scores =
+      selectedJob && companyProfile?.companyId
+        ? await this.searchApplicationScores(
+            paginatedResult,
+            selectedJob,
+            companyProfile.companyId,
+          )
+        : new Map<string, ApplicationAiScoreSummary>();
+
     return {
       meta: {
         current,
@@ -894,9 +924,91 @@ export class CandidateAccessService {
         hasCompanyJobs: companyProfile ? companyProfile.jobCount > 0 : false,
         companyJobCount: companyProfile ? companyProfile.jobCount : 0,
         companyName: companyProfile?.companyName,
+        jobId: selectedJob?._id ?? null,
+        jobName: selectedJob?.name ?? null,
       },
-      result: paginatedResult,
+      result: paginatedResult.map((row) => ({
+        ...row,
+        // Deprecated: company keyword relevance is not a CV–Job percentage.
+        companyMatchScore: null,
+        ...(selectedJob
+          ? {
+              aiScore: scores.get(`${row.cvType}:${row.cvId}`) ?? {
+                status: 'UNAVAILABLE',
+                overallScore: null,
+              },
+            }
+          : {}),
+      })),
     };
+  }
+
+  private async searchApplicationScores(
+    rows: {
+      cvType: CandidateAccessType;
+      cvId: string;
+      candidateUserId: string;
+    }[],
+    job: Job,
+    companyId: string,
+  ) {
+    const summaries = new Map<string, ApplicationAiScoreSummary>();
+    if (!rows.length) return summaries;
+    const applications = await this.dataSource.getRepository(Application).find({
+      where: rows.map((row) => ({
+        jobId: job._id,
+        companyId,
+        userId: row.candidateUserId,
+        isDeleted: false,
+        ...(row.cvType === CandidateAccessType.UPLOADED_CV
+          ? { cvId: row.cvId }
+          : { cv: { onlineCvId: row.cvId, userId: row.candidateUserId } }),
+      })),
+      relations: ['cv', 'user', 'company', 'job'],
+    });
+    const results = applications.length
+      ? await this.dataSource.getRepository(CVMatchResult).find({
+          where: applications.map((app) => ({
+            applicationId: app._id,
+            isDeleted: false,
+          })),
+          select: {
+            applicationId: true,
+            cvId: true,
+            userId: true,
+            jobId: true,
+            status: true,
+            matchScore: true,
+            contentHash: true,
+            jobSourceVersion: true,
+            scoringVersion: true,
+            normalizationVersion: true,
+          },
+        })
+      : [];
+    for (const row of rows) {
+      const exact = applications.filter(
+        (app) =>
+          app.jobId === job._id &&
+          app.companyId === companyId &&
+          app.userId === row.candidateUserId &&
+          app.cv?.userId === row.candidateUserId &&
+          (row.cvType === CandidateAccessType.UPLOADED_CV
+            ? app.cvId === row.cvId
+            : app.cv?.onlineCvId === row.cvId),
+      );
+      // No application authority (or ambiguous historical linkage): never infer consent from searchability.
+      if (exact.length !== 1) continue;
+      const app = exact[0];
+      summaries.set(
+        `${row.cvType}:${row.cvId}`,
+        applicationAiScore(
+          app,
+          results.find((result) => result.applicationId === app._id),
+        ),
+      );
+    }
+    return summaries;
   }
 
   /**

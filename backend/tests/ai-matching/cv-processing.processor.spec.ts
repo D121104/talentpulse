@@ -150,6 +150,36 @@ describe('CVProcessingProcessor', () => {
     };
   }
 
+  it.each(['cv-job-match-v2', 'cv-job-match-v3'])(
+    'reprocesses unchanged completed hashes only when scoring pipeline is old: %s',
+    async (scoringVersion) => {
+      const h = setup();
+      const r = canonicalRecords();
+      h.resultRepo.findOne.mockResolvedValue({
+        ...r.result,
+        status: CVProcessingStatus.COMPLETED,
+        scoringVersion,
+        normalizationVersion: 'skill-normalization-v2',
+        cv: r.cv,
+        job: r.job,
+        application: r.application,
+      });
+      h.companyRepo.findOne.mockResolvedValue(r.company);
+      const process = jest
+        .spyOn(h.processor, 'handleProcessCV')
+        .mockResolvedValue({ success: false, stale: true });
+      await h.processor.handleReprocessCV({
+        data: { cvMatchResultId: ids.result },
+      } as never);
+      expect(process).toHaveBeenCalledTimes(
+        scoringVersion === 'cv-job-match-v2' ? 1 : 0,
+      );
+      expect(h.resultRepo.update).toHaveBeenCalledTimes(
+        scoringVersion === 'cv-job-match-v2' ? 1 : 0,
+      );
+    },
+  );
+
   it.each([CVProcessingStatus.COMPLETED, CVProcessingStatus.PROCESSING])(
     'never relabels a delayed legacy %s result as fresh without invalidation',
     async (status) => {
@@ -264,59 +294,75 @@ describe('CVProcessingProcessor', () => {
     },
   );
 
-  it('reloads canonical records and sends only canonical snapshots to AI', async () => {
-    const setupResult = setup();
-    const records = canonicalRecords();
-    setupResult.resultRepo.findOne.mockResolvedValue(records.result);
-    setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
-    setupResult.jobRepo.findOne.mockResolvedValue(records.job);
-    setupResult.companyRepo.findOne.mockResolvedValue(records.company);
-    setupResult.applicationRepo.findOne.mockResolvedValue(records.application);
-    setupResult.aiServiceClient.matchCv.mockResolvedValue({
-      overall_score: 0.8,
-      matched_skills: ['TypeScript'],
-      missing_required_skills: ['NestJS'],
-      strengths: [],
-      gaps: [],
-      explanation: 'matched',
-      components: {},
-      scoring_version: 'v1',
-      semantic_component_version: 'v1',
-      degraded: false,
-    });
+  it.each(['v1', 'cv-job-match-v3'])(
+    'reloads canonical records and preserves actual %s provenance without upgrading legacy output',
+    async (scoringVersion) => {
+      const setupResult = setup();
+      const records = canonicalRecords();
+      setupResult.resultRepo.findOne.mockResolvedValue(records.result);
+      setupResult.cvRepo.findOne.mockResolvedValue(records.cv);
+      setupResult.jobRepo.findOne.mockResolvedValue(records.job);
+      setupResult.companyRepo.findOne.mockResolvedValue(records.company);
+      setupResult.applicationRepo.findOne.mockResolvedValue(
+        records.application,
+      );
+      setupResult.aiServiceClient.matchCv.mockResolvedValue({
+        overall_score: 0.8,
+        matched_skills: ['TypeScript'],
+        missing_required_skills: ['NestJS'],
+        strengths: [],
+        gaps: [],
+        explanation: 'matched',
+        components: {},
+        scoring_version: scoringVersion,
+        semantic_component_version: 'v1',
+        degraded: false,
+      });
 
-    const response = await setupResult.processor.handleProcessCV({
-      data,
-    } as any);
+      const response = await setupResult.processor.handleProcessCV({
+        data,
+      } as any);
 
-    expect(response).toEqual({ success: true, matchScore: 0.8 });
-    expect(setupResult.applicationRepo.findOne).toHaveBeenCalledWith({
-      where: { _id: ids.application },
-    });
-    expect(setupResult.aiServiceClient.matchCv).toHaveBeenCalledWith({
-      identity: expect.objectContaining({
-        request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        trace_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        operation_attempt_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
-      }),
-      cv_id: ids.cv,
-      job_id: ids.job,
-      content_hash: data.contentHash,
-      content_version: data.cvContentVersion,
-      job_source_version: data.jobSourceVersion,
-      idempotency_key: data.consentIdempotencyKey,
-      locale: 'en',
-      candidate: expect.objectContaining({ skills: ['TypeScript'] }),
-      job: expect.objectContaining({
-        required_skills: ['TypeScript', 'NestJS'],
-      }),
-    });
-    const aiRequest = setupResult.aiServiceClient.matchCv.mock.calls[0][0];
-    expect(aiRequest.candidate).not.toHaveProperty('parsedText');
-    expect(aiRequest.job).not.toHaveProperty('description');
-    expect(aiRequest).not.toHaveProperty('applicationId');
-    expect(aiRequest).not.toHaveProperty('userId');
-  });
+      expect(response).toEqual({ success: true, matchScore: 0.8 });
+      expect(setupResult.resultRepo.update).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          scoringVersion,
+          normalizationVersion:
+            scoringVersion === 'cv-job-match-v3'
+              ? 'skill-normalization-v2'
+              : null,
+          status: CVProcessingStatus.COMPLETED,
+        }),
+      );
+      expect(setupResult.applicationRepo.findOne).toHaveBeenCalledWith({
+        where: { _id: ids.application },
+      });
+      expect(setupResult.aiServiceClient.matchCv).toHaveBeenCalledWith({
+        identity: expect.objectContaining({
+          request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+          trace_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+          operation_attempt_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        }),
+        cv_id: ids.cv,
+        job_id: ids.job,
+        content_hash: data.contentHash,
+        content_version: data.cvContentVersion,
+        job_source_version: data.jobSourceVersion,
+        idempotency_key: data.consentIdempotencyKey,
+        locale: 'en',
+        candidate: expect.objectContaining({ skills: ['TypeScript'] }),
+        job: expect.objectContaining({
+          required_skills: ['TypeScript', 'NestJS'],
+        }),
+      });
+      const aiRequest = setupResult.aiServiceClient.matchCv.mock.calls[0][0];
+      expect(aiRequest.candidate).not.toHaveProperty('parsedText');
+      expect(aiRequest.job).not.toHaveProperty('description');
+      expect(aiRequest).not.toHaveProperty('applicationId');
+      expect(aiRequest).not.toHaveProperty('userId');
+    },
+  );
 
   it('passes explicit structured CV and job fields without deriving protected traits', async () => {
     const setupResult = setup();

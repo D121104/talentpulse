@@ -267,7 +267,7 @@ def test_ocr_is_not_invoked_for_good_native_parse(monkeypatch, settings) -> None
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1"
+    assert result.parser_version == "structured-parser-v2"
     assert result.skills == ["Python"]
     assert recorder.calls == []
 
@@ -281,7 +281,7 @@ def test_ocr_triggers_for_native_text_with_empty_structure(monkeypatch, settings
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1"
+    assert result.parser_version == "structured-parser-v2"
     assert [call[0] for call in recorder.calls] == ["pdftoppm", "tesseract"]
 
 
@@ -293,7 +293,7 @@ def test_scanned_pdf_uses_ocr_candidate(monkeypatch, settings) -> None:
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1+local-ocr-v1"
+    assert result.parser_version == "structured-parser-v2+local-ocr-v1"
     assert result.extracted_text == CVParser._normalize_text(ocr_structured_text())
     assert result.skills == ["Python", "FastAPI"]
     assert result.content_sha256 == hashlib.sha256(SYNTHETIC_PDF).hexdigest()
@@ -308,7 +308,7 @@ def test_ocr_wins_only_when_quality_strictly_improves(monkeypatch, settings) -> 
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1+local-ocr-v1"
+    assert result.parser_version == "structured-parser-v2+local-ocr-v1"
     assert result.extracted_text == CVParser._normalize_text(ocr_structured_text())
     assert "Native profile" not in result.extracted_text
 
@@ -322,7 +322,7 @@ def test_native_candidate_wins_ocr_quality_tie(monkeypatch, settings) -> None:
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1"
+    assert result.parser_version == "structured-parser-v2"
     assert result.extracted_text == CVParser._normalize_text(native_text)
     assert "OCR Python" not in result.extracted_text
 
@@ -348,7 +348,7 @@ def test_docx_remains_native_only_when_ocr_enabled(monkeypatch, settings) -> Non
 
     result = CVParser(settings).parse(content, MediaType.DOCX)
 
-    assert result.parser_version == "structured-parser-v1"
+    assert result.parser_version == "structured-parser-v2"
     assert result.skills == ["Python"]
     assert recorder.calls == []
 
@@ -368,7 +368,7 @@ def test_ocr_failure_falls_back_without_sensitive_details(monkeypatch, settings,
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1"
+    assert result.parser_version == "structured-parser-v2"
     assert result.extracted_text == CVParser._normalize_text(native_text)
     assert any("Local OCR" in warning for warning in result.warnings)
     assert "/sensitive/tool/path" not in " ".join(result.warnings)
@@ -407,7 +407,7 @@ def test_ocr_page_and_pixel_bounds_are_enforced(monkeypatch, settings) -> None:
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1+local-ocr-v1"
+    assert result.parser_version == "structured-parser-v2+local-ocr-v1"
     render_calls = [call for call in recorder.calls if call[0] == "pdftoppm"]
     assert len(render_calls) == 1
     assert render_calls[0][render_calls[0].index("-f") + 1] == "1"
@@ -445,7 +445,7 @@ def test_ocr_stdout_bound_falls_back_to_native(monkeypatch, settings) -> None:
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1"
+    assert result.parser_version == "structured-parser-v2"
     assert result.extracted_text == CVParser._normalize_text(native_text)
     assert any("Local OCR" in warning for warning in result.warnings)
     assert "x" * 100 not in " ".join(result.warnings)
@@ -484,7 +484,7 @@ def test_ocr_temp_files_are_private_and_cleaned_up(monkeypatch, settings, tmp_pa
 
     result = CVParser(settings).parse(SYNTHETIC_PDF, MediaType.PDF)
 
-    assert result.parser_version == "structured-parser-v1+local-ocr-v1"
+    assert result.parser_version == "structured-parser-v2+local-ocr-v1"
     assert recorder.observed_modes == {"directory": 0o700, "image": 0o600, "input": 0o600}
     assert list(tmp_path.iterdir()) == []
 

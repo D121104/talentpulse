@@ -1,4 +1,9 @@
 import { Process, Processor } from '@nestjs/bull';
+import {
+  CURRENT_MATCH_SCORING_VERSION,
+  CURRENT_SKILL_NORMALIZATION_VERSION,
+  hasCurrentMatchingVersions,
+} from './matching-versions';
 import { Logger } from '@nestjs/common';
 import { Job as BullJob } from 'bull';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -90,7 +95,10 @@ export function consentIdempotencyKey(
   jobSourceVersion: string,
 ): string {
   const fingerprint = createHash('sha256')
-    .update(`${applicationId}:${cvContentVersion}:${jobSourceVersion}`, 'utf8')
+    .update(
+      `${applicationId}:${cvContentVersion}:${jobSourceVersion}:${CURRENT_MATCH_SCORING_VERSION}:${CURRENT_SKILL_NORMALIZATION_VERSION}`,
+      'utf8',
+    )
     .digest('hex');
   return `cv-match:${applicationId}:${fingerprint}`;
 }
@@ -116,7 +124,11 @@ export function cvMatchIdentity(
   >,
   attempt = 0,
 ): CVMatchIdentity {
-  const stableKey = `${data.applicationId}:${data.cvContentVersion}:${data.jobSourceVersion}`;
+  const stableKey = consentIdempotencyKey(
+    data.applicationId,
+    data.cvContentVersion,
+    data.jobSourceVersion,
+  );
   const requestId = deterministicUuid(`cv-match:request:${stableKey}`);
   return {
     request_id: requestId,
@@ -504,7 +516,10 @@ export class CVProcessingProcessor {
           compatibility: this.compatibility(match),
           scoringVersion: match.scoring_version,
           modelVersion: match.semantic_component_version,
-          normalizationVersion: 'cv-job-normalization-v1',
+          normalizationVersion:
+            match.scoring_version === CURRENT_MATCH_SCORING_VERSION
+              ? CURRENT_SKILL_NORMALIZATION_VERSION
+              : null,
           degraded: match.degraded,
           status: CVProcessingStatus.COMPLETED,
           processedAt: new Date(),
@@ -612,7 +627,8 @@ export class CVProcessingProcessor {
     if (
       result.status === CVProcessingStatus.COMPLETED &&
       result.contentHash === data.contentHash &&
-      result.jobSourceVersion === data.jobSourceVersion
+      result.jobSourceVersion === data.jobSourceVersion &&
+      hasCurrentMatchingVersions(result)
     )
       return { success: false, stale: true };
 

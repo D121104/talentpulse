@@ -1,4 +1,12 @@
 export const en = {
+  jobApplication: {
+    aiDisclosure: 'By submitting, you authorize the employer to use AI to analyze and evaluate your selected CV for this job only. This does not authorize platform-wide CV searches, processing for other jobs, or use of your data to train AI. Withdrawing removes the application and its AI matching results and prevents further matching for that application. An AI request already in progress may finish, but its result will not be retained for the withdrawn application.',
+    withdraw: 'Withdraw application',
+    withdrawing: 'Withdrawing…',
+    withdrawConfirm: 'Withdraw this application? Withdrawing removes the application and its AI matching results and prevents further matching for that application. An AI request already in progress may finish, but its result will not be retained for the withdrawn application.',
+    withdrawn: 'Application withdrawn.',
+    withdrawError: 'Could not withdraw the application. Please try again.',
+  },
   pricingChatbot: {
     name: 'AI Career Assistant',
     unlimited: 'Unlimited messages',
@@ -536,6 +544,14 @@ export const en = {
       deleteConfirm: 'Are you sure you want to delete this job posting?',
     },
     candidatesTab: {
+      narrative: {
+        show: 'Show detailed analysis', hide: 'Hide detailed analysis', loading: 'Preparing analysis…',
+        error: 'Could not load the analysis. Try again.', retry: 'Retry',
+        refresh: 'The matching data has changed. Refresh the ranking to view this analysis.', refreshButton: 'Refresh ranking',
+        llm: 'LLM-generated explanation based on matching evidence. Scores and ranking are unchanged.',
+        deterministic_fallback: 'The LLM explanation is unavailable. This is a rule-based summary of matching evidence, not LLM-generated text. Scores and ranking are unchanged.',
+        strengths: 'Strengths', pointsToVerify: 'Points to verify',
+      },
       aiAnalysisLocked: 'Detailed AI analysis requires HR Premium. Your overall match score is still available.',
       analysis: {
         semantic: 'Semantic similarity', skills: 'Skills', experience: 'Experience',
@@ -610,6 +626,14 @@ export const en = {
       aiMatchedSkills: 'Matched Skills',
     },
     searchCvTab: {
+      jobContext: 'Job for stored CV match score (optional)',
+      noJobContext: 'No job selected — browse without scores',
+      scoreScope: 'Scores are stored results for this exact CV and job, available only through an authorized application. Selecting a job does not run AI or grant permission.',
+      jobsLoading: 'Loading jobs…',
+      jobsFailed: 'Could not load jobs. You can still search without a job.',
+      storedScore: 'Stored CV–job score: {{job}}',
+      matchedKeywords: 'Matched keywords',
+      scoreStates: { PENDING: 'Analysis pending', PROCESSING: 'Analysis in progress', FAILED: 'Analysis failed', STALE: 'Outdated score', MISSING: 'No stored score', UNAVAILABLE: 'Score unavailable for this CV and job' },
       education: 'Education (school, degree or major)',
       minExperienceYears: 'Minimum experience (years)',
       maxExperienceYears: 'Maximum experience (years)',

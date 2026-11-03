@@ -1,5 +1,5 @@
 export const emptyCandidateSearch = {
-  keyword: '', skills: '', location: '', education: '',
+  keyword: '', jobId: '', skills: '', location: '', education: '',
   minExperienceYears: '', maxExperienceYears: '',
   minExpectedSalary: '', maxExpectedSalary: '',
 };
@@ -14,7 +14,7 @@ export function optionalCandidateNumber(value: string, max: number, integer = fa
 }
 
 export function candidateSearchQuery(criteria: typeof emptyCandidateSearch, advanced: boolean) {
-  const base = { keyword: criteria.keyword.trim() || undefined };
+  const base = { keyword: criteria.keyword.trim() || undefined, ...(criteria.jobId ? { jobId: criteria.jobId } : {}) };
   if (!advanced) return base;
   const minExperienceYears = optionalCandidateNumber(criteria.minExperienceYears, 100);
   const maxExperienceYears = optionalCandidateNumber(criteria.maxExperienceYears, 100);

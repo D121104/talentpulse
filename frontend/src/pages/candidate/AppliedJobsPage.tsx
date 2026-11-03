@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -29,6 +30,7 @@ import Footer from '../../components/layout/Footer';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { apiRequest } from '../../lib/api';
+import { applicationsApi } from '../../lib/applicationsApi';
 import { UserAvatar } from '../../components/common/UserAvatar';
 import { userCvApi, onlineCvApi } from '../../lib/cvApi';
 
@@ -111,10 +113,12 @@ const FILTER_TABS: TabConfig[] = [
 ];
 
 export default function AppliedJobsPage() {
+  const { t } = useTranslation();
   const { user, accessToken } = useAuth();
   const { success, error, info } = useToast();
 
   const [applications, setApplications] = useState<AppliedJobItem[]>([]);
+  const [withdrawingIds, setWithdrawingIds] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<StatusFilter>('ALL');
 
@@ -170,6 +174,20 @@ export default function AppliedJobsPage() {
 
     void fetchData();
   }, [accessToken, error]);
+
+  const withdrawApplication = async (id: string) => {
+    if (!accessToken || !window.confirm(t('jobApplication.withdrawConfirm'))) return;
+    setWithdrawingIds((prev) => ({ ...prev, [id]: true }));
+    try {
+      await applicationsApi.withdraw(id, accessToken);
+      setApplications((prev) => prev.filter((app) => app._id !== id));
+      success(t('jobApplication.withdrawn'));
+    } catch {
+      error(t('jobApplication.withdrawError'));
+    } finally {
+      setWithdrawingIds((prev) => ({ ...prev, [id]: false }));
+    }
+  };
 
   // Toggle detail accordion for an application
   const toggleAccordion = (id: string) => {
@@ -520,7 +538,15 @@ export default function AppliedJobsPage() {
                         </div>
 
                         {/* Action Buttons: Nhắc NTD (chỉ hiện khi đủ điều kiện) & Nhắn tin */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void withdrawApplication(app._id)}
+                            disabled={withdrawingIds[app._id]}
+                            className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950"
+                          >
+                            {t(withdrawingIds[app._id] ? 'jobApplication.withdrawing' : 'jobApplication.withdraw')}
+                          </button>
                           {/* "Nhắc NTD" Button - Chỉ hiển thị nếu sau 7 ngày mà CV chưa được chuyển trạng thái bất cứ lần nào */}
                           {canNudge && (
                             <button

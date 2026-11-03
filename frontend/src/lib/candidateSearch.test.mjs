@@ -11,6 +11,12 @@ const { outputText } = ts.transpileModule(source, {
 });
 const { candidateSearchQuery, emptyCandidateSearch, optionalCandidateNumber } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 
+test('job context is available on free and premium searches without enabling advanced filters', () => {
+  for (const advanced of [false, true]) assert.equal(candidateSearchQuery({ ...emptyCandidateSearch, jobId: 'job-id' }, advanced).jobId, 'job-id');
+  assert.equal(candidateSearchQuery(emptyCandidateSearch, false).jobId, undefined);
+  assert.equal(candidateSearchQuery({ ...emptyCandidateSearch, jobId: 'job-id', skills: 'React' }, false).skills, undefined);
+});
+
 test('preserves zero, decimal experience and inclusive maximum salary', () => {
   const query = candidateSearchQuery({ ...emptyCandidateSearch, minExperienceYears: '0', maxExperienceYears: '0.5', minExpectedSalary: '0', maxExpectedSalary: '2147483647', education: '  Bachelor  ' }, true);
   assert.equal(query.minExperienceYears, 0);

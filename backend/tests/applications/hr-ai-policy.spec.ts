@@ -329,65 +329,68 @@ describe('HR AI ranking and search boundaries', () => {
 });
 
 describe('Allowlisted persisted matching analysis', () => {
-  it('maps legitimate evidence and zero-weight compatibility without provider extras', () => {
-    const result = Object.assign(new CVMatchResult(), {
-      scoringVersion: 'cv-job-match-v2',
-      modelVersion: 'semantic-v1',
-      normalizationVersion: 'normalization-v1',
-      degraded: false,
-      matchedSkills: ['SQL'],
-      missingSkills: ['NestJS'],
-      explanation: 'Overall score: 0.80.',
-      components: {
-        semantic: {
-          score: 0.8,
-          weight: 0.6,
-          available: true,
-          evidence: ['semantic scorer=v1'],
+  it.each(['cv-job-match-v2', 'cv-job-match-v3'])(
+    'maps legitimate %s evidence and zero-weight compatibility without provider extras',
+    (scoringVersion) => {
+      const result = Object.assign(new CVMatchResult(), {
+        scoringVersion,
+        modelVersion: 'semantic-v1',
+        normalizationVersion: 'normalization-v1',
+        degraded: false,
+        matchedSkills: ['SQL'],
+        missingSkills: ['NestJS'],
+        explanation: 'Overall score: 0.80.',
+        components: {
+          semantic: {
+            score: 0.8,
+            weight: 0.6,
+            available: true,
+            evidence: ['semantic scorer=v1'],
+            secret: 'hidden',
+          },
+          skills: { score: 0, weight: 0.4, available: true, evidence: [] },
+          location: {
+            score: 0,
+            weight: 0.9,
+            available: true,
+            evidence: ['different locations'],
+          },
+          secret: { payload: 'hidden' },
+        },
+        compatibility: {
+          strengths: ['SQL matched'],
+          gaps: ['NestJS missing'],
           secret: 'hidden',
         },
-        skills: { score: 0, weight: 0.4, available: true, evidence: [] },
-        location: {
-          score: 0,
-          weight: 0.9,
-          available: true,
-          evidence: ['different locations'],
-        },
-        secret: { payload: 'hidden' },
-      },
-      compatibility: {
+      });
+      const analysis = mapHRMatchingAnalysis(result);
+      expect(analysis.components.skills).toEqual({
+        score: 0,
+        weight: 0.4,
+        available: true,
+        evidence: [],
+      });
+      expect(analysis.components.experience).toEqual({
+        score: null,
+        weight: 0,
+        available: false,
+        evidence: [],
+      });
+      expect(analysis.compatibility.location).toEqual({
+        score: 0,
+        weight: 0,
+        available: true,
+        evidence: ['different locations'],
+      });
+      expect(analysis).toMatchObject({
         strengths: ['SQL matched'],
         gaps: ['NestJS missing'],
-        secret: 'hidden',
-      },
-    });
-    const analysis = mapHRMatchingAnalysis(result);
-    expect(analysis.components.skills).toEqual({
-      score: 0,
-      weight: 0.4,
-      available: true,
-      evidence: [],
-    });
-    expect(analysis.components.experience).toEqual({
-      score: null,
-      weight: 0,
-      available: false,
-      evidence: [],
-    });
-    expect(analysis.compatibility.location).toEqual({
-      score: 0,
-      weight: 0,
-      available: true,
-      evidence: ['different locations'],
-    });
-    expect(analysis).toMatchObject({
-      strengths: ['SQL matched'],
-      gaps: ['NestJS missing'],
-      degraded: false,
-      explanation: { source: 'deterministic_matching', locale: 'en' },
-    });
-    expect(JSON.stringify(analysis)).not.toContain('hidden');
-  });
+        degraded: false,
+        explanation: { source: 'deterministic_matching', locale: 'en' },
+      });
+      expect(JSON.stringify(analysis)).not.toContain('hidden');
+    },
+  );
 
   it.each([
     null,

@@ -24,7 +24,12 @@ function harness() {
     aiRankingConsentVersion: 'v1',
     aiRankingConsentPolicyHash: 'policy',
     aiRankingConsentAt: new Date(0),
-    cv: { _id: 'cv', contentHash: 'hash', parsedContent: 'private' },
+    cv: {
+      _id: 'cv',
+      userId: 'candidate',
+      contentHash: 'hash',
+      parsedContent: 'private',
+    },
     user: { _id: 'candidate', name: 'Candidate', password: 'private' },
   };
   const result = {
@@ -37,6 +42,8 @@ function harness() {
     contentHash: 'hash',
     jobSourceVersion: getJobSourceVersion(job, company),
     explanation: 'private',
+    scoringVersion: 'cv-job-match-v3',
+    normalizationVersion: 'skill-normalization-v2',
   };
   const qb = Object.fromEntries(
     [
@@ -72,6 +79,19 @@ function harness() {
 }
 
 describe('Application list AI score reporting', () => {
+  it.each(['cv-job-match-v2', '', null])(
+    'marks historical scoring version %s stale even with unchanged hashes',
+    async (version) => {
+      const h = harness();
+      h.result.scoringVersion = version;
+      const response = await h.service.findAll({}, h.user);
+      expect(response.result[0].aiScore).toEqual({
+        status: 'STALE',
+        overallScore: null,
+      });
+    },
+  );
+
   it.each(['findAll', 'findByJob'] as const)(
     '%s returns a fresh zero without raw entities',
     async (method) => {

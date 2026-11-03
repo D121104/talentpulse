@@ -7,6 +7,10 @@ import {
 import { SearchCandidatesDto } from '../src/candidate-access/dto/search-candidate.dto';
 import { CreateOnlineCVDto } from '../src/online-cvs/dto/create-online-cv.dto';
 import { Role } from '../src/decorator/customize';
+import { Application } from 'src/applications/entities/application.entity';
+import { Job } from 'src/jobs/entities/job.entity';
+import { Company } from 'src/companies/entities/company.entity';
+import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 
 describe('advanced candidate search', () => {
   describe('canonical company eligibility', () => {
@@ -183,6 +187,203 @@ describe('advanced candidate search', () => {
     );
     return { service, onlineQuery, uploadedQuery };
   }
+
+  function jobHarness() {
+    const candidate = { _id: 'candidate', name: 'Candidate' };
+    const { service } = harness(
+      [],
+      [
+        { _id: 'cv', user: candidate, skills: [], createdAt: new Date(0) },
+        {
+          _id: 'other-cv',
+          user: candidate,
+          skills: [],
+          createdAt: new Date(0),
+        },
+      ],
+    );
+    const company = { _id: 'company' } as Company;
+    const job = Object.assign(new Job(), { _id: 'job', company });
+    const app = Object.assign(new Application(), {
+      _id: 'app',
+      cvId: 'cv',
+      userId: 'candidate',
+      jobId: 'job',
+      companyId: 'company',
+      company,
+      job,
+      user: candidate,
+      cv: { _id: 'cv', userId: 'candidate', contentHash: 'hash' },
+      status: 'PENDING',
+      aiRankingConsentGranted: true,
+      aiRankingConsentVersion: 'v1',
+      aiRankingConsentPolicyHash: 'policy',
+      aiRankingConsentAt: new Date(0),
+    });
+    const result = {
+      applicationId: 'app',
+      cvId: 'cv',
+      userId: 'candidate',
+      jobId: 'job',
+      status: 'COMPLETED',
+      matchScore: 0,
+      contentHash: 'hash',
+      jobSourceVersion: getJobSourceVersion(job, company),
+      scoringVersion: 'cv-job-match-v3',
+      normalizationVersion: 'skill-normalization-v2',
+    };
+    const applications = { find: jest.fn().mockResolvedValue([app]) };
+    const results = { find: jest.fn().mockResolvedValue([result]) };
+    const entitlements = jest
+      .fn()
+      .mockResolvedValue({ limits: { canUseAdvancedCandidateSearch: false } });
+    Object.assign(service, {
+      getCompanyRecruitmentProfile: jest
+        .fn()
+        .mockResolvedValue({ companyId: 'company' }),
+      jobRepo: { findOne: jest.fn().mockResolvedValue(job) },
+      dataSource: {
+        getRepository: (entity: unknown) =>
+          entity === Application ? applications : results,
+      },
+      usersService: { getUserEntitlements: entitlements },
+    });
+    return { service, app, result, job, applications, results, entitlements };
+  }
+
+  it('returns stored zero for exact CV only on Free, with no heuristic percentage or detail leakage', async () => {
+    const h = jobHarness();
+    const response = await h.service.searchCandidates({ jobId: 'job' }, {
+      _id: 'hr',
+    } as never);
+    expect(response.result.find((r) => r.cvId === 'cv').aiScore).toEqual({
+      status: 'COMPLETED',
+      overallScore: 0,
+    });
+    expect(response.result.find((r) => r.cvId === 'other-cv').aiScore).toEqual({
+      status: 'UNAVAILABLE',
+      overallScore: null,
+    });
+    expect(response.result.every((r) => r.companyMatchScore === null)).toBe(
+      true,
+    );
+    expect(response.result[0]).not.toHaveProperty('components');
+    expect(h.entitlements).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'old-version',
+    'old-normalization',
+    'no-consent',
+    'wrong-company',
+    'wrong-owner',
+    'wrong-result-cv',
+    'no-application',
+    'pending',
+    'failed',
+  ])('does not disclose score for %s', async (state) => {
+    const h = jobHarness();
+    let status = 'UNAVAILABLE';
+    if (state === 'old-version') {
+      h.result.scoringVersion = 'cv-job-match-v2';
+      status = 'STALE';
+    }
+    if (state === 'old-normalization') {
+      h.result.normalizationVersion = 'cv-job-normalization-v1';
+      status = 'STALE';
+    }
+    if (state === 'no-consent') h.app.aiRankingConsentGranted = false;
+    if (state === 'wrong-company') h.app.companyId = 'other';
+    if (state === 'wrong-owner') h.app.cv.userId = 'other';
+    if (state === 'wrong-result-cv') {
+      h.result.cvId = 'other-cv';
+      status = 'MISSING';
+    }
+    if (state === 'no-application') h.applications.find.mockResolvedValue([]);
+    if (state === 'pending') {
+      h.result.status = 'PENDING';
+      status = 'PENDING';
+    }
+    if (state === 'failed') {
+      h.result.status = 'FAILED';
+      status = 'FAILED';
+    }
+    const response = await h.service.searchCandidates({ jobId: 'job' }, {
+      _id: 'hr',
+    } as never);
+    expect(response.result.find((r) => r.cvId === 'cv').aiScore).toEqual({
+      status,
+      overallScore: null,
+    });
+  });
+
+  it('rejects cross-company job context before candidate queries', async () => {
+    const h = jobHarness();
+    h.job.company = { _id: 'other' } as Company;
+    await expect(
+      h.service.searchCandidates({ jobId: 'job' }, { _id: 'hr' } as never),
+    ).rejects.toThrow('quyền');
+    expect(h.applications.find).not.toHaveBeenCalled();
+  });
+
+  it('validates optional job context UUID', async () => {
+    expect(
+      (
+        await validate(
+          plainToInstance(SearchCandidatesDto, { jobId: 'not-a-uuid' }),
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it.each(['exact', 'other-online-cv', 'other-owner', 'ambiguous'])(
+    'uses only explicit exact online CV application linkage: %s',
+    async (state) => {
+      const h = jobHarness();
+      Object.assign(h.app.cv, {
+        onlineCvId: state === 'other-online-cv' ? 'other' : 'online',
+      });
+      if (state === 'other-owner') h.app.cv.userId = 'other';
+      if (state === 'ambiguous')
+        h.applications.find.mockResolvedValue([
+          h.app,
+          { ...h.app, _id: 'second' },
+        ]);
+      const onlineQuery = {
+        innerJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([
+          {
+            _id: 'online',
+            user: { _id: 'candidate' },
+            skills: [],
+            createdAt: new Date(0),
+          },
+        ]),
+      };
+      Object.assign(h.service, {
+        onlineCVRepo: { createQueryBuilder: () => onlineQuery },
+      });
+      const response = await h.service.searchCandidates({ jobId: 'job' }, {
+        _id: 'hr',
+      } as never);
+      const row = response.result.find((r) => r.cvId === 'online');
+      expect(row.aiScore).toEqual(
+        state === 'exact'
+          ? { status: 'COMPLETED', overallScore: 0 }
+          : { status: 'UNAVAILABLE', overallScore: null },
+      );
+      expect(h.applications.find.mock.calls[0][0].where).toContainEqual(
+        expect.objectContaining({
+          cv: { onlineCvId: 'online', userId: 'candidate' },
+          jobId: 'job',
+          companyId: 'company',
+          userId: 'candidate',
+        }),
+      );
+    },
+  );
 
   it('filters experience before counting and paginating; never returns private salary or raw text', async () => {
     const rows = [

@@ -1,5 +1,6 @@
 import {
   IsOptional,
+  IsUUID,
   IsString,
   IsNumber,
   IsInt,
@@ -10,6 +11,10 @@ import {
 import { Type, Transform } from 'class-transformer';
 
 export class SearchCandidatesDto {
+  @IsOptional()
+  @IsUUID()
+  jobId?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(200)

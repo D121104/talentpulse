@@ -5,10 +5,11 @@ export interface CreateApplicationInput {
   jobId: string;
   companyId: string;
   coverLetter?: string;
-  aiRankingConsent?: boolean;
 }
 
 export const applicationsApi = {
+  withdraw: (id: string, accessToken: string) =>
+    apiRequest(`/applications/${id}`, { method: 'DELETE', accessToken }),
   create: (input: CreateApplicationInput, accessToken: string) =>
     apiRequest<{ _id: string; createdAt: string }>('/applications', {
       method: 'POST',

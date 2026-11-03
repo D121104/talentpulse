@@ -46,6 +46,7 @@ export interface ICandidateMatchResult {
   shortExplanation: string;
   analysisAvailable: boolean;
   aiAnalysis?: IHRMatchingAnalysis;
+  analysisVersionKey?: string;
   applicationStatus: string;
   appliedAt: string;
 }
@@ -62,5 +63,6 @@ export interface IAIRankingResponse {
     processing: number;
     pending: number;
     failed: number;
+    stale?: number;
   };
 }

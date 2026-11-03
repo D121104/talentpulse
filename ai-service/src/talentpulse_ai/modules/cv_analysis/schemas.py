@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
@@ -182,7 +182,7 @@ class CVParseResponse(StrictModel):
     warnings: list[Annotated[str, Field(min_length=1, max_length=MAX_PARSE_WARNING_CHARS)]] = Field(
         default_factory=list, max_length=MAX_PARSE_WARNINGS
     )
-    parser_version: Annotated[str, Field(min_length=1, max_length=40)] = "structured-parser-v1"
+    parser_version: Annotated[str, Field(min_length=1, max_length=40)] = "structured-parser-v2"
 
     @model_validator(mode="after")
     def text_count_matches_extracted_text(self) -> "CVParseResponse":
@@ -245,3 +245,91 @@ class MatchResponse(StrictModel):
     degraded: bool
     scoring_version: str = "cv-job-match-v1"
     semantic_component_version: str = "unavailable-v1"
+
+
+class AnalysisComponent(StrictModel):
+    score: float | None = Field(ge=0, le=1)
+    weight: float = Field(ge=0, le=1)
+    available: bool
+
+    @model_validator(mode="after")
+    def availability_matches_score(self) -> "AnalysisComponent":
+        if self.available != (self.score is not None):
+            raise ValueError("score must be null exactly when unavailable")
+        return self
+
+
+class AnalysisComponents(StrictModel):
+    semantic: AnalysisComponent
+    skills: AnalysisComponent
+    experience: AnalysisComponent
+
+
+class AnalysisCompatibilityComponent(AnalysisComponent):
+    weight: float = Field(ge=0, le=0)
+
+
+class AnalysisCompatibility(StrictModel):
+    location: AnalysisCompatibilityComponent
+    work_mode: AnalysisCompatibilityComponent
+
+
+class AnalysisFacts(StrictModel):
+    overall_score: float = Field(ge=0, le=1)
+    components: AnalysisComponents
+    compatibility: AnalysisCompatibility
+    matched_skill_refs: list[Annotated[str, Field(pattern=r"^m(?:0|[1-9][0-9]?)$")]] = Field(
+        max_length=100
+    )
+    missing_required_skill_refs: list[Annotated[str, Field(pattern=r"^g(?:0|[1-9][0-9]?)$")]] = (
+        Field(max_length=100)
+    )
+    matched_skill_total: int = Field(ge=0, le=200)
+    missing_required_skill_total: int = Field(ge=0, le=200)
+    degraded: bool
+
+    @model_validator(mode="after")
+    def valid_skill_refs(self) -> "AnalysisFacts":
+        for refs, total in (
+            (self.matched_skill_refs, self.matched_skill_total),
+            (self.missing_required_skill_refs, self.missing_required_skill_total),
+        ):
+            if len(set(refs)) != len(refs) or len(refs) > total:
+                raise ValueError("skill refs must be unique and not exceed total")
+            if not self.components.skills.available and (refs or total):
+                raise ValueError("unavailable skills cannot supply skill facts")
+        return self
+
+
+class MatchAnalysisRequest(StrictModel):
+    identity: MatchIdentity
+    analysis_version_key: Sha256Value
+    locale: Literal["vi", "en"]
+    narrative_version: Literal["match-narrative-v1"]
+    facts: AnalysisFacts
+
+
+class AnalysisStatement(StrictModel):
+    text: Annotated[str, Field(min_length=1, max_length=300)]
+    evidence: list[
+        Annotated[
+            str,
+            Field(
+                pattern=r"^(overall|semantic|skills|experience|location|work_mode|[mg](?:0|[1-9][0-9]?))$"
+            ),
+        ]
+    ] = Field(min_length=1, max_length=8)
+
+
+class MatchNarrative(StrictModel):
+    summary: AnalysisStatement
+    strengths: list[AnalysisStatement] = Field(max_length=3)
+    points_to_verify: list[AnalysisStatement] = Field(max_length=3)
+
+
+class MatchAnalysisResponse(MatchNarrative):
+    identity: MatchIdentity
+    analysis_version_key: Sha256Value
+    locale: Literal["vi", "en"]
+    narrative_version: Literal["match-narrative-v1"]
+    source: Literal["llm"] = "llm"

@@ -32,6 +32,7 @@ import { CompanyRequiredGate } from '../components/CompanyRequiredGate';
 import { formatDate } from '../../../lib/dateUtils';
 import { UserAvatar } from '../../../components/common/UserAvatar';
 import { candidateSearchQuery, emptyCandidateSearch } from '../../../lib/candidateSearch';
+import { analysisTexts, storedCandidateScore } from '../../../lib/hrMatchingAnalysis';
 
 interface CVSearchTabProps {
   accessToken: string | null;
@@ -72,6 +73,26 @@ export function CVSearchTab({
   const [searchCriteria, setSearchCriteria] = useState(emptyCandidateSearch);
   const [appliedCriteria, setAppliedCriteria] = useState(emptyCandidateSearch);
   const [filterError, setFilterError] = useState('');
+  const [jobs, setJobs] = useState<{ _id: string; name: string }[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsFailed, setJobsFailed] = useState(false);
+  const [resultJob, setResultJob] = useState<{ jobId: string | null; jobName: string | null }>({ jobId: null, jobName: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    setJobs([]);
+    setJobsFailed(false);
+    if (!accessToken || !hasCompany) return;
+    setJobsLoading(true);
+    void employerApi.getHrJobs({ current: 1, pageSize: 100 }, accessToken).then(res => {
+      if (!cancelled) setJobs(res.result);
+    }).catch(() => {
+      if (!cancelled) setJobsFailed(true);
+    }).finally(() => {
+      if (!cancelled) setJobsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [accessToken, hasCompany]);
 
   // State
   const [results, setResults] = useState<CandidatePublicItem[]>([]);
@@ -127,6 +148,7 @@ export function CVSearchTab({
       );
 
       setResults(res.result || []);
+      setResultJob({ jobId: res.meta?.jobId ?? null, jobName: res.meta?.jobName ?? null });
       setAppliedCriteria(criteria);
       setTotalPages(res.meta?.pages || 1);
       setTotalCount(res.meta?.total || 0);
@@ -161,9 +183,10 @@ export function CVSearchTab({
   };
 
   const handleResetSearch = () => {
-    setSearchCriteria(emptyCandidateSearch);
+    const resetCriteria = { ...emptyCandidateSearch, jobId: searchCriteria.jobId };
+    setSearchCriteria(resetCriteria);
     setFilterError('');
-    void performSearch(1, emptyCandidateSearch);
+    void performSearch(1, resetCriteria);
   };
 
   // Handler when HR clicks to unlock / view
@@ -294,6 +317,19 @@ export function CVSearchTab({
       {/* 2. Search Criteria Card */}
       <div className="rounded-3xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
         <form onSubmit={handleSearchSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="candidate-job-context" className="text-xs font-bold text-slate-700 dark:text-slate-300">{t('employer.searchCvTab.jobContext')}</label>
+            <select id="candidate-job-context" value={searchCriteria.jobId} disabled={jobsLoading || isSearching}
+              onChange={e => setSearchCriteria({ ...searchCriteria, jobId: e.target.value })}
+              aria-describedby="candidate-score-scope"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800">
+              <option value="">{t('employer.searchCvTab.noJobContext')}</option>
+              {jobs.map(job => <option key={job._id} value={job._id}>{job.name}</option>)}
+            </select>
+            <p id="candidate-score-scope" className="text-xs text-slate-500">{t('employer.searchCvTab.scoreScope')}</p>
+            {jobsLoading && <p role="status" className="text-xs text-slate-500">{t('employer.searchCvTab.jobsLoading')}</p>}
+            {jobsFailed && <p role="alert" className="text-xs text-red-600">{t('employer.searchCvTab.jobsFailed')}</p>}
+          </div>
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
             {/* Keyword */}
             <div className="space-y-1">
@@ -535,15 +571,11 @@ export function CVSearchTab({
                       </div>
                     </div>
 
-                    {/* Company Smart Personalization Match */}
-                    {candidate.isRecommendedForCompany && (
-                      <div className="flex items-center gap-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 text-[11px] font-bold text-blue-700 dark:text-blue-300">
-                        <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                        <span className="truncate">
-                          {candidate.recommendationReason || 'Phù hợp định hướng tuyển dụng của công ty'}
-                        </span>
-                      </div>
-                    )}
+                    {resultJob.jobId && <div className="rounded-xl bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
+                      <p>{t('employer.searchCvTab.storedScore', { job: resultJob.jobName ?? '' })}</p>
+                      <p className="font-bold">{storedCandidateScore(resultJob.jobId, candidate.aiScore) ?? t(`employer.searchCvTab.scoreStates.${candidate.aiScore?.status === 'COMPLETED' ? 'MISSING' : candidate.aiScore?.status ?? 'UNAVAILABLE'}`)}</p>
+                    </div>}
+                    {analysisTexts(candidate.matchedKeywords).length > 0 && <p className="text-xs text-slate-500">{t('employer.searchCvTab.matchedKeywords')}: {analysisTexts(candidate.matchedKeywords).join(', ')}</p>}
 
                     {/* Skills Badges */}
                     {candidate.skills && candidate.skills.length > 0 && (

@@ -22,7 +22,7 @@ def test_parse_response_has_bounded_structured_fields_and_forbids_extras() -> No
         warnings=["Some content was not classified."],
     )
 
-    assert response.parser_version == "structured-parser-v1"
+    assert response.parser_version == "structured-parser-v2"
     assert response.model_dump()["skills"] == ["Python"]
 
     with pytest.raises(ValidationError):

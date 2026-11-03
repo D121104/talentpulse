@@ -1,4 +1,12 @@
 export const vi = {
+  jobApplication: {
+    aiDisclosure: 'Khi nộp đơn, bạn cho phép nhà tuyển dụng dùng AI để phân tích và đánh giá CV đã chọn cho riêng công việc này. Việc này không cho phép tìm kiếm CV toàn hệ thống, xử lý cho công việc khác hoặc dùng dữ liệu để huấn luyện AI. Khi hủy đơn, đơn ứng tuyển và kết quả đánh giá AI của đơn sẽ được xóa, và hệ thống sẽ không tiếp tục đánh giá CV cho đơn đó. Yêu cầu AI đang chạy có thể hoàn tất, nhưng kết quả sẽ không được lưu cho đơn đã hủy.',
+    withdraw: 'Hủy đơn ứng tuyển',
+    withdrawing: 'Đang hủy đơn…',
+    withdrawConfirm: 'Hủy đơn ứng tuyển này? Khi hủy đơn, đơn ứng tuyển và kết quả đánh giá AI của đơn sẽ được xóa, và hệ thống sẽ không tiếp tục đánh giá CV cho đơn đó. Yêu cầu AI đang chạy có thể hoàn tất, nhưng kết quả sẽ không được lưu cho đơn đã hủy.',
+    withdrawn: 'Đã hủy đơn ứng tuyển.',
+    withdrawError: 'Không thể hủy đơn ứng tuyển. Vui lòng thử lại.',
+  },
   pricingChatbot: {
     name: 'AI Career Assistant',
     unlimited: 'Không giới hạn tin nhắn',
@@ -535,6 +543,14 @@ export const vi = {
       deleteConfirm: 'Bạn có chắc muốn xóa tin tuyển dụng này?',
     },
     candidatesTab: {
+      narrative: {
+        show: 'Xem phân tích chi tiết', hide: 'Ẩn phân tích chi tiết', loading: 'Đang chuẩn bị phân tích…',
+        error: 'Không tải được phân tích. Vui lòng thử lại.', retry: 'Thử lại',
+        refresh: 'Dữ liệu đối sánh đã thay đổi. Hãy tải lại xếp hạng để xem phân tích.', refreshButton: 'Tải lại xếp hạng',
+        llm: 'Giải thích do LLM tạo từ bằng chứng đối sánh. Điểm số và thứ tự xếp hạng không thay đổi.',
+        deterministic_fallback: 'Hiện không có giải thích từ LLM. Đây là bản tóm tắt theo quy tắc từ bằng chứng đối sánh, không phải nội dung do LLM tạo. Điểm số và thứ tự xếp hạng không thay đổi.',
+        strengths: 'Điểm mạnh', pointsToVerify: 'Điểm cần xác minh',
+      },
       aiAnalysisLocked: 'Phân tích AI chi tiết dành cho HR Premium. Bạn vẫn có thể xem điểm phù hợp tổng thể.',
       analysis: {
         semantic: 'Độ tương đồng ngữ nghĩa', skills: 'Kỹ năng', experience: 'Kinh nghiệm',
@@ -609,6 +625,14 @@ export const vi = {
       aiMatchedSkills: 'Kỹ năng đáp ứng',
     },
     searchCvTab: {
+      jobContext: 'Công việc để xem điểm CV đã lưu (không bắt buộc)',
+      noJobContext: 'Chưa chọn công việc — xem hồ sơ không có điểm',
+      scoreScope: 'Điểm là kết quả đã lưu cho đúng CV và công việc, chỉ có khi đơn ứng tuyển cho phép phân tích AI. Chọn công việc không chạy AI hoặc cấp quyền phân tích.',
+      jobsLoading: 'Đang tải công việc…',
+      jobsFailed: 'Không thể tải công việc. Bạn vẫn có thể tìm hồ sơ không kèm công việc.',
+      storedScore: 'Điểm CV–công việc đã lưu: {{job}}',
+      matchedKeywords: 'Từ khóa khớp',
+      scoreStates: { PENDING: 'Đang chờ phân tích', PROCESSING: 'Đang phân tích', FAILED: 'Phân tích thất bại', STALE: 'Điểm đã cũ', MISSING: 'Chưa có điểm đã lưu', UNAVAILABLE: 'Không có điểm cho CV và công việc này' },
       education: 'Học vấn (trường, bằng cấp hoặc chuyên ngành)',
       minExperienceYears: 'Kinh nghiệm tối thiểu (năm)',
       maxExperienceYears: 'Kinh nghiệm tối đa (năm)',

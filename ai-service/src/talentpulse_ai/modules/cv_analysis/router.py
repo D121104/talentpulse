@@ -7,16 +7,29 @@ from fastapi import APIRouter, Depends, Request
 from talentpulse_ai.core.config import Settings, get_settings
 from talentpulse_ai.core.exceptions import ServiceError
 from talentpulse_ai.core.security import require_scope
+from talentpulse_ai.modules.cv_analysis.analysis import MatchAnalysisService
 from talentpulse_ai.modules.cv_analysis.matching import MatchService
 from talentpulse_ai.modules.cv_analysis.parser import CVParser
 from talentpulse_ai.modules.cv_analysis.schemas import (
     CVParseRequest,
     CVParseResponse,
+    MatchAnalysisRequest,
+    MatchAnalysisResponse,
     MatchRequest,
     MatchResponse,
 )
 
 router = APIRouter(prefix="/internal/v1/cv")
+
+
+@router.post(
+    "/match-analysis",
+    response_model=MatchAnalysisResponse,
+    dependencies=[Depends(require_scope("cv_match_scope"))],
+)
+def match_analysis(payload: MatchAnalysisRequest, http_request: Request) -> MatchAnalysisResponse:
+    service = cast(MatchAnalysisService, http_request.app.state.match_analysis_service)
+    return service.analyze(payload)
 
 
 def _decode_content(value: str, settings: Settings) -> bytes:

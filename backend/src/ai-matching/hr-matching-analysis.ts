@@ -1,5 +1,12 @@
 import { CVMatchResult } from './entities/cv-match-result.entity';
 import {
+  Application,
+  ApplicationStatus,
+} from 'src/applications/entities/application.entity';
+import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
+import { hasCurrentMatchingVersions } from './matching-versions';
+import { ApplicationAiScoreSummary } from 'src/applications/dto/application-ai-score.dto';
+import {
   IHRMatchingAnalysis,
   IMatchingAnalysisComponent,
 } from './dto/ai-match-result.dto';
@@ -56,9 +63,11 @@ export function mapHRMatchingAnalysis(
   const components = record(result.components);
   const compatibility = record(result.compatibility);
   const explanation = text(result.explanation);
-  // The current persisted v2 pipeline explicitly requests English. Older rows
+  // The persisted v2 and v3 pipelines explicitly request English. Older rows
   // do not persist provenance/locale, so do not guess or claim translation.
-  const knownVersion = result.scoringVersion === 'cv-job-match-v2';
+  const knownVersion = ['cv-job-match-v2', 'cv-job-match-v3'].includes(
+    result.scoringVersion,
+  );
   const locale = knownVersion ? 'en' : 'und';
   return {
     source: 'persisted_cv_match_result',
@@ -91,5 +100,69 @@ export function mapHRMatchingAnalysis(
         : 'stored_unknown',
       locale: explanation ? locale : 'und',
     },
+  };
+}
+
+export function applicationAiScore(
+  app: Application,
+  result?: CVMatchResult,
+): ApplicationAiScoreSummary {
+  if (
+    !app.aiRankingConsentGranted ||
+    !app.aiRankingConsentVersion ||
+    !app.aiRankingConsentPolicyHash ||
+    !app.aiRankingConsentAt ||
+    app.isDeleted ||
+    app.deletedAt ||
+    ![
+      ApplicationStatus.PENDING,
+      ApplicationStatus.REVIEWING,
+      ApplicationStatus.CONSIDERING,
+      ApplicationStatus.APPROVED,
+    ].includes(app.status) ||
+    !app.cv ||
+    app.cv._id !== app.cvId ||
+    app.cv.userId !== app.userId ||
+    app.cv.isDeleted ||
+    app.cv.deletedAt ||
+    !app.user ||
+    app.user._id !== app.userId ||
+    app.user.isDeleted ||
+    app.user.deletedAt
+  ) {
+    return { status: 'UNAVAILABLE', overallScore: null };
+  }
+  if (
+    !result ||
+    result.isDeleted ||
+    result.deletedAt ||
+    result.applicationId !== app._id ||
+    result.cvId !== app.cvId ||
+    result.userId !== app.userId ||
+    result.jobId !== app.jobId
+  ) {
+    return { status: 'MISSING', overallScore: null };
+  }
+  if (
+    !app.cv.contentHash ||
+    result.contentHash !== app.cv.contentHash ||
+    !app.job ||
+    !app.company ||
+    app.job.isDeleted ||
+    app.job.deletedAt ||
+    app.company.isDeleted ||
+    app.company.deletedAt ||
+    app.companyId !== app.job.company?._id ||
+    result.jobSourceVersion !== getJobSourceVersion(app.job, app.company) ||
+    (result.status === 'COMPLETED' && !hasCurrentMatchingVersions(result))
+  ) {
+    return { status: 'STALE', overallScore: null };
+  }
+  return {
+    status: result.status,
+    overallScore:
+      result.status === 'COMPLETED' && Number.isFinite(result.matchScore)
+        ? result.matchScore
+        : null,
   };
 }

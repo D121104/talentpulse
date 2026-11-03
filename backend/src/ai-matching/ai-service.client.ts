@@ -2,6 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { createPrivateKey, createSign, randomUUID } from 'crypto';
+import {
+  NarrativeRequest,
+  MatchNarrative,
+  validateNarrative,
+} from './match-narrative';
 
 const DEFAULT_CV_PARSE_SCOPE = 'cv:parse';
 const DEFAULT_CV_MATCH_SCOPE = 'cv:match';
@@ -615,6 +620,23 @@ export class AiServiceClient implements JobIndexingClient {
     );
   }
 
+  async analyzeMatch(request: NarrativeRequest): Promise<MatchNarrative> {
+    const response = await this.post(
+      '/internal/v1/cv/match-analysis',
+      request,
+      this.scopes.match,
+      25000,
+    );
+    try {
+      return validateNarrative(response, request);
+    } catch {
+      throw new AiServiceError(
+        'AI_INVALID_RESPONSE',
+        'Invalid analysis response',
+      );
+    }
+  }
+
   async generateCvDraft(
     request: CvDraftRequest,
     options?: { timeoutMs?: number },
@@ -765,7 +787,10 @@ export class AiServiceClient implements JobIndexingClient {
         })`,
       );
       throw new AiServiceError(
-        'AI_SERVICE_REJECTED',
+        path === '/internal/v1/cv/match-analysis' &&
+        code === 'invalid_analysis_output'
+          ? 'AI_INVALID_RESPONSE'
+          : 'AI_SERVICE_REJECTED',
         'AI service rejected the request',
         response.status >= 500,
       );

@@ -1,4 +1,9 @@
 import type { MatchingAnalysisComponent } from './employerApi';
+import type { CandidatePublicItem } from './employerApi';
+
+export function storedCandidateScore(jobId: string | null, score?: CandidatePublicItem['aiScore']) {
+  return jobId && score?.status === 'COMPLETED' ? analysisPercent(score.overallScore) : null;
+}
 
 export function analysisPercent(value: unknown): string | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1

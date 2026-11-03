@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -32,6 +33,7 @@ export default function JobApplyModal({
   onSuccess,
 }: JobApplyModalProps) {
   const { user, accessToken } = useAuth();
+  const { t } = useTranslation();
   const { success, error } = useToast();
 
   const [activeTab, setActiveTab] = useState<'uploaded' | 'online' | 'upload_new'>('uploaded');
@@ -39,7 +41,6 @@ export default function JobApplyModal({
   const [onlineCvs, setOnlineCvs] = useState<OnlineCV[]>([]);
   const [selectedCvId, setSelectedCvId] = useState<string>('');
   const [coverLetter, setCoverLetter] = useState<string>('');
-  const [aiConsent, setAiConsent] = useState<boolean>(true);
 
   const [loadingCvs, setLoadingCvs] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -468,19 +469,9 @@ export default function JobApplyModal({
                 />
               </div>
 
-              {/* AI Consent Checkbox */}
-              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/40">
-                <input
-                  type="checkbox"
-                  id="ai-consent"
-                  checked={aiConsent}
-                  onChange={(e) => setAiConsent(e.target.checked)}
-                  className="w-4 h-4 text-primary rounded border-slate-300 mt-0.5 focus:ring-primary"
-                />
-                <label htmlFor="ai-consent" className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed cursor-pointer select-none">
-                  Cho phép hệ thống AI của TalentPulse so khớp kỹ năng và kinh nghiệm trong CV với tiêu chuẩn của công việc để tối ưu hóa điểm đánh giá hồ sơ.
-                </label>
-              </div>
+              <p id="application-ai-disclosure" className="p-3 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/40 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                {t('jobApplication.aiDisclosure')}
+              </p>
 
               {/* Action Buttons */}
               <div className="pt-2 flex items-center justify-end gap-3 border-t border-slate-100 dark:border-slate-800">
@@ -494,6 +485,7 @@ export default function JobApplyModal({
 
                 <button
                   type="submit"
+                  aria-describedby="application-ai-disclosure"
                   disabled={submitting || !selectedCvId}
                   className="px-6 py-2.5 bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl shadow-md shadow-primary/25 hover:shadow-primary/35 transition-all flex items-center gap-1.5 cursor-pointer"
                 >

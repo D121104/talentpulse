@@ -30,6 +30,10 @@ import {
   CVProcessingJobData,
 } from 'src/ai-matching/cv-processing.processor';
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
+import {
+  CURRENT_MATCH_SCORING_VERSION,
+  CURRENT_SKILL_NORMALIZATION_VERSION,
+} from 'src/ai-matching/matching-versions';
 import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { downloadTrustedCv } from 'src/ai-matching/cv-download';
 
@@ -521,6 +525,57 @@ integrationDescribe(
       };
     }
 
+    it('ranks current results with company isolation and excludes stale scoring versions in PostgreSQL', async () => {
+      const fixture = await seedAndParse();
+      const services = applicationServices(fixture);
+      const application = await services.applicationRepo.save(
+        services.applicationRepo.create({
+          cvId: fixture.parsed._id,
+          userId: fixture.user._id,
+          companyId: fixture.company._id,
+          jobId: fixture.job._id,
+          aiRankingConsentGranted: true,
+          aiRankingConsentVersion: 'test-policy',
+          aiRankingConsentPolicyHash: 'test-hash',
+          aiRankingConsentAt: new Date(),
+        }),
+      );
+      const jobSourceVersion = getJobSourceVersion(
+        fixture.job,
+        fixture.company,
+      );
+      const result = await services.resultRepo.save(
+        services.resultRepo.create({
+          applicationId: application._id,
+          cvId: fixture.parsed._id,
+          userId: fixture.user._id,
+          jobId: fixture.job._id,
+          status: CVProcessingStatus.COMPLETED,
+          contentHash: fixture.parsed.contentHash,
+          jobSourceVersion,
+          scoringVersion: CURRENT_MATCH_SCORING_VERSION,
+          normalizationVersion: CURRENT_SKILL_NORMALIZATION_VERSION,
+          matchScore: 0.8,
+        }),
+      );
+      const rank = () =>
+        services.processingService.getRankedCandidates(
+          fixture.job._id,
+          10,
+          jobSourceVersion,
+        );
+      expect((await rank()).map((row) => row._id)).toEqual([result._id]);
+      await services.resultRepo.update(result._id, { scoringVersion: 'old' });
+      expect(await rank()).toEqual([]);
+      await services.resultRepo.update(result._id, {
+        scoringVersion: CURRENT_MATCH_SCORING_VERSION,
+      });
+      await fixture.jobRepo.update(fixture.job._id, {
+        company: { _id: randomUUID(), name: 'Other company' },
+      });
+      expect(await rank()).toEqual([]);
+    });
+
     it('persists parsed fields, admits valid consent, queues opaque fences, and persists canonical match output', async () => {
       const fixture = await seedAndParse();
       expect(fixture.parsed).toEqual(
@@ -532,7 +587,7 @@ integrationDescribe(
           education: ['BSc Computer Science'],
           experience: ['Backend Engineer at Synthetic Company'],
           certificates: ['AWS Certified Developer'],
-          parserVersion: 'structured-parser-v1',
+          parserVersion: 'structured-parser-v2',
         }),
       );
       expect(fixture.parsed.parsedAt).toEqual(expect.any(Date));
@@ -543,7 +598,6 @@ integrationDescribe(
           cvId: fixture.parsed._id,
           jobId: fixture.job._id,
           companyId: fixture.company._id,
-          aiRankingConsent: true,
         },
         {
           _id: fixture.user._id,
@@ -555,7 +609,7 @@ integrationDescribe(
       const application = await services.applicationRepo.findOneByOrFail({
         _id: applicationResponse._id,
       });
-      const policy = getApplicationAiRankingConsentPolicy(new ConfigService());
+      const policy = getApplicationAiRankingConsentPolicy();
       expect(application).toEqual(
         expect.objectContaining({
           status: ApplicationStatus.PENDING,
@@ -574,6 +628,8 @@ integrationDescribe(
           granted: true,
           consentVersion: policy.consentVersion,
           policyHash: policy.policyHash,
+          source: 'application_submission_policy',
+          occurredAt: application.aiRankingConsentAt,
         }),
       );
 
@@ -626,9 +682,9 @@ integrationDescribe(
           matchScore: expect.any(Number),
           matchedSkills: ['TypeScript', 'PostgreSQL'],
           missingSkills: [],
-          scoringVersion: 'cv-job-match-v2',
+          scoringVersion: 'cv-job-match-v3',
           modelVersion: 'deterministic-v1',
-          normalizationVersion: 'cv-job-normalization-v1',
+          normalizationVersion: 'skill-normalization-v2',
           degraded: false,
           components: expect.objectContaining({
             semantic: expect.objectContaining({ available: true }),
