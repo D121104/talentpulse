@@ -523,7 +523,7 @@ Ollama memory: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'limit=%s swap-li
 Ollama embedding: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s (%s dimensions)' "$LOCAL_OLLAMA_EMBEDDING_MODEL" "$LOCAL_OLLAMA_EMBEDDING_DIMENSIONS"; else printf 'skipped (deterministic profile)'; fi)
 Ollama generation: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s (override AI_OLLAMA_GENERATION_MODEL is preserved)' "$LOCAL_OLLAMA_GENERATION_MODEL"; else printf 'skipped (deterministic profile)'; fi)
 Qdrant initialization: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'collection=%s alias=%s index=%s (new/non-destructive)' "$LOCAL_QDRANT_COLLECTION" "$LOCAL_QDRANT_ALIAS" "$LOCAL_QDRANT_INDEX_VERSION"; else printf 'skipped (deterministic profile)'; fi)
-FastAPI: (cd $AI_DIR && uv run --no-sync uvicorn talentpulse_ai.main:app --app-dir src --host 127.0.0.1 --port 8001 --ssl-keyfile $TLS_KEY --ssl-certfile $TLS_CERT)
+FastAPI: (cd $AI_DIR && uv run --no-sync uvicorn talentpulse_ai.main:app --app-dir src --reload --reload-dir src --host 127.0.0.1 --port 8001 --ssl-keyfile $TLS_KEY --ssl-certfile $TLS_CERT)
 NestJS:  (cd $BACKEND_DIR && npm run start:dev)
 Frontend: (cd $FRONTEND_DIR && npm run dev -- --host 127.0.0.1 --port 5173)
 AI health: $AI_URL/health/ready (verified with the local CA)
@@ -580,7 +580,8 @@ export AI_RAG_GENERATE_SCOPE=rag:generate
 export AI_JOB_INDEX_SCOPE=jobs:index
 configure_cv_ocr_environment
 start_process fastapi "$LOG_DIR/fastapi.log" "$AI_DIR" \
-  uv run --no-sync uvicorn talentpulse_ai.main:app --app-dir src --host 127.0.0.1 --port 8001 \
+  env AI_CV_GENERATION_CHUNK_TIMEOUT_SECONDS=120 \
+  uv run --no-sync uvicorn talentpulse_ai.main:app --app-dir src --reload --reload-dir src --host 127.0.0.1 --port 8001 \
   --ssl-keyfile "$TLS_KEY" --ssl-certfile "$TLS_CERT"
 clear_cv_ocr_environment
 unset AI_JWT_PUBLIC_KEY

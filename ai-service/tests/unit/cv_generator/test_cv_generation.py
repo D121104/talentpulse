@@ -11,6 +11,7 @@ from tests.cv_payload import draft_payload
 
 from talentpulse_ai.core.exceptions import ServiceError
 from talentpulse_ai.modules.cv_generator.context_builder import (
+    _fallback_bullets,
     _group_skills,
     _localization_targets,
     _scalar_target_plan,
@@ -21,6 +22,7 @@ from talentpulse_ai.modules.cv_generator.schemas import CvDraftRequest
 from talentpulse_ai.modules.cv_generator.service import CvDraftGenerationService
 from talentpulse_ai.modules.cv_generator.validators import (
     _RESPONSIBILITY_ACTION_RE,
+    _locale_matches,
     _localized_value_is_grounded,
     _proper_nouns,
     _target_skill_pattern,
@@ -35,6 +37,482 @@ from talentpulse_ai.scripts.evaluation.live_cv_generation import (
     diagnostic_shape_request,
     selection_request,
 )
+
+
+@pytest.mark.parametrize(
+    "partial,valid_primary",
+    [
+        ("React, TypeScript, Redux Toolkit, NestJS, PostgreSQL, TypeORM, Redis, Jest.", False),
+        (
+            "React, TypeScript, NestJS, PostgreSQL, Prisma, Redis, Socket.IO, TailwindCSS, Docker.",
+            False,
+        ),
+        ("Realtime order status notifications.", False),
+        ("Realtime order status notifications.", True),
+    ],
+)
+def test_project_partial_localization_repairs_narrative_not_just_stack(
+    partial, valid_primary
+) -> None:
+    payload = draft_payload(locale="en-US")
+    payload["job"]["required_skills"] = ["React"]
+    description = (
+        "Xây dựng bảng quản lý đơn hàng. "
+        "Triển khai phân quyền người dùng. "
+        "Gửi thông báo trạng thái đơn hàng theo thời gian thực."
+    )
+    translation = (
+        "Built an order management dashboard. "
+        "Implemented user permissions. "
+        "Sent realtime order status notifications."
+    )
+    payload["candidate"]["projects"] = [
+        {
+            "project_name": "Enterprise Management Dashboard",
+            "role": "Fullstack Developer",
+            "description": description,
+            "technologies": [
+                "React",
+                "TypeScript",
+                "Redux Toolkit",
+                "NestJS",
+                "PostgreSQL",
+                "TypeORM",
+                "Redis",
+                "Jest",
+                "Prisma",
+                "Socket.IO",
+                "TailwindCSS",
+                "Docker",
+            ],
+        }
+    ]
+
+    class ProjectProvider(BatchLocalizationProvider):
+        def generate_structured(self, prompt, schema, timeout=None, *, num_predict=None):
+            properties = schema.get("properties", {})
+            if "bullets" in properties:
+                return {"project_bullets": [{"source_index": 0, "text": partial}]}
+            data = self._payload(prompt)
+            return {
+                "items": [
+                    {
+                        "key": item["key"],
+                        "text": (translation if valid_primary or data.get("repair") else partial)
+                        if item["source_text"] == description
+                        else self._TRANSLATIONS.get(item["source_text"], item["source_text"]),
+                    }
+                    for item in data["items"]
+                ]
+            }
+
+    request = CvDraftRequest.model_validate(payload)
+    before = request.model_dump()
+    result = CvDraftGenerationService(ProjectProvider()).generate(request)
+    project = result.projects[0]
+    assert project.description == translation
+    assert project.source_index == 0
+    assert project.technologies == request.candidate.projects[0].technologies
+    bullets = " ".join(project.bullets)
+    assert "order management dashboard" in bullets
+    assert "user permissions" in bullets
+    assert "order status notifications" in bullets
+    if partial.startswith("React"):
+        assert partial not in project.bullets
+    assert request.model_dump() == before
+
+
+@pytest.mark.parametrize(
+    "translation",
+    [
+        "Built an order management dashboard with user permissions, "
+        "realtime order status notifications.",
+        "Technologies: React. Built an order management dashboard with React.",
+    ],
+)
+@pytest.mark.parametrize("repair_only", [False, True])
+def test_project_service_retains_compact_or_stack_prefixed_translation(
+    translation, repair_only
+) -> None:
+    payload = draft_payload(locale="en-US")
+    payload["job"]["required_skills"] = ["React"]
+    description = (
+        "Xây dựng bảng quản lý đơn hàng. Triển khai phân quyền người dùng. "
+        "Gửi thông báo trạng thái đơn hàng theo thời gian thực."
+    )
+    if translation.startswith("Technologies"):
+        description = "Xây dựng bảng quản lý đơn hàng bằng React."
+    payload["candidate"]["projects"][0].update(description=description, technologies=["React"])
+    returned_descriptions = []
+
+    class CompactProvider(BatchLocalizationProvider):
+        def generate_structured(self, prompt, schema, timeout=None, *, num_predict=None):
+            if "bullets" in schema.get("properties", {}):
+                return {"bullets": [], "project_bullets": []}
+            data = self._payload(prompt)
+            values = []
+            for item in data["items"]:
+                if item["source_text"] == description:
+                    if repair_only and not data.get("repair"):
+                        continue
+                    returned_descriptions.append(translation)
+                    value = translation
+                else:
+                    value = self._TRANSLATIONS.get(item["source_text"], item["source_text"])
+                values.append({"key": item["key"], "text": value})
+            return {"items": values}
+
+    request = CvDraftRequest.model_validate(payload)
+    before = request.model_dump()
+    service = CvDraftGenerationService(CompactProvider())
+    result = service.generate(request)
+    project = result.projects[0]
+    assert project.description == translation
+    assert "order management dashboard" in " ".join(project.bullets)
+    assert all(not bullet.startswith("Technologies:") for bullet in project.bullets)
+    assert returned_descriptions == [translation]
+    assert service.last_metrics["provider_calls"] <= 12
+    assert service.last_metrics["localization_repair_calls"] == int(repair_only)
+    assert request.model_dump() == before
+
+
+def test_project_short_source_translation_is_not_padded_or_rejected() -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"][0]["description"] = (
+        "Gửi thông báo trạng thái đơn hàng theo thời gian thực."
+    )
+    request = CvDraftRequest.model_validate(payload)
+    value, reason = _localized_value_is_grounded(
+        request,
+        "Realtime order status notifications.",
+        section="projects",
+        source_index=0,
+        field="description",
+    )
+    assert value == "Realtime order status notifications."
+    assert reason is None
+
+
+def test_full_profile_localization_bounds_work_before_project_timeouts(monkeypatch) -> None:
+    import talentpulse_ai.modules.cv_generator.service as cv_generation
+
+    payload = draft_payload(locale="en-US")
+    payload["job"]["required_skills"] = ["React", "NestJS", "PostgreSQL", "Redis"]
+    payload["job"]["preferred_skills"] = []
+    candidate = payload["candidate"]
+    translations = {}
+    experience = []
+    for index, size in enumerate([439, 507, 644, 645, 542, 346]):
+        clause = f"Phát triển API cho hệ thống {index + 1}. "
+        description = clause * (size // len(clause) + 1)
+        translations[description] = f"Developed APIs for system {index + 1}."
+        experience.append(
+            {
+                "company_name": f"Synthetic Company {index + 1}",
+                "position": "Backend Engineer",
+                "description": description,
+            }
+        )
+    candidate["experience"] = experience
+    features = ["catalogs", "reports", "invoices", "products", "orders", "messages"]
+    projects = []
+    stacks = [
+        ["Python"],
+        ["Java"],
+        ["Go"],
+        ["React", "NestJS", "PostgreSQL"],
+        ["React", "NestJS", "PostgreSQL", "Redis"],
+        ["React", "NestJS"],
+    ]
+    for index, size in enumerate([613, 578, 707, 771, 604, 583]):
+        clause = f"Xây dựng chức năng {features[index]} và API cho người dùng. "
+        description = clause * (size // len(clause) + 1)
+        translations[description] = (
+            f"Built {features[index]} management features. Implemented APIs for {features[index]}."
+        )
+        projects.append(
+            {
+                "project_name": f"Synthetic Project {index + 1}",
+                "role": "Fullstack Developer",
+                "description": description,
+                "technologies": stacks[index],
+            }
+        )
+    candidate["projects"] = projects
+    candidate["career_objective"] = "Mong muốn phát triển các hệ thống phần mềm."
+    translations[candidate["career_objective"]] = "Seeking to develop software systems."
+    candidate["skills"] = [
+        "React",
+        "TypeScript",
+        "Redux Toolkit",
+        "NestJS",
+        "PostgreSQL",
+        "TypeORM",
+        "Redis",
+        "Jest",
+        "Prisma",
+        "Socket.IO",
+        "TailwindCSS",
+        "Docker",
+        "Python",
+        "Java",
+        "Go",
+        "Git",
+        "HTML",
+        "CSS",
+    ]
+    candidate["certificates"] = ["AWS Certified Developer", "TOEIC", "IELTS"]
+    clock = [0.0]
+    monkeypatch.setattr(cv_generation, "monotonic", lambda: clock[0])
+    calls = []
+
+    class WorkloadProvider(BatchLocalizationProvider):
+        def generate_structured(self, prompt, schema, timeout=None, *, num_predict=None):
+            data = self._payload(prompt)
+            if "bullets" in schema.get("properties", {}):
+                calls.append(("core", data))
+                clock[0] += 10
+                return {
+                    "bullets": [],
+                    "project_bullets": [
+                        {
+                            "source_index": 4,
+                            "text": "Reviewed database queries and reduced repeated requests.",
+                        }
+                    ],
+                }
+            items = data["items"]
+            workload = sum(len(item["source_text"]) for item in items)
+            duration = workload / 40
+            calls.append(("localization", data))
+            clock[0] += min(duration, timeout)
+            if duration > timeout:
+                raise TimeoutError("synthetic source workload exceeded provider timeout")
+            return {
+                "items": [
+                    {
+                        "key": item["key"],
+                        "text": translations.get(item["source_text"], item["source_text"]),
+                    }
+                    for item in items
+                ]
+            }
+
+    request = CvDraftRequest.model_validate(payload)
+    before = request.model_dump()
+    service = CvDraftGenerationService(WorkloadProvider())
+    result = service.generate(request)
+    assert [project.source_index for project in result.projects] == [4, 3, 5]
+    for project in result.projects:
+        assert project.description == translations[projects[project.source_index]["description"]], (
+            result.warnings
+        )
+        assert features[project.source_index] in " ".join(project.bullets)
+        assert "Reviewed database queries" not in " ".join(project.bullets)
+        assert all(
+            feature not in " ".join(project.bullets)
+            for index, feature in enumerate(features)
+            if index != project.source_index
+        )
+    assert not any("provider_timeout" in warning for warning in result.warnings)
+    assert len(result.work_experience) == 3
+    for entry in result.work_experience:
+        expected = translations[experience[entry.source_index]["description"]]
+        assert entry.description == expected
+        assert f"system {entry.source_index + 1}" in " ".join(entry.bullets)
+    assert service.last_metrics["provider_calls"] <= 12
+    assert clock[0] < 600
+    # Translation already supplies project bullets; avoid asking for each project twice.
+    assert (
+        len([data for kind, data in calls if kind == "core" and data["candidate"]["projects"]]) == 1
+    )
+    assert request.model_dump() == before
+
+
+def test_project_fallback_filters_owned_stack_but_keeps_translated_contributions() -> None:
+    request = CvDraftRequest.model_validate(draft_payload(locale="en-US"))
+    source = request.candidate.projects[0].model_copy(
+        update={
+            "description": "Built an order dashboard. React, Redux Toolkit, Socket.IO.",
+            "technologies": ["React", "Redux Toolkit", "Socket.IO"],
+        }
+    )
+    bullets, insufficient = _fallback_bullets(source, locale="en-US", kind="project")
+    assert bullets == ["Built an order dashboard."]
+    assert not insufficient
+
+
+def test_english_rejects_vietnamese_achievement_outside_old_marker_list() -> None:
+    assert not _locale_matches(
+        "Tăng test coverage lên 80% cho các backend modules quan trọng.", "en-US"
+    )
+    assert _locale_matches(
+        "Built APIs at Công ty Mẫu.", "en-US", preserved_literals=["Công ty Mẫu"]
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Built a résumé parser using Python.",
+        "Built a café application using Python.",
+        "Reduced API latency by 2× using Python.",
+    ],
+)
+def test_english_accents_and_numeric_symbols_survive_validation_and_fallback(text) -> None:
+    assert _locale_matches(text, "en-US")
+    request = CvDraftRequest.model_validate(draft_payload(locale="en-US"))
+    source = request.candidate.experience[0].model_copy(update={"description": text})
+    bullets, insufficient = _fallback_bullets(source, locale="en-US", kind="experience")
+    assert bullets == [text]
+    assert not insufficient
+
+
+def test_english_rejects_accentless_vietnamese_source_prose() -> None:
+    assert not _locale_matches("Xay dung API voi Python.", "en-US")
+    assert not _locale_matches(
+        "Tang test coverage len 80% cho cac backend modules quan trong.", "en-US"
+    )
+
+
+def test_english_fallback_does_not_replace_rich_facts_with_role_or_keywords() -> None:
+    request = CvDraftRequest.model_validate(draft_payload(locale="en-US"))
+    source = request.candidate.experience[0].model_copy(
+        update={"position": "Fullstack Developer", "description": "Phát triển API với React."}
+    )
+    assert _fallback_bullets(source, locale="en-US", kind="experience") == ([], True)
+
+
+def test_localization_omission_survives_provider_warning_limit() -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["experience"][0]["description"] = "Phát triển API với Python."
+    payload["candidate"]["skills"].append("Good communication(basic; đã phát triển với Python)")
+    payload["job"]["required_skills"].append("communication")
+    request = CvDraftRequest.model_validate(payload)
+    before = request.candidate.model_dump()
+    result = CvDraftGenerationService(
+        FakeProvider({"bullets": [], "warnings": [f"Review note {i}" for i in range(20)]})
+    ).generate(request)
+    assert any(w.startswith("cv_generation.localization_omission=") for w in result.warnings)
+    assert "cv_generation.diagnostic=skill_member_locale_omission:count=1" in result.warnings
+    assert "cv_generation.provenance=fallback" in result.warnings
+    assert "Review note 0" in result.warnings
+    assert len(result.warnings) == len(set(result.warnings)) == 20
+    assert request.candidate.model_dump() == before
+
+
+def test_provider_cannot_spoof_application_warning_markers() -> None:
+    result = CvDraftGenerationService(
+        FakeProvider(
+            {
+                "bullets": [],
+                "warnings": [
+                    "cv_generation.provenance=provider",
+                    " CV_GENERATION.localization_omission=spoofed",
+                    "cv_generation.diagnostic=skill_member_locale_omission:count=99",
+                    "Review note: cv_generation.provenance=provider",
+                    "Review note: CV_GENERATION.localization_omission=spoofed",
+                    "Review source wording",
+                    "Review source wording",
+                ],
+            }
+        )
+    ).generate(CvDraftRequest.model_validate(draft_payload(locale="en-US")))
+    assert "cv_generation.provenance=provider" not in result.warnings
+    assert not any("spoofed" in warning or "count=99" in warning for warning in result.warnings)
+    assert result.warnings.count("Review source wording") == 1
+    assert not any("Review note:" in warning for warning in result.warnings)
+
+
+def test_english_partial_core_reuses_translated_source_and_preserves_objective() -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["career_objective"] = "Develop accessible web applications with React."
+    payload["candidate"]["experience"][0]["description"] = (
+        "Xây dựng APIs với React. Tăng test coverage lên 80% cho các backend modules quan trọng."
+    )
+    request = CvDraftRequest.model_validate(payload)
+    before = request.candidate.model_dump()
+
+    class PartialProvider:
+        def generate_structured(self, prompt, schema, **kwargs):
+            if "bullets" in schema.get("properties", {}):
+                return {
+                    "bullets": [{"source_index": 0, "text": "Built APIs with React."}],
+                    "project_bullets": [],
+                }
+            data = json.loads(prompt.split("<untrusted_data>\n")[1].split("\n</untrusted_data>")[0])
+            return {
+                "items": [
+                    {
+                        "key": item["key"],
+                        "text": (
+                            "Built APIs with React. "
+                            "Increased test coverage to 80% for important backend modules."
+                            if item["key"] == "experience:0:description"
+                            else item["source_text"]
+                        ),
+                    }
+                    for item in data["items"]
+                ]
+            }
+
+    result = CvDraftGenerationService(PartialProvider()).generate(request)
+    bullets = " ".join(result.work_experience[0].bullets)
+    assert "80%" in bullets and "Increased test coverage" in bullets
+    assert "Tăng" not in bullets
+    assert "accessible web applications" in result.career_objective
+    assert request.candidate.model_dump() == before
+
+
+def test_english_translation_fallback_covers_all_sections_without_changing_facts() -> None:
+    payload = draft_payload(locale="en-US")
+    candidate = payload["candidate"]
+    candidate["headline"] = "Kỹ sư phần mềm"
+    candidate["career_objective"] = "Phát triển ứng dụng với Python."
+    candidate["experience"][0]["description"] = "Xây dựng API với Python."
+    candidate["projects"][0]["description"] = "Xây dựng API tuyển dụng với FastAPI."
+    candidate["education"][0].update({"degree": "Cử nhân", "major": "Khoa học máy tính"})
+    candidate["certificates"] = ["Chứng chỉ Docker Associate 2024"]
+    candidate["activities"] = ["Hỗ trợ cộng đồng Python."]
+    candidate["awards"] = ["Giải thưởng Python 2023"]
+    translations = {
+        "Kỹ sư phần mềm": "Software Engineer",
+        "Phát triển ứng dụng với Python.": "Develop applications with Python.",
+        "Xây dựng API với Python.": "Built API with Python.",
+        "Xây dựng API tuyển dụng với FastAPI.": "Built hiring API with FastAPI.",
+        "Cử nhân": "Bachelor",
+        "Khoa học máy tính": "Computer Science",
+        "Chứng chỉ Docker Associate 2024": "Docker Associate Certificate 2024",
+        "Hỗ trợ cộng đồng Python.": "Supported the Python community.",
+        "Giải thưởng Python 2023": "Python Award 2023",
+    }
+
+    class TranslationProvider:
+        def generate_structured(self, prompt, schema, **kwargs):
+            if "bullets" in schema.get("properties", {}):
+                return {"bullets": [], "project_bullets": []}
+            data = json.loads(prompt.split("<untrusted_data>\n")[1].split("\n</untrusted_data>")[0])
+            return {
+                "items": [
+                    {"key": item["key"], "text": translations[item["source_text"]]}
+                    for item in data["items"]
+                ]
+            }
+
+    request = CvDraftRequest.model_validate(payload)
+    result = CvDraftGenerationService(TranslationProvider()).generate(request)
+    assert result.work_experience[0].bullets == ["Built API using Python."]
+    assert result.projects[0].bullets == ["Built hiring API using FastAPI."]
+    assert result.education[0].degree == "Bachelor"
+    assert result.education[0].major == "Computer Science"
+    assert result.certificates == ["Docker Associate Certificate 2024"]
+    assert result.activities == ["Supported the Python community."]
+    assert result.awards == ["Python Award 2023"]
+    assert "Develop applications with Python." in result.career_objective
+    assert result.work_experience[0].company_name == "Acme"
+    assert result.work_experience[0].start_date == "2022-01"
+    assert result.projects[0].technologies == ["Python", "FastAPI"]
+    assert result.target_job_id == request.job.job_id
 
 
 def test_omitted_own_entry_achievements_and_db_identifier_survive_bounded_repair(caplog) -> None:
@@ -1479,6 +1957,176 @@ def test_name_only_skills_have_no_duplicate_description_or_description_target() 
     )
 
 
+@pytest.mark.parametrize(
+    "source,translated,technologies",
+    [
+        (
+            "Mô tả:\nPhát triển nền tảng tuyển dụng bằng React, TypeScript và NestJS.\n"
+            "Chức năng chính:\nQuản lý công việc và CV qua REST API.\n"
+            "Trách nhiệm:\nThiết kế PostgreSQL.\nPhát triển backend với Redis.",
+            "Description:\nDeveloping a recruitment platform using React, TypeScript and NestJS.\n"
+            "Key Features:\nJob and CV management through REST APIs.\n"
+            "Responsibilities:\nDesigning PostgreSQL.\nDeveloping the backend with Redis.",
+            ["React", "TypeScript", "NestJS", "PostgreSQL", "Redis"],
+        ),
+        (
+            "Mô tả:\nPhát triển dashboard quản lý với React và NestJS.\n"
+            "Chức năng chính:\nTheo dõi KPI bằng Redux Toolkit.\n"
+            "Trách nhiệm:\nThiết kế PostgreSQL với TypeORM và Redis; kiểm thử bằng Jest.",
+            "Description:\nDevelop a management dashboard with React and NestJS.\n"
+            "Key Features:\nTrack KPIs using Redux Toolkit.\n"
+            "Responsibilities:\nDesign PostgreSQL with TypeORM and Redis; test with Jest.",
+            ["React", "NestJS", "Redux Toolkit", "PostgreSQL", "TypeORM", "Redis", "Jest"],
+        ),
+        (
+            "Mô tả:\nPhát triển cửa hàng bằng React, TypeScript và NestJS.\n"
+            "Chức năng chính:\nĐăng nhập JWT và cập nhật đơn hàng qua Socket.IO.\n"
+            "Trách nhiệm:\nThiết kế PostgreSQL với Prisma; phát triển UI bằng TailwindCSS.",
+            "Description:\nDeveloping a shop using React, TypeScript and NestJS.\n"
+            "Key Features:\nUser login with JWT and order updates through Socket.IO.\n"
+            "Responsibilities:\nDesigning PostgreSQL with Prisma; developing UI using TailwindCSS.",
+            ["React", "TypeScript", "NestJS", "Socket.IO", "PostgreSQL", "Prisma", "TailwindCSS"],
+        ),
+    ],
+)
+def test_project_multiline_translation_does_not_invent_names_from_english_grammar(
+    source: str, translated: str, technologies: list[str]
+) -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"] = [
+        {"project_name": "Demo", "description": source, "technologies": technologies}
+    ]
+    request = CvDraftRequest.model_validate(payload)
+    accepted, reason = _localized_value_is_grounded(
+        request, translated, section="projects", source_index=0, field="description"
+    )
+    assert reason is None
+    assert accepted == " ".join(translated.split())
+    for invented in (" for Acme", " using Docker", " with 93% coverage"):
+        accepted, reason = _localized_value_is_grounded(
+            request, translated + invented, section="projects", source_index=0, field="description"
+        )
+        assert accepted is None and reason == "grounding_anchor_rejection"
+
+
+@pytest.mark.parametrize("action", ["Develop", "Develops", "Developed", "Developing"])
+def test_project_translation_uses_source_backed_grammatical_forms(action: str) -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"] = [
+        {
+            "project_name": "Demo",
+            "description": "Mô tả:\nPhát triển ứng dụng React.",
+            "technologies": ["React"],
+        }
+    ]
+    request = CvDraftRequest.model_validate(payload)
+    value = f"Description:\n{action} an application using React."
+    assert _localized_value_is_grounded(
+        request, value, section="projects", source_index=0, field="description"
+    ) == (" ".join(value.split()), None)
+
+
+@pytest.mark.parametrize(
+    "alteration",
+    [None, ("35%", "36%"), ("2024-06", "2025-06"), ("42", "43"), ("2)", "")],
+)
+def test_project_translation_preserves_metrics_dates_and_numbered_identifiers(
+    alteration: tuple[str, str] | None,
+) -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"] = [
+        {
+            "project_name": "Demo",
+            "description": (
+                "1. Mô tả:\nPhát triển React từ 2024-06.\n"
+                "2. Chức năng:\nTheo dõi KPI và 42 đơn hàng; tăng hiệu suất 35%."
+            ),
+            "technologies": ["React"],
+        }
+    ]
+    value = (
+        "1) Description:\nDeveloped React since 2024-06.\n"
+        "2) Features:\nTracked KPIs and 42 orders; improved performance by 35%."
+    )
+    if alteration is not None:
+        value = value.replace(*alteration)
+    accepted, reason = _localized_value_is_grounded(
+        CvDraftRequest.model_validate(payload),
+        value,
+        section="projects",
+        source_index=0,
+        field="description",
+    )
+    if alteration is None:
+        assert accepted == " ".join(value.split()) and reason is None
+    else:
+        assert accepted is None and reason is not None
+
+
+@pytest.mark.parametrize("resume", ["CV", "resume", "résumé", "curriculum vitae", "resumes"])
+@pytest.mark.parametrize("action", ["Manage", "Manages", "Managed", "Managing"])
+def test_project_recruitment_translation_preserves_resume_meaning(
+    resume: str, action: str
+) -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"] = [
+        {
+            "project_name": "Hiring Demo",
+            "description": "Mô tả:\nQuản lý CV bằng React và NestJS; xử lý 42 ứng viên.",
+            "technologies": ["React", "NestJS"],
+        }
+    ]
+    value = (
+        f"Description:\n{action} candidate {resume} with React and NestJS; process 42 candidates."
+    )
+    request = CvDraftRequest.model_validate(payload)
+    assert _localized_value_is_grounded(
+        request, value, section="projects", source_index=0, field="description"
+    ) == (" ".join(value.split()), None)
+    for altered in (value.replace("42", "43"), value + " for Acme", value + " using Docker"):
+        accepted, reason = _localized_value_is_grounded(
+            request, altered, section="projects", source_index=0, field="description"
+        )
+        assert accepted is None and reason is not None
+
+
+def test_project_shop_login_heading_is_source_backed() -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"] = [
+        {
+            "project_name": "Shop Demo",
+            "description": "Chức năng:\nĐăng nhập JWT bằng React; cập nhật đơn hàng qua Socket.IO.",
+            "technologies": ["React", "Socket.IO"],
+        }
+    ]
+    value = "Features:\nLogin with JWT using React; order updates through Socket.IO."
+    request = CvDraftRequest.model_validate(payload)
+    assert _localized_value_is_grounded(
+        request, value, section="projects", source_index=0, field="description"
+    ) == (" ".join(value.split()), None)
+
+
+def test_resume_equivalence_does_not_exempt_other_acronyms_or_unowned_cv() -> None:
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"] = [
+        {
+            "project_name": "Demo",
+            "description": "Mô tả:\nQuản lý API bằng React.",
+            "technologies": ["React"],
+        }
+    ]
+    request = CvDraftRequest.model_validate(payload)
+    for value in (
+        "Description:\nManage resumes using React.",
+        "Description:\nManage API and CV using React.",
+        "Description:\nManage API and NASA using React.",
+    ):
+        accepted, reason = _localized_value_is_grounded(
+            request, value, section="projects", source_index=0, field="description"
+        )
+        assert accepted is None and reason is not None
+
+
 def test_api_plural_translation_preserves_numbers_and_technical_anchors() -> None:
     payload = draft_payload()
     payload["candidate"]["experience"][0]["description"] = (
@@ -1713,7 +2361,7 @@ def test_provider_paraphrase_preserves_facts_without_verbatim_copy() -> None:
         "Implemented API services using Python, FastAPI, and PostgreSQL."
     ]
     assert result.work_experience[0].bullets[0] != request.candidate.experience[0].description
-    assert "2-4" in provider.prompts[0]
+    assert "up to 4" in provider.prompts[0]
     assert "en-US" in provider.prompts[0]
 
 
@@ -2049,7 +2697,7 @@ def test_en_locale_omits_unrepaired_rich_indices_after_one_bounded_repair() -> N
     result = CvDraftGenerationService(provider).generate(CvDraftRequest.model_validate(payload))
     assert len(provider.calls) <= 64
     assert result.work_experience[0].bullets
-    assert result.work_experience[1].bullets == ["Data Engineer."]
+    assert result.work_experience[1].bullets == []
     assert "Documented technologies" not in " ".join(result.warnings)
 
 

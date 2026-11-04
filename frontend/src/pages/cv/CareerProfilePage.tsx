@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Award,
   BriefcaseBusiness,
@@ -33,7 +34,6 @@ import type {
   CareerEducationEntry,
   CareerExperienceEntry,
   CareerProjectEntry,
-  CareerSkillEntry,
   CareerProfileCvLocale,
 } from '../../lib/careerProfileTypes';
 
@@ -113,6 +113,14 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asText(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+function entryLabel(entry: object, section: ListSectionKey, index: number): string {
+  const item = asRecord(entry);
+  const name = ['companyName', 'schoolName', 'projectName', 'name', 'organizationName']
+    .map((key) => asText(item[key]).trim()).find(Boolean);
+  const role = asText(item.position).trim() || asText(item.role).trim();
+  return [name, role].filter(Boolean).join(' · ') || `${PROFILE_SECTION_LABELS[section]} ${index + 1}`;
 }
 
 function asTechnologies(value: unknown): string {
@@ -263,24 +271,48 @@ function profileSaveErrorMessage(error: unknown): string {
   return PROFILE_SAVE_RETRY_MESSAGE;
 }
 
+const GENERATION_SAVE_ERRORS = {
+  conflict: ['Hồ sơ đã thay đổi. Hãy tải lại bản mới nhất trước khi tạo CV.', 'The profile has changed. Reload the latest version before creating a CV.'],
+  auth: ['Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'Your session has expired. Please sign in again.'],
+  permission: ['Bạn không có quyền chỉnh sửa hồ sơ này.', 'You do not have permission to edit this profile.'],
+  email: ['Hãy nhập địa chỉ email hợp lệ trước khi tạo CV.', 'Enter a valid email address before creating a CV.'],
+  skill: ['Thêm kỹ năng đang nhập trước khi tạo CV.', 'Add the skill you are typing before creating a CV.'],
+  validation: ['Kiểm tra các mục còn trống hoặc chưa hợp lệ trong hồ sơ trước khi tạo CV.', 'Check empty or invalid profile entries before creating a CV.'],
+  retry: ['Không thể lưu hồ sơ. Vui lòng thử lại trước khi tạo CV.', 'The profile could not be saved. Please try again before creating a CV.'],
+} as const;
+type GenerationSaveErrorCode = keyof typeof GENERATION_SAVE_ERRORS;
+function generationSaveErrorCode(error: unknown): GenerationSaveErrorCode {
+  const message = profileSaveErrorMessage(error).toLowerCase();
+  if (/cập nhật ở nơi khác|mới nhất/.test(message)) return 'conflict';
+  if (/đăng nhập/.test(message)) return 'auth';
+  if (/quyền/.test(message)) return 'permission';
+  if (/email/.test(message)) return 'email';
+  if (/kỹ năng/.test(message)) return 'skill';
+  if (/trống|hợp lệ/.test(message)) return 'validation';
+  return 'retry';
+}
+
 function Field({
   label,
   value,
   onChange,
   placeholder,
   type = 'text',
+  autoComplete,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  type?: 'text' | 'month' | 'url';
+  type?: 'text' | 'month' | 'url' | 'email' | 'tel';
+  autoComplete?: string;
 }) {
   return (
     <label className="space-y-1.5">
       <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{label}</span>
       <input
         type={type}
+        autoComplete={autoComplete}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -295,21 +327,46 @@ function TextField({
   value,
   onChange,
   placeholder,
+  autoGrow = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  autoGrow?: boolean;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = textareaRef.current;
+    if (!autoGrow || !element) return;
+    const resize = () => {
+      element.style.height = 'auto';
+      const style = getComputedStyle(element);
+      const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+      element.style.height = `${element.scrollHeight + border}px`;
+    };
+    resize();
+    let previousWidth = element.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const width = element.getBoundingClientRect().width;
+      if (width !== previousWidth) {
+        previousWidth = width;
+        resize();
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [autoGrow, value]);
   return (
     <label className="space-y-1.5 sm:col-span-2">
       <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{label}</span>
       <textarea
+        ref={textareaRef}
         rows={3}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm leading-relaxed text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+        className={`box-border w-full ${autoGrow ? 'resize-none overflow-hidden' : 'resize-y'} rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm leading-relaxed text-slate-900 outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white`}
       />
     </label>
   );
@@ -336,8 +393,21 @@ function ListSection<T extends object>({
   onMove: (section: ListSectionKey, index: number, direction: -1 | 1) => void;
   renderFields: (entry: T, index: number) => ReactNode;
 }) {
+  const lastEntryRef = useRef<HTMLDivElement>(null);
+  const pendingAdd = useRef(false);
+  const add = () => {
+    pendingAdd.current = true;
+    onAdd(section);
+  };
+  useLayoutEffect(() => {
+    if (!pendingAdd.current) return;
+    pendingAdd.current = false;
+    const input = lastEntryRef.current?.querySelector('input');
+    input?.focus({ preventScroll: true });
+    input?.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+  }, [entries.length]);
   return (
-    <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-7">
+    <section id={section} tabIndex={-1} aria-label={title} className="scroll-mt-28 rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:border-slate-800 dark:bg-slate-900 sm:p-7">
       <div className="flex flex-col gap-3 border-b border-slate-100 pb-5 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-light">
@@ -345,29 +415,24 @@ function ListSection<T extends object>({
           </span>
           <div>
             <h2 className="text-base font-black text-slate-900 dark:text-white sm:text-lg">{title}</h2>
+            <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">Tuỳ chọn · {entries.filter((entry) => !isBlankEntry(entry)).length} mục đã nhập</p>
             <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">{description}</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => onAdd(section)}
-          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-primary-dark active:scale-95"
-        >
-          <Plus className="h-4 w-4" /> Thêm mục
-        </button>
       </div>
 
       {entries.length === 0 ? (
-        <div className="py-8 text-center text-xs text-slate-400 dark:text-slate-500">
-          Chưa có dữ liệu. Bạn có thể thêm mục đầu tiên để dùng lại cho nhiều CV.
+        <div className="py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+          <p>Chưa thêm {title.toLowerCase()}. Có thể bỏ qua nếu không phù hợp.</p>
+          <button type="button" onClick={add} className="mt-3 min-h-11 rounded-xl px-4 text-sm font-semibold text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary dark:text-primary-light">Thêm {title.toLowerCase()}</button>
         </div>
       ) : (
         <div className="mt-5 space-y-4">
           {entries.map((entry, index) => (
-            <div key={`${section}-${index}`} className="rounded-2xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-800/35 sm:p-5">
+            <div id={`${section}-${index}`} tabIndex={-1} aria-label={entryLabel(entry, section, index)} ref={index === entries.length - 1 ? lastEntryRef : undefined} key={`${section}-${index}`} className="scroll-mt-28 rounded-2xl border border-slate-200/80 bg-slate-50/60 p-4 focus-visible:outline-2 focus-visible:outline-primary dark:border-slate-800 dark:bg-slate-800/35 sm:p-5 [&_input]:scroll-mt-28">
               <div className="mb-4 flex items-center justify-between gap-2">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Mục {index + 1}</span>
-                <div className="flex items-center gap-1">
+                <h3 className="min-w-0 break-words text-sm font-bold text-slate-700 dark:text-slate-200">{entryLabel(entry, section, index)}</h3>
+                <div className="flex shrink-0 items-center gap-1 [&_button]:min-h-11 [&_button]:min-w-11 [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-primary">
                   <button type="button" disabled={index === 0} onClick={() => onMove(section, index, -1)} aria-label="Đưa lên" className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white hover:text-primary disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-slate-700">
                     <ChevronUp className="h-4 w-4" />
                   </button>
@@ -384,11 +449,20 @@ function ListSection<T extends object>({
           ))}
         </div>
       )}
+      <div className="group/add flex min-h-16 items-center justify-center">
+        <button type="button" onClick={add} className="inline-flex min-h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold text-primary transition-opacity hover:bg-primary/10 group-hover/add:opacity-100 group-focus-within/add:opacity-100 dark:text-primary-light [@media(hover:hover)_and_(pointer:fine)_and_(not_(any-pointer:coarse))]:opacity-0">
+          <Plus aria-hidden="true" className="h-4 w-4" />Thêm {title.toLowerCase()}
+        </button>
+      </div>
     </section>
   );
 }
 
 export default function CareerProfilePage() {
+  const { i18n } = useTranslation();
+  const uiVi = !(i18n.resolvedLanguage || i18n.language || 'vi').toLowerCase().startsWith('en');
+  const generationCopy = (vi: string, en: string) =>
+    (i18n.resolvedLanguage || i18n.language || 'vi').toLowerCase().startsWith('en') ? en : vi;
   const { user, accessToken } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
@@ -398,26 +472,61 @@ export default function CareerProfilePage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [generationSaveError, setGenerationSaveError] = useState<GenerationSaveErrorCode | null>(null);
+  const generationSaveErrorText = generationSaveError ? GENERATION_SAVE_ERRORS[generationSaveError][uiVi ? 0 : 1] : '';
+  const [isNew, setIsNew] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [templateType, setTemplateType] = useState<'template1' | 'template2'>('template1');
   const [jobId, setJobId] = useState('');
   const [generationLocale, setGenerationLocale] = useState<CareerProfileCvLocale>('vi-VN');
+  const [skillDraft, setSkillDraft] = useState('');
+  const [skillFeedback, setSkillFeedback] = useState('');
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+  const skillInputRef = useRef<HTMLInputElement>(null);
+  const skillComposing = useRef(false);
+  const pendingSkillMessage = 'Nhấn Thêm kỹ năng hoặc Enter để thêm kỹ năng đang nhập trước khi lưu hoặc tạo CV.';
+
+  const addSkill = () => {
+    if (skillComposing.current) return;
+    const name = skillDraft.trim();
+    if (!name) {
+      setSkillFeedback('Nhập tên kỹ năng trước khi thêm.');
+      skillInputRef.current?.focus();
+      return;
+    }
+    if (profile.skills.some((skill) => skill.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      setSkillFeedback('Kỹ năng này đã có trong danh sách.');
+      skillInputRef.current?.focus();
+      return;
+    }
+    updateProfile({ skills: [...profile.skills, { name, level: '' }] });
+    setSkillDraft('');
+    setSkillFeedback('');
+    skillInputRef.current?.focus();
+  };
 
   const loadProfile = useCallback(async () => {
     if (!accessToken) return;
+    setGenerationSaveError(null);
     setIsLoading(true);
     setLoadError('');
     try {
       const response = await careerProfileApi.getMe(accessToken);
       setProfile(normalizeProfile(response, user?.name, user?.email));
+      setIsNew(false);
+      setSaveError('');
       setIsDirty(false);
       setConflict(false);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
         setProfile(emptyProfile(user?.name, user?.email));
         setIsDirty(false);
+        setIsNew(true);
+        setConflict(false);
+        setSaveError('');
       } else {
-        setLoadError(error instanceof Error ? error.message : 'Không thể tải hồ sơ nghề nghiệp.');
+        setLoadError('Không thể tải hồ sơ nghề nghiệp. Dữ liệu chưa được tải; hãy thử lại trước khi chỉnh sửa.');
       }
     } finally {
       setIsLoading(false);
@@ -429,12 +538,14 @@ export default function CareerProfilePage() {
   }, [loadProfile]);
 
   const updateProfile = (patch: Partial<CandidateCareerProfile>) => {
+    setGenerationSaveError(null);
     setProfile((current) => ({ ...current, ...patch }));
     setIsDirty(true);
-    setConflict(false);
+    setSaveError('');
   };
 
   const updateEntry = (section: ListSectionKey, index: number, key: string, value: string) => {
+    setGenerationSaveError(null);
     setProfile((current) => ({
       ...current,
       [section]: (current[section] as unknown as Entry[]).map((entry, itemIndex) =>
@@ -442,10 +553,11 @@ export default function CareerProfilePage() {
       ),
     }));
     setIsDirty(true);
-    setConflict(false);
+    setSaveError('');
   };
 
   const addEntry = (section: ListSectionKey) => {
+    setGenerationSaveError(null);
     setProfile((current) => ({
       ...current,
       [section]: [...(current[section] as unknown as Entry[]), { ...emptyEntries[section] }],
@@ -454,6 +566,7 @@ export default function CareerProfilePage() {
   };
 
   const removeEntry = (section: ListSectionKey, index: number) => {
+    setGenerationSaveError(null);
     setProfile((current) => ({
       ...current,
       [section]: (current[section] as unknown as Entry[]).filter((_, itemIndex) => itemIndex !== index),
@@ -473,11 +586,14 @@ export default function CareerProfilePage() {
   };
 
   const saveProfile = useCallback(async (): Promise<CandidateCareerProfile> => {
+    if (isLoading || loadError || conflict) throw new ProfileSaveError('Hãy tải hồ sơ mới nhất trước khi lưu.');
+    if (skillDraft.trim()) throw new ProfileSaveError(pendingSkillMessage);
     const validationMessage = validateProfileBeforeSave(profile);
     if (validationMessage) throw new ProfileSaveError(validationMessage);
     if (!accessToken) throw new ProfileSaveError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
 
     setIsSaving(true);
+    setSaveError('');
     try {
       const input = mapCandidateCareerProfileToInput(profile);
       const response = await careerProfileApi.updateMe(input, accessToken);
@@ -485,7 +601,8 @@ export default function CareerProfilePage() {
       setProfile(saved);
       setIsDirty(false);
       setConflict(false);
-      toast.success('Đã lưu hồ sơ nghề nghiệp');
+      setIsNew(false);
+      toast.success((i18n.resolvedLanguage || i18n.language || 'vi').toLowerCase().startsWith('en') ? 'Career profile saved' : 'Đã lưu hồ sơ nghề nghiệp');
       return saved;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) setConflict(true);
@@ -493,21 +610,31 @@ export default function CareerProfilePage() {
     } finally {
       setIsSaving(false);
     }
-  }, [accessToken, profile, toast, user?.email, user?.name]);
+  }, [accessToken, profile, toast, user?.email, user?.name, isLoading, loadError, conflict, skillDraft, i18n]);
 
   const handleSave = async () => {
+    setGenerationSaveError(null);
+    if (isSaving || isGenerating) return;
     try {
       await saveProfile();
     } catch (error) {
+      setSaveError(profileSaveErrorMessage(error));
       toast.error('Không thể lưu hồ sơ', profileSaveErrorMessage(error));
     }
   };
 
   const handleGenerate = async () => {
-    if (!accessToken) return;
+    if (!accessToken || isLoading || loadError || conflict || isSaving || isGenerating) return;
+    if (skillDraft.trim()) {
+      setSkillFeedback(pendingSkillMessage);
+      skillInputRef.current?.focus();
+      return;
+    }
     setIsGenerating(true);
+    setGenerationSaveError(null);
+    setSaveError('');
     try {
-      const saved = isDirty ? await saveProfile() : profile;
+      const saved = isDirty || isNew ? await saveProfile() : profile;
       const response = await careerProfileApi.generateCvJob(
         {
           templateType,
@@ -521,20 +648,45 @@ export default function CareerProfilePage() {
       if (!response.onlineCvId || !response.operationId) {
         throw new Error('Phản hồi tạo CV không hợp lệ.');
       }
-      toast.success('Đã tiếp nhận yêu cầu tạo CV AI');
+      toast.success(generationCopy('Đã tiếp nhận yêu cầu tạo CV AI', 'AI CV request accepted'));
       navigate(`/cv-editor/${response.onlineCvId}?generation=${encodeURIComponent(response.operationId)}`);
     } catch (error) {
       if (error instanceof ProfileSaveError) {
-        toast.error('Không thể lưu hồ sơ', error.message);
+        const code = generationSaveErrorCode(error);
+        setGenerationSaveError(code);
+        const [vi, en] = GENERATION_SAVE_ERRORS[code];
+        toast.error(generationCopy('Không thể lưu hồ sơ', 'Could not save profile'), generationCopy(vi, en));
       } else {
-        toast.error('Không thể tạo CV AI', 'Không thể tạo CV lúc này. Vui lòng thử lại sau.');
+        toast.error(generationCopy('Không thể tạo CV AI', 'Could not create AI CV'), generationCopy('Không thể tạo CV lúc này. Vui lòng thử lại sau.', 'The CV could not be created. Please try again later.'));
       }
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const generationLanguageLabel = generationLocale === 'vi-VN' ? 'Tiếng Việt' : 'English';
+  const generationLanguageLabel = generationLocale === 'vi-VN' ? (uiVi ? 'Tiếng Việt' : 'Vietnamese') : (uiVi ? 'Tiếng Anh' : 'English');
+  const status = generationSaveError ? (uiVi ? 'Chưa lưu được hồ sơ' : 'Profile not saved') : isGenerating ? (isSaving ? (uiVi ? 'Đang lưu hồ sơ…' : 'Saving profile…') : (uiVi ? 'Đang tạo CV…' : 'Creating CV…')) : isLoading ? 'Đang tải hồ sơ…' : loadError ? 'Chưa tải được hồ sơ' : conflict ? 'Cần tải lại hồ sơ' : isSaving ? 'Đang lưu hồ sơ…' : saveError ? 'Chưa lưu được hồ sơ' : isDirty ? 'Có thay đổi chưa lưu' : isNew ? 'Hồ sơ mới · chưa lưu' : 'Đã lưu hồ sơ';
+  const validationMessage = skillDraft.trim() ? pendingSkillMessage : validateProfileBeforeSave(profile);
+  const sections = [
+    { id: 'base', label: 'Thông tin nền tảng', cue: profile.email.trim() ? 'Đã nhập email' : 'Chưa nhập email', children: [] },
+    ...(['experience', 'education', 'projects', 'skills', 'certificates', 'activities', 'awards'] as ListSectionKey[]).map((key) => ({
+      id: key, label: PROFILE_SECTION_LABELS[key],
+      cue: `${key === 'skills' ? profile.skills.filter((skill) => skill.name.trim()).length : profile[key].filter((entry) => !isBlankEntry(entry)).length} mục`,
+      children: key === 'skills' ? [] : profile[key].map((entry, index) => {
+        const item = asRecord(entry);
+        const name = ['companyName', 'schoolName', 'projectName', 'name', 'organizationName']
+          .map((field) => asText(item[field]).trim()).find(Boolean);
+        const role = asText(item.position).trim() || asText(item.role).trim();
+        return { id: `${key}-${index}`, label: entryLabel(entry, key, index), primary: name || role || `${PROFILE_SECTION_LABELS[key]} ${index + 1}`, secondary: name && role !== name ? role : '' };
+      }),
+    })),
+    { id: 'ai', label: 'Tạo CV AI', cue: 'Bản nháp mới', children: [] },
+  ];
+  const goToSection = (id: string) => {
+    const target = document.getElementById(id);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ behavior: 'instant', block: 'start' });
+  };
 
   const hasContent = useMemo(
     () => Boolean(profile.fullName.trim() || profile.experience.length || profile.education.length || profile.projects.length),
@@ -548,50 +700,64 @@ export default function CareerProfilePage() {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 font-sans dark:bg-slate-950">
       <Header />
-      <main className="flex-1 px-4 pb-16 pt-24 sm:px-6 sm:pt-28 lg:px-8">
-        <div className="mx-auto max-w-5xl space-y-6">
-          <div className="relative overflow-hidden rounded-3xl border border-primary/15 bg-gradient-to-r from-primary/10 via-sky-500/10 to-indigo-500/10 p-6 dark:border-primary/20 sm:p-8">
-            <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+      <main className="flex-1 px-4 pb-48 pt-24 sm:px-6 sm:pt-28 lg:px-8 [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-2 [&_button]:focus-visible:outline-primary [&_select]:focus-visible:ring-2 [&_select]:focus-visible:ring-primary">
+        <div className="mx-auto max-w-[1360px] space-y-6">
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-primary/15 px-3 py-1 text-xs font-bold uppercase tracking-wide text-primary dark:text-primary-light">
-                  <BriefcaseBusiness className="h-3.5 w-3.5" /> Hồ sơ nghề nghiệp
-                </div>
-                <h1 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white sm:text-3xl">Một hồ sơ, nhiều CV phù hợp</h1>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white sm:text-3xl">Hồ sơ nghề nghiệp</h1>
                 <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600 dark:text-slate-300">
-                  Lưu kinh nghiệm, học vấn và thành tích một lần. Khi tạo CV AI, dữ liệu này sẽ được dùng lại để bạn chỉ cần tinh chỉnh bản CV cuối cùng.
+                  Quản lý thông tin dùng chung cho các CV. Chọn mục cần cập nhật, lưu hồ sơ rồi tạo bản nháp CV bằng AI.
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-white/70 bg-white/70 px-3.5 py-2.5 text-xs text-slate-600 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/60 dark:text-slate-300">
-                <span className={`h-2 w-2 rounded-full ${isDirty ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                {isDirty ? 'Có thay đổi chưa lưu' : `Phiên bản ${profile.contentVersion}`}
+              <div className="flex shrink-0 flex-col items-start gap-2">
+                <p role="status" className="text-sm font-medium text-slate-600 dark:text-slate-300">{status}</p>
+                <button type="button" disabled={isLoading || Boolean(loadError)} onClick={() => goToSection('ai')} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary/10 px-4 text-sm font-semibold text-primary disabled:opacity-50 dark:text-primary-light"><Sparkles className="h-4 w-4" />Đến phần tạo CV AI</button>
               </div>
             </div>
           </div>
 
           {conflict && (
             <div className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
-              <span>Hồ sơ đã thay đổi trên thiết bị khác. Bản đang nhập chưa bị xóa; hãy tải dữ liệu mới nhất trước khi tiếp tục.</span>
-              <button type="button" onClick={() => void loadProfile()} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700">Tải lại bản mới nhất</button>
+              <span>Hồ sơ đã thay đổi trên thiết bị khác. Tải lại sẽ thay thế các thay đổi chưa lưu trên trang này.</span>
+              <button type="button" disabled={isLoading || isSaving || isGenerating} onClick={() => { if (!isDirty || window.confirm('Thay thế thay đổi chưa lưu bằng hồ sơ mới nhất?')) void loadProfile(); }} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700">Tải lại bản mới nhất</button>
             </div>
           )}
 
           {loadError && (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">{loadError}</div>
+            <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300"><p>{loadError}</p><button type="button" onClick={() => void loadProfile()} className="mt-3 min-h-11 rounded-xl border border-current px-4 font-semibold">Thử tải lại</button></div>
           )}
 
           {isLoading ? (
-            <div className="flex min-h-80 items-center justify-center rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
-          ) : (
-            <>
-              <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-7">
+            <div role="status" className="flex min-h-80 items-center justify-center gap-3 rounded-3xl border border-slate-200 bg-white text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"><Loader2 className="h-6 w-6 animate-spin text-primary" />Đang tải hồ sơ…</div>
+          ) : !loadError && (
+            <div className="grid items-start gap-6 lg:grid-cols-[256px_minmax(0,1fr)] xl:grid-cols-[296px_minmax(0,1fr)]">
+              <nav aria-label="Các mục trong hồ sơ" className="min-w-0 rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto">
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200 lg:hidden">Chuyển đến mục
+                  <select defaultValue="" onChange={(event) => { goToSection(event.target.value); event.target.value = ''; }} className="mt-2 min-h-11 w-full min-w-0 max-w-full truncate rounded-xl border border-slate-200 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-800"><option value="" disabled>Chọn mục trong hồ sơ</option>{sections.map((section) => <optgroup key={section.id} label={section.label}><option value={section.id}>{section.label} · {section.cue}</option>{section.children.map((child) => <option key={child.id} value={child.id}>{child.label}</option>)}</optgroup>)}</select>
+                </label>
+                <p className="hidden px-3 pb-3 pt-2 text-sm font-semibold text-slate-900 dark:text-slate-100 lg:block">Nội dung hồ sơ</p>
+                <div className="hidden space-y-2 lg:block">{sections.map((section) => (
+                  <div key={section.id}>
+                    <div className="flex items-center">
+                      <a href={`#${section.id}`} onClick={(event) => { event.preventDefault(); goToSection(section.id); }} className="flex min-h-12 min-w-0 flex-1 flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-xl px-3 py-2 text-sm font-semibold leading-5 text-slate-800 transition hover:bg-primary/10 hover:text-primary active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary dark:text-slate-200"><span>{section.label}</span><span className="shrink-0 text-xs font-normal text-slate-600 dark:text-slate-400">{section.cue}</span></a>
+                      {section.children.length > 0 && <button type="button" aria-label={`${expandedSections[section.id] ? 'Thu gọn' : 'Hiện mục con'}: ${section.label}`} aria-expanded={Boolean(expandedSections[section.id])} aria-controls={`nav-${section.id}`} onClick={() => setExpandedSections((current) => ({ ...current, [section.id]: !current[section.id] }))} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-primary/10 hover:text-primary"><ChevronDown aria-hidden="true" className={`h-4 w-4 transition-transform ${expandedSections[section.id] ? 'rotate-180' : ''}`} /></button>}
+                    </div>
+                    {section.children.length > 0 && <ul id={`nav-${section.id}`} hidden={!expandedSections[section.id]} className="mb-2 ml-4 space-y-1 border-l-2 border-slate-200 pl-2 dark:border-slate-700">{section.children.map((child) => <li key={child.id}><a href={`#${child.id}`} title={child.label} onClick={(event) => { event.preventDefault(); goToSection(child.id); }} className="flex min-h-11 min-w-0 flex-col justify-center gap-1 break-words rounded-lg px-3 py-2 text-sm leading-5 text-slate-700 transition hover:bg-primary/10 hover:text-primary active:bg-primary/15 focus-visible:outline-2 focus-visible:outline-primary dark:text-slate-300 [overflow-wrap:anywhere]"><span className="font-medium">{child.primary}</span>{child.secondary && <span className="text-[13px] leading-5 text-slate-600 dark:text-slate-400">{child.secondary}</span>}</a></li>)}</ul>}
+                  </div>
+                ))}</div>
+                <p className="hidden border-t border-slate-100 px-3 pt-3 text-xs leading-relaxed text-slate-500 dark:border-slate-800 dark:text-slate-400 lg:block">Chỉ thêm những mục phù hợp với bạn. Không cần điền tất cả.</p>
+              </nav>
+              <fieldset disabled={isLoading || Boolean(loadError) || isSaving || isGenerating} className="min-w-0 space-y-6 border-0 p-0 disabled:opacity-70" aria-label="Chỉnh sửa hồ sơ nghề nghiệp" aria-busy={isSaving || isGenerating}>
+              <section id="base" tabIndex={-1} aria-label="Thông tin nền tảng" className="scroll-mt-28 rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:border-slate-800 dark:bg-slate-900 sm:p-7">
                 <div className="mb-5 flex items-start gap-3 border-b border-slate-100 pb-5 dark:border-slate-800">
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-light"><UserRound className="h-5 w-5" /></span>
-                  <div><h2 className="text-base font-black text-slate-900 dark:text-white sm:text-lg">Thông tin nền tảng</h2><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Thông tin liên hệ và định hướng có thể dùng trong mọi CV.</p></div>
+                  <div><h2 className="text-base font-black text-slate-900 dark:text-white sm:text-lg">Thông tin nền tảng</h2><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Email là thông tin bắt buộc để lưu. Các trường khác là tuỳ chọn.</p></div>
                 </div>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field label="Họ và tên" value={profile.fullName} onChange={(value) => updateProfile({ fullName: value })} placeholder="Nguyễn Văn A" />
-                  <Field label="Email" value={profile.email} onChange={(value) => updateProfile({ email: value })} type="text" placeholder="email@example.com" />
-                  <Field label="Số điện thoại" value={profile.phone} onChange={(value) => updateProfile({ phone: value })} placeholder="0901 234 567" />
+                  <Field label="Email (bắt buộc)" value={profile.email} onChange={(value) => updateProfile({ email: value })} type="email" autoComplete="email" placeholder="email@example.com" />
+                  <Field label="Số điện thoại" value={profile.phone} onChange={(value) => updateProfile({ phone: value })} type="tel" autoComplete="tel" placeholder="0901 234 567" />
                   <Field label="Liên kết cá nhân" value={profile.link} onChange={(value) => updateProfile({ link: value })} type="url" placeholder="LinkedIn, portfolio..." />
                   <Field label="Địa chỉ" value={profile.address} onChange={(value) => updateProfile({ address: value })} placeholder="Hà Nội" />
                   <Field label="Tiêu đề nghề nghiệp" value={profile.headline} onChange={(value) => updateProfile({ headline: value })} placeholder="Frontend Developer" />
@@ -599,24 +765,45 @@ export default function CareerProfilePage() {
                 </div>
               </section>
 
-              <ListSection section="experience" title="Kinh nghiệm làm việc" description="Các vị trí, trách nhiệm và kết quả nổi bật." icon={<BriefcaseBusiness className="h-5 w-5" />} entries={profile.experience as CareerExperienceEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Công ty" value={entry.companyName} onChange={(value) => updateEntry('experience', index, 'companyName', value)} placeholder="Tên công ty" /><Field label="Vị trí" value={entry.position} onChange={(value) => updateEntry('experience', index, 'position', value)} placeholder="Chức danh" /><Field label="Từ tháng" value={entry.startDate} onChange={(value) => updateEntry('experience', index, 'startDate', value)} type="month" /><Field label="Đến tháng" value={entry.endDate} onChange={(value) => updateEntry('experience', index, 'endDate', value)} type="month" /><TextField label="Mô tả và thành tựu" value={entry.description} onChange={(value) => updateEntry('experience', index, 'description', value)} placeholder="Mô tả trách nhiệm, kết quả, con số nổi bật..." /></>} />
+              <ListSection section="experience" title="Kinh nghiệm làm việc" description="Các vị trí, trách nhiệm và kết quả nổi bật." icon={<BriefcaseBusiness className="h-5 w-5" />} entries={profile.experience as CareerExperienceEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Công ty" value={entry.companyName} onChange={(value) => updateEntry('experience', index, 'companyName', value)} placeholder="Tên công ty" /><Field label="Vị trí" value={entry.position} onChange={(value) => updateEntry('experience', index, 'position', value)} placeholder="Chức danh" /><Field label="Từ tháng" value={entry.startDate} onChange={(value) => updateEntry('experience', index, 'startDate', value)} type="month" /><Field label="Đến tháng" value={entry.endDate} onChange={(value) => updateEntry('experience', index, 'endDate', value)} type="month" /><TextField autoGrow label="Mô tả và thành tựu" value={entry.description} onChange={(value) => updateEntry('experience', index, 'description', value)} placeholder="Mô tả trách nhiệm, kết quả, con số nổi bật..." /></>} />
               <ListSection section="education" title="Học vấn" description="Bằng cấp, chuyên ngành và quá trình đào tạo." icon={<GraduationCap className="h-5 w-5" />} entries={profile.education as CareerEducationEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Trường / cơ sở đào tạo" value={entry.schoolName} onChange={(value) => updateEntry('education', index, 'schoolName', value)} placeholder="Tên trường" /><Field label="Bằng cấp" value={entry.degree} onChange={(value) => updateEntry('education', index, 'degree', value)} placeholder="Cử nhân, Kỹ sư..." /><Field label="Chuyên ngành" value={entry.major} onChange={(value) => updateEntry('education', index, 'major', value)} placeholder="Công nghệ thông tin" /><Field label="Từ tháng" value={entry.startDate} onChange={(value) => updateEntry('education', index, 'startDate', value)} type="month" /><Field label="Đến tháng" value={entry.endDate} onChange={(value) => updateEntry('education', index, 'endDate', value)} type="month" /><TextField label="Mô tả" value={entry.description} onChange={(value) => updateEntry('education', index, 'description', value)} placeholder="GPA, môn học hoặc hoạt động nổi bật..." /></>} />
-              <ListSection section="projects" title="Dự án" description="Dự án cá nhân hoặc chuyên môn, tách biệt với hoạt động cộng đồng." icon={<FolderKanban className="h-5 w-5" />} entries={profile.projects as CareerProjectEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Tên dự án" value={entry.projectName} onChange={(value) => updateEntry('projects', index, 'projectName', value)} placeholder="Tên sản phẩm / dự án" /><Field label="Vai trò" value={entry.role} onChange={(value) => updateEntry('projects', index, 'role', value)} placeholder="Người phát triển, trưởng nhóm..." /><Field label="Từ tháng" value={entry.startDate} onChange={(value) => updateEntry('projects', index, 'startDate', value)} type="month" /><Field label="Đến tháng" value={entry.endDate} onChange={(value) => updateEntry('projects', index, 'endDate', value)} type="month" /><Field label="Công nghệ sử dụng" value={entry.technologies} onChange={(value) => updateEntry('projects', index, 'technologies', value)} placeholder="React, NestJS, PostgreSQL" /><TextField label="Mô tả dự án" value={entry.description} onChange={(value) => updateEntry('projects', index, 'description', value)} placeholder="Mục tiêu, đóng góp và kết quả..." /></>} />
-              <ListSection section="skills" title="Kỹ năng" description="Danh sách kỹ năng để AI chọn lọc theo từng vị trí ứng tuyển." icon={<Wrench className="h-5 w-5" />} entries={profile.skills as CareerSkillEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Kỹ năng" value={entry.name} onChange={(value) => updateEntry('skills', index, 'name', value)} placeholder="TypeScript" /><Field label="Mức độ / ghi chú" value={entry.level} onChange={(value) => updateEntry('skills', index, 'level', value)} placeholder="Thành thạo, 3 năm kinh nghiệm..." /></>} />
+              <ListSection section="projects" title="Dự án" description="Dự án cá nhân hoặc chuyên môn, tách biệt với hoạt động cộng đồng." icon={<FolderKanban className="h-5 w-5" />} entries={profile.projects as CareerProjectEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Tên dự án" value={entry.projectName} onChange={(value) => updateEntry('projects', index, 'projectName', value)} placeholder="Tên sản phẩm / dự án" /><Field label="Vai trò" value={entry.role} onChange={(value) => updateEntry('projects', index, 'role', value)} placeholder="Người phát triển, trưởng nhóm..." /><Field label="Từ tháng" value={entry.startDate} onChange={(value) => updateEntry('projects', index, 'startDate', value)} type="month" /><Field label="Đến tháng" value={entry.endDate} onChange={(value) => updateEntry('projects', index, 'endDate', value)} type="month" /><Field label="Công nghệ sử dụng" value={entry.technologies} onChange={(value) => updateEntry('projects', index, 'technologies', value)} placeholder="React, NestJS, PostgreSQL" /><TextField autoGrow label="Mô tả dự án" value={entry.description} onChange={(value) => updateEntry('projects', index, 'description', value)} placeholder="Mục tiêu, đóng góp và kết quả..." /></>} />
+              <section id="skills" tabIndex={-1} aria-label="Kỹ năng" className="min-w-0 scroll-mt-28 rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-7">
+                <div className="mb-5 flex items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary dark:text-primary-light"><Wrench className="h-5 w-5" /></span>
+                  <div><h2 className="text-base font-black text-slate-900 dark:text-white sm:text-lg">Kỹ năng</h2><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Tuỳ chọn · {profile.skills.filter((skill) => skill.name.trim()).length} kỹ năng đã nhập</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Thêm từng kỹ năng để AI chọn lọc theo vị trí ứng tuyển.</p></div>
+                </div>
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  {profile.skills.map((skill, index) => (
+                    <span key={index} className="inline-flex max-w-full items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 pl-3 dark:border-slate-700 dark:bg-slate-800">
+                      <span className="min-w-0 break-all text-sm text-slate-800 dark:text-slate-100">{skill.name.trim() || 'Kỹ năng chưa có tên'}</span>
+                      <button type="button" aria-label={`Xóa kỹ năng ${skill.name || index + 1}`} onClick={() => removeEntry('skills', index)} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:text-rose-600 dark:text-slate-400"><Trash2 aria-hidden="true" className="h-4 w-4" /></button>
+                    </span>
+                  ))}
+                </div>
+                {profile.skills.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">Chưa thêm kỹ năng.</p>}
+                <div className="mt-4 flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end">
+                  <label className="min-w-0 flex-1 text-xs font-bold text-slate-700 dark:text-slate-200">Tên kỹ năng
+                    <input ref={skillInputRef} value={skillDraft} onChange={(event) => { setSkillDraft(event.target.value); setSkillFeedback(''); }} onCompositionStart={() => { skillComposing.current = true; }} onCompositionEnd={() => { skillComposing.current = false; }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && !skillComposing.current && event.keyCode !== 229) { event.preventDefault(); addSkill(); } }} aria-describedby="skill-feedback" placeholder="Ví dụ: TypeScript" className="mt-1.5 min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
+                  </label>
+                  <button type="button" onClick={addSkill} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white hover:bg-primary-dark"><Plus aria-hidden="true" className="h-4 w-4" />Thêm kỹ năng</button>
+                </div>
+                <p id="skill-feedback" role="status" className="mt-2 text-xs text-slate-600 dark:text-slate-300">{skillFeedback || (skillDraft.trim() ? pendingSkillMessage : 'Nhấn Enter hoặc Thêm kỹ năng để thêm vào danh sách.')}</p>
+              </section>
               <ListSection section="certificates" title="Chứng chỉ" description="Các chứng chỉ chuyên môn và liên kết xác thực (nếu có)." icon={<Award className="h-5 w-5" />} entries={profile.certificates as CareerCertificateEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Tên chứng chỉ" value={entry.name} onChange={(value) => updateEntry('certificates', index, 'name', value)} placeholder="AWS Certified..." /><Field label="Đơn vị cấp" value={entry.issuer} onChange={(value) => updateEntry('certificates', index, 'issuer', value)} placeholder="Đơn vị cấp chứng chỉ" /><Field label="Ngày cấp" value={entry.date} onChange={(value) => updateEntry('certificates', index, 'date', value)} type="month" /><Field label="Liên kết xác thực" value={entry.credentialUrl} onChange={(value) => updateEntry('certificates', index, 'credentialUrl', value)} type="url" placeholder="https://..." /></>} />
               <ListSection section="activities" title="Hoạt động" description="Hoạt động câu lạc bộ, thiện nguyện hoặc cộng đồng." icon={<UsersRound className="h-5 w-5" />} entries={profile.activities as CareerActivityEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Tổ chức" value={entry.organizationName} onChange={(value) => updateEntry('activities', index, 'organizationName', value)} placeholder="Tên tổ chức" /><Field label="Vai trò" value={entry.position} onChange={(value) => updateEntry('activities', index, 'position', value)} placeholder="Tình nguyện viên, thành viên..." /><Field label="Từ tháng" value={entry.startDate} onChange={(value) => updateEntry('activities', index, 'startDate', value)} type="month" /><Field label="Đến tháng" value={entry.endDate} onChange={(value) => updateEntry('activities', index, 'endDate', value)} type="month" /><TextField label="Mô tả hoạt động" value={entry.description} onChange={(value) => updateEntry('activities', index, 'description', value)} placeholder="Vai trò và đóng góp..." /></>} />
               <ListSection section="awards" title="Giải thưởng" description="Giải thưởng, học bổng hoặc ghi nhận nổi bật." icon={<Trophy className="h-5 w-5" />} entries={profile.awards as CareerAwardEntry[]} onAdd={addEntry} onRemove={removeEntry} onMove={moveEntry} renderFields={(entry, index) => <><Field label="Tên giải thưởng" value={entry.name} onChange={(value) => updateEntry('awards', index, 'name', value)} placeholder="Tên giải thưởng" /><Field label="Đơn vị trao" value={entry.issuer} onChange={(value) => updateEntry('awards', index, 'issuer', value)} placeholder="Đơn vị / cuộc thi" /><Field label="Thời điểm" value={entry.date} onChange={(value) => updateEntry('awards', index, 'date', value)} type="month" /><TextField label="Mô tả" value={entry.description} onChange={(value) => updateEntry('awards', index, 'description', value)} placeholder="Thành tích hoặc ý nghĩa giải thưởng..." /></>} />
 
-              <section className="rounded-3xl border border-primary/20 bg-primary/[0.04] p-5 shadow-sm dark:border-primary/30 dark:bg-primary/[0.08] sm:p-7">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <section id="ai" tabIndex={-1} aria-label="Tạo CV AI" className="scroll-mt-28 rounded-3xl border border-primary/20 bg-primary/[0.04] p-5 shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:border-primary/30 dark:bg-primary/[0.08] sm:p-7">
+                <div className="flex flex-col gap-5">
                   <div className="flex items-start gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary dark:text-primary-light"><Sparkles className="h-5 w-5" /></span><div><h2 className="text-base font-black text-slate-900 dark:text-white sm:text-lg">Tạo CV AI từ hồ sơ này</h2><p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">AI sẽ tạo một bản nháp mới. Bạn vẫn có thể mở trình chỉnh sửa để thay đổi nội dung và bố cục trước khi sử dụng.</p></div></div>
-                  <div className="flex w-full flex-col gap-3 sm:w-auto sm:min-w-64">
+                  <div className="grid min-w-0 gap-4 sm:grid-cols-2">
                     <label className="space-y-1.5"><span className="text-xs font-bold text-slate-700 dark:text-slate-200">Mẫu CV</span><select value={templateType} onChange={(event) => setTemplateType(event.target.value as 'template1' | 'template2')} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-primary dark:border-slate-700 dark:bg-slate-800 dark:text-white"><option value="template1">Cổ điển chuyên nghiệp</option><option value="template2">Hiện đại nổi bật</option></select></label>
                     <label className="space-y-1.5"><span className="text-xs font-bold text-slate-700 dark:text-slate-200">Mã công việc (tuỳ chọn)</span><input value={jobId} onChange={(event) => setJobId(event.target.value)} placeholder="Dùng để tối ưu CV theo việc làm" className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-primary dark:border-slate-700 dark:bg-slate-800 dark:text-white" /></label>
                   </div>
                 </div>
-              <div className="mt-5 flex flex-col-reverse gap-4 border-t border-primary/10 pt-5 sm:flex-row sm:items-end sm:justify-between">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">{hasContent ? 'Dữ liệu sẽ được lưu làm nguồn dùng chung cho các CV sau.' : 'Thêm ít nhất thông tin cơ bản trước khi tạo CV.'}</p>
+              <div className="mt-5 flex flex-col gap-4 border-t border-primary/10 pt-5">
+                  <p className="text-sm text-slate-600 dark:text-slate-300">{hasContent ? 'Khi tạo CV, thay đổi chưa lưu sẽ được lưu trước. Nội dung CV sẽ dùng ngôn ngữ bạn chọn bên dưới.' : 'Thêm thông tin cơ bản trước khi tạo CV.'}</p>
                   <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-end">
                     <fieldset className="space-y-1.5">
                       <legend className="text-xs font-bold text-slate-700 dark:text-slate-200">Ngôn ngữ CV</legend>
@@ -639,20 +826,21 @@ export default function CareerProfilePage() {
                         </button>
                       </div>
                     </fieldset>
-                    <button type="button" disabled={isGenerating || isSaving || !hasContent} onClick={() => void handleGenerate()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white shadow-md shadow-primary/20 transition hover:bg-primary-dark active:scale-95 disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Tạo CV AI bằng ${generationLanguageLabel}`}>
+                    <button type="button" disabled={isGenerating || isSaving || !hasContent || conflict || Boolean(validationMessage)} onClick={() => void handleGenerate()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white shadow-md shadow-primary/20 transition hover:bg-primary-dark active:scale-95 disabled:cursor-not-allowed disabled:opacity-50" aria-label={`${uiVi ? 'Tạo CV AI bằng' : 'Create AI CV in'} ${generationLanguageLabel}`}>
                       {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Globe className="h-4 w-4" /><Sparkles className="h-4 w-4" /></>}
-                      {isGenerating ? `Đang tạo CV · ${generationLanguageLabel}...` : `Tạo CV AI · ${generationLanguageLabel}`}
+                      {isGenerating ? `${uiVi ? 'Đang tạo CV' : 'Creating CV'} · ${generationLanguageLabel}...` : `${uiVi ? 'Tạo CV AI' : 'Create AI CV'} · ${generationLanguageLabel}`}
                     </button>
                   </div>
                 </div>
                </section>
 
-              <div className="sticky bottom-4 z-10 flex flex-col items-stretch justify-end gap-3 rounded-2xl border border-slate-200/80 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 sm:flex-row sm:items-center">
-                {isDirty && <span className="mr-auto text-xs text-amber-600 dark:text-amber-400">Bạn có thay đổi chưa lưu</span>}
-                <button type="button" onClick={() => void handleSave()} disabled={!isDirty || isSaving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-primary/20 transition hover:bg-primary-dark active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{isSaving ? 'Đang lưu...' : 'Lưu hồ sơ'}</button>
-              </div>
-            </>
+              </fieldset>
+            </div>
           )}
+          <div className="sticky bottom-4 z-30 ml-auto mr-20 flex max-w-4xl flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 sm:bottom-6 sm:mr-24 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-4 [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-primary">
+            <div className="min-w-0" aria-live="polite"><p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{status}</p><p className="mt-1 break-words text-xs leading-relaxed text-slate-500 dark:text-slate-400">{generationSaveErrorText || (isGenerating ? (uiVi ? 'Vui lòng chờ, các trường tạm khoá để giữ đúng nội dung.' : 'Please wait. Fields are temporarily locked to preserve your content.') : saveError || (isLoading ? 'Chờ tải dữ liệu trước khi chỉnh sửa.' : loadError ? 'Thử tải lại hồ sơ để tiếp tục.' : conflict ? 'Tải lại bản mới nhất trước khi lưu.' : isSaving ? 'Vui lòng chờ, các trường tạm khoá để giữ đúng nội dung.' : validationMessage || (!isDirty && !isNew ? 'Chưa có thay đổi mới để lưu.' : 'Nhấn Lưu hồ sơ để giữ lại thay đổi.')))}</p></div>
+            <button type="button" onClick={() => void handleSave()} disabled={isLoading || Boolean(loadError) || conflict || (!isDirty && !isNew) || isSaving || isGenerating || Boolean(validationMessage)} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-white transition hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50">{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{isSaving ? 'Đang lưu…' : 'Lưu hồ sơ'}</button>
+          </div>
         </div>
       </main>
       <Footer />

@@ -652,8 +652,7 @@ export default function CandidateAssistant() {
             ))}
             {isLoading && (
               <div role="status" className="flex items-center gap-2 rounded-2xl bg-white p-3 text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-300">
-                <Loader2 className="h-4 w-4 animate-spin" /> Đang tìm thông tin
-                có căn cứ…
+                <Loader2 className="h-4 w-4 animate-spin" /> Đang suy nghĩ...
               </div>
             )}
             {error && (
