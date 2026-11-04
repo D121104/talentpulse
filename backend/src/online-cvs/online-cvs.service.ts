@@ -439,6 +439,101 @@ function draftText(value: unknown, ...keys: string[]): string | undefined {
   return undefined;
 }
 
+function localizedCvText(
+  source: string | null | undefined,
+  generated: string | null | undefined,
+  locale: OnlineCvLocale,
+  warnings: string[],
+): string | null {
+  if (generated?.trim()) return generated;
+  if (locale !== 'en-US') return source || null;
+  if (
+    source?.trim() &&
+    !warnings.some((warning) =>
+      warning.startsWith('cv_generation.localization_omission'),
+    )
+  ) {
+    warnings.push('cv_generation.localization_omission=narrative:unresolved');
+  }
+  return null;
+}
+
+const RETRY_TEXT_FIELDS = {
+  workExperience: ['position', 'description'],
+  education: ['degree', 'major', 'description'],
+  projects: ['role', 'description'],
+  certificates: ['name'],
+  activities: ['position', 'description'],
+  awards: ['name', 'description'],
+} as const;
+
+type LocalizationRetry = {
+  contentVersion: number;
+  fields: Record<string, string>;
+  skills: string[];
+};
+
+function localizedRetryInput(cv: OnlineCV): OnlineCV {
+  const retry = cv.generationSnapshot?.localizationRetry as
+    | LocalizationRetry
+    | undefined;
+  if (
+    cv.revision?.locale !== 'en-US' ||
+    retry?.contentVersion !== cv.contentVersion ||
+    !cv.revision?.warnings?.some(
+      (warning) =>
+        warning.includes('localization_omission') ||
+        warning.includes('skill_member_locale_omission'),
+    )
+  )
+    return cv;
+  const input = { ...cv };
+  if (
+    !input.careerObjective &&
+    typeof retry.fields?.careerObjective === 'string'
+  ) {
+    input.careerObjective = retry.fields.careerObjective;
+  }
+  for (const section of Object.keys(
+    RETRY_TEXT_FIELDS,
+  ) as (keyof typeof RETRY_TEXT_FIELDS)[]) {
+    const entries = (cv[section] || []).map((entry, index) => {
+      const restored = { ...entry };
+      for (const field of RETRY_TEXT_FIELDS[section]) {
+        const value = retry.fields?.[`${section}.${index}.${field}`];
+        if (!restored[field] && typeof value === 'string')
+          restored[field] = value;
+      }
+      return restored;
+    });
+    Object.assign(input, { [section]: entries });
+  }
+  return input;
+}
+
+function localizationRetry(
+  source: Pick<OnlineCV, keyof typeof RETRY_TEXT_FIELDS | 'careerObjective'>,
+  output: Pick<OnlineCV, keyof typeof RETRY_TEXT_FIELDS | 'careerObjective'>,
+  contentVersion: number,
+  skills: string[],
+): LocalizationRetry {
+  const fields: Record<string, string> = {};
+  if (source.careerObjective && !output.careerObjective)
+    fields.careerObjective = source.careerObjective;
+  for (const section of Object.keys(
+    RETRY_TEXT_FIELDS,
+  ) as (keyof typeof RETRY_TEXT_FIELDS)[]) {
+    (output[section] || []).forEach((entry, index) => {
+      for (const field of RETRY_TEXT_FIELDS[section]) {
+        const value = source[section]?.[index]?.[field];
+        if (!entry[field] && typeof value === 'string' && value.trim())
+          fields[`${section}.${index}.${field}`] = value;
+      }
+    });
+  }
+  return { contentVersion, fields, skills };
+}
+
 function draftList(value: unknown, key: string): string[] {
   const entries = Array.isArray(value)
     ? value
@@ -659,6 +754,12 @@ export class OnlineCVsService {
       trace_id: randomUUID(),
       operation_attempt_id: randomUUID(),
     };
+    const inputCv = localizedRetryInput(cv);
+    const retry = cv.generationSnapshot?.localizationRetry as
+      | LocalizationRetry
+      | undefined;
+    const retrySkills =
+      inputCv !== cv && Array.isArray(retry?.skills) ? retry.skills : [];
     const profile = {
       candidate_id: user._id,
       // Contact PII stays in canonical PostgreSQL data and is restored from the CV
@@ -669,24 +770,26 @@ export class OnlineCVsService {
       link: null,
       address: null,
       headline: cv.position || null,
-      career_objective: cv.careerObjective || null,
-      skills: currentCvSkillLiterals(cv),
-      experience: (cv.workExperience || []).map((entry) => ({
+      career_objective: inputCv.careerObjective || null,
+      skills: retrySkills.length
+        ? Array.from(new Set([...currentCvSkillLiterals(cv), ...retrySkills]))
+        : currentCvSkillLiterals(cv),
+      experience: (inputCv.workExperience || []).map((entry) => ({
         company_name: entry.companyName || null,
         position: entry.position || null,
         start_date: entry.startDate || null,
         end_date: entry.endDate || null,
         description: entry.description || null,
       })),
-      education: (cv.education || []).map((entry) => ({
+      education: (inputCv.education || []).map((entry) => ({
         school_name: entry.schoolName || null,
-        degree: null,
+        degree: entry.degree || null,
         major: entry.major || null,
         start_date: entry.startDate || null,
         end_date: entry.endDate || null,
         description: entry.description || null,
       })),
-      projects: (cv.projects || [])
+      projects: (inputCv.projects || [])
         .filter((entry) => Boolean(entry.projectName))
         .map((entry) => ({
           project_name: entry.projectName,
@@ -696,10 +799,10 @@ export class OnlineCVsService {
           description: entry.description || null,
           technologies: entry.technologies || [],
         })),
-      certificates: (cv.certificates || [])
+      certificates: (inputCv.certificates || [])
         .map((entry) => (typeof entry === 'string' ? entry : entry?.name || ''))
         .filter(Boolean),
-      activities: (cv.activities || [])
+      activities: (inputCv.activities || [])
         .map((entry) =>
           typeof entry === 'string'
             ? entry
@@ -708,11 +811,11 @@ export class OnlineCVsService {
                 .join(' - '),
         )
         .filter(Boolean),
-      awards: (cv.awards || [])
+      awards: (inputCv.awards || [])
         .map((entry) =>
           typeof entry === 'string'
             ? entry
-            : [entry?.name, entry?.date].filter(Boolean).join(' - '),
+            : [entry?.name, entry?.description].filter(Boolean).join(' - '),
         )
         .filter(Boolean),
     };
@@ -755,21 +858,34 @@ export class OnlineCVsService {
         'Dữ liệu trả về từ dịch vụ AI không hợp lệ',
       );
     }
-    const sourceExperiences = cv.workExperience || [];
+    const warnings = [...(generated.warnings || [])];
+    const text = (
+      source: string | null | undefined,
+      value: string | null | undefined,
+    ) => localizedCvText(source, value, locale, warnings);
+    const sourceExperiences = inputCv.workExperience || [];
     const workExperience = selectedSourceRows(
       sourceExperiences,
       generated.work_experience,
     ).map(({ source: entry, draft }) => ({
       ...entry,
-      description: draftDescription(
+      position: text(entry.position, draftText(draft, 'position')),
+      description: text(
         entry.description,
-        draft.bullets,
-        draft.description,
+        draftDescription(undefined, draft.bullets, draft.description),
       ),
     }));
-    const education = (cv.education || []).map((entry, index) => ({
+    const education = (inputCv.education || []).map((entry, index) => ({
       ...entry,
-      description: generated.education[index]?.description || entry.description,
+      degree: text(
+        entry.degree,
+        draftText(generated.education[index], 'degree'),
+      ),
+      major: text(entry.major, draftText(generated.education[index], 'major')),
+      description: text(
+        entry.description,
+        draftText(generated.education[index], 'description'),
+      ),
     }));
     const groups = skillGroups(
       generated.skills,
@@ -781,21 +897,65 @@ export class OnlineCVsService {
       description: entry.description,
     }));
     const projects = selectedSourceRows(
-      (cv.projects || []).filter((entry) => Boolean(entry.projectName)),
+      (inputCv.projects || []).filter((entry) => Boolean(entry.projectName)),
       generated.projects,
     ).map(({ source, draft }) => ({
+      ...source,
       projectName: source.projectName,
-      role: source.role,
+      role: text(source.role, draftText(draft, 'role')),
       startDate: source.startDate,
       endDate: source.endDate,
-      description: draftDescription(
+      description: text(
         source.description,
-        draft.bullets,
-        draft.description,
+        draftDescription(undefined, draft.bullets, draft.description),
       ),
       technologies: source.technologies,
     }));
-    const warnings = generated.warnings || [];
+    const certificates = (inputCv.certificates || []).map((entry, index) => ({
+      ...entry,
+      name: text(entry.name, draftText(generated.certificates[index])) || '',
+    }));
+    const activities = (inputCv.activities || []).map((entry, index) => ({
+      ...entry,
+      position:
+        locale === 'en-US' ? text(entry.position, undefined) : entry.position,
+      description: text(
+        entry.description,
+        draftText(generated.activities[index]),
+      ),
+    }));
+    const awards = (inputCv.awards || []).map((entry, index) => ({
+      ...entry,
+      name:
+        locale === 'en-US'
+          ? entry.description
+            ? 'Award'
+            : text(entry.name, draftText(generated.awards[index])) || 'Award'
+          : entry.name,
+      description:
+        locale === 'en-US' && !entry.description
+          ? null
+          : text(entry.description, draftText(generated.awards[index])),
+    }));
+    const careerObjective = text(
+      inputCv.careerObjective,
+      generated.career_objective,
+    );
+    if (
+      locale === 'en-US' &&
+      [
+        ...(inputCv.workExperience || []),
+        ...(inputCv.projects || []),
+        ...(inputCv.education || []),
+      ].some((entry) => entry.description?.trim()) &&
+      ![...workExperience, ...projects, ...education].some((entry) =>
+        entry.description?.trim(),
+      )
+    ) {
+      throw new BadGatewayException(
+        'AI could not localize the CV narratives; the original CV was not changed',
+      );
+    }
     const applicationPosition = applicationHeading(
       job,
       locale,
@@ -873,11 +1033,74 @@ export class OnlineCVsService {
                 : {}),
             },
           },
-          careerObjective: generated.career_objective || cv.careerObjective,
+          ...(locale === 'en-US' &&
+          warnings.some(
+            (warning) =>
+              warning.startsWith('cv_generation.localization_omission') ||
+              warning.includes('skill_member_locale_omission'),
+          )
+            ? {
+                generationSnapshot: {
+                  ...cv.generationSnapshot,
+                  localizationRetry: localizationRetry(
+                    {
+                      ...inputCv,
+                      workExperience: selectedSourceRows(
+                        sourceExperiences,
+                        generated.work_experience,
+                      ).map(({ source }) => source),
+                      projects: selectedSourceRows(
+                        (inputCv.projects || []).filter((entry) =>
+                          Boolean(entry.projectName),
+                        ),
+                        generated.projects,
+                      ).map(({ source }) => source),
+                    },
+                    {
+                      workExperience,
+                      education,
+                      projects,
+                      certificates,
+                      activities,
+                      awards,
+                      careerObjective,
+                    },
+                    generated.content_version,
+                    warnings.some((warning) =>
+                      warning.includes('skill_member_locale_omission'),
+                    )
+                      ? profile.skills.filter(
+                          (skill) =>
+                            !groups.some((group) =>
+                              group.members.includes(skill),
+                            ),
+                        )
+                      : [],
+                  ),
+                  previousCvContent: cv.generationSnapshot
+                    ?.previousCvContent || {
+                    position: cv.position,
+                    careerObjective: cv.careerObjective,
+                    workExperience: cv.workExperience,
+                    education: cv.education,
+                    projects: cv.projects,
+                    certificates: cv.certificates,
+                    activities: cv.activities,
+                    awards: cv.awards,
+                    skills: cv.skills,
+                    skillGroups: cv.revision?.sourceTrace?.skillGroups,
+                  },
+                },
+              }
+            : {}),
+          careerObjective,
           workExperience,
           education,
           skills,
           projects,
+          certificates,
+          activities,
+          awards,
           sectionOrder: generated.section_order,
           // Editor-only CVs are rendered by the client template, never by PDF/Cloudinary.
           htmlContent: null,
@@ -1046,7 +1269,7 @@ export class OnlineCVsService {
           technologies: entry.technologies || [],
         })),
       certificates: normalizedProfile.certificates
-        .map((entry) => [entry?.name, entry?.date].filter(Boolean).join(' - '))
+        .map((entry) => entry?.name || '')
         .filter(Boolean),
       activities: normalizedProfile.activities
         .map((entry) =>
@@ -1062,7 +1285,9 @@ export class OnlineCVsService {
         )
         .filter(Boolean),
       awards: normalizedProfile.awards
-        .map((entry) => [entry?.name, entry?.date].filter(Boolean).join(' - '))
+        .map((entry) =>
+          [entry?.name, entry?.description].filter(Boolean).join(' - '),
+        )
         .filter(Boolean),
     };
     const sourceVersion = createHash('sha256')
@@ -1129,6 +1354,11 @@ export class OnlineCVsService {
       );
     }
 
+    const warnings = [...(generated.warnings || [])];
+    const text = (
+      source: string | null | undefined,
+      value: string | null | undefined,
+    ) => localizedCvText(source, value, locale, warnings);
     const sourceExperiences = normalizedProfile.experience;
     const sourceProjects = normalizedProfile.projects.filter((entry) =>
       Boolean(entry.projectName),
@@ -1142,13 +1372,16 @@ export class OnlineCVsService {
         projectName: source.projectName,
         // Project names, dates and technologies are canonical profile facts;
         // only the role and narrative are localized by the AI response.
-        role: draftText(generatedProject, 'role') || source.role,
+        role: text(source.role, draftText(generatedProject, 'role')),
         startDate: source.startDate,
         endDate: source.endDate,
-        description: draftDescription(
+        description: text(
           source.description,
-          draftList(generatedProject, 'bullets'),
-          draftText(generatedProject, 'description'),
+          draftDescription(
+            undefined,
+            draftList(generatedProject, 'bullets'),
+            draftText(generatedProject, 'description'),
+          ),
         ),
         technologies: source.technologies,
       };
@@ -1186,7 +1419,7 @@ export class OnlineCVsService {
         contentVersion: generated.content_version,
         locale,
         generatedAt: new Date().toISOString(),
-        warnings: generated.warnings || [],
+        warnings,
         sourceTrace: {
           requestId: generated.request_id,
           traceId: generated.trace_id,
@@ -1217,32 +1450,44 @@ export class OnlineCVsService {
       email: normalizedProfile.contact.email,
       link: normalizedProfile.contact.link,
       address: normalizedProfile.contact.address,
-      careerObjective:
-        generated.career_objective || normalizedProfile.objective,
+      careerObjective: text(
+        normalizedProfile.objective,
+        generated.career_objective,
+      ),
       education: normalizedProfile.education.map((entry, index) => ({
         // Preserve school and dates as proper/canonical facts; localized degree,
         // major and description are accepted when FastAPI returns them.
         schoolName: entry.schoolName,
-        degree: draftText(generated.education[index], 'degree') || entry.degree,
-        major: draftText(generated.education[index], 'major') || entry.major,
+        degree: text(
+          entry.degree,
+          draftText(generated.education[index], 'degree'),
+        ),
+        major: text(
+          entry.major,
+          draftText(generated.education[index], 'major'),
+        ),
         startDate: entry.startDate,
         endDate: entry.endDate,
-        description:
-          draftText(generated.education[index], 'description') ||
+        description: text(
           entry.description,
+          draftText(generated.education[index], 'description'),
+        ),
       })),
       workExperience: selectedSourceRows(
         sourceExperiences,
         generated.work_experience,
       ).map(({ source: entry, draft }) => ({
         companyName: entry.companyName,
-        position: draftText(draft, 'position') || entry.position,
+        position: text(entry.position, draftText(draft, 'position')),
         startDate: entry.startDate,
         endDate: entry.endDate,
-        description: draftDescription(
+        description: text(
           entry.description,
-          draftList(draft, 'bullets'),
-          draftText(draft, 'description'),
+          draftDescription(
+            undefined,
+            draftList(draft, 'bullets'),
+            draftText(draft, 'description'),
+          ),
         ),
       })),
       skills: filterMeaningfulCvEntries(
@@ -1270,13 +1515,13 @@ export class OnlineCVsService {
         const localized = generated.activities[index];
         return {
           organizationName: entry.organizationName,
-          position: entry.position,
+          position:
+            locale === 'en-US'
+              ? text(entry.position, undefined)
+              : entry.position,
           startDate: entry.startDate,
           endDate: entry.endDate,
-          description:
-            typeof localized === 'string' && localized.trim()
-              ? localized
-              : entry.description,
+          description: text(entry.description, draftText(localized)),
         };
       }),
       certificates: normalizedProfile.certificates.map((entry, index) => {
@@ -1284,10 +1529,7 @@ export class OnlineCVsService {
         return {
           // Certificate names are displayed as the localized contract value;
           // issuer/date/credential URL remain canonical profile facts.
-          name:
-            typeof localized === 'string' && localized.trim()
-              ? localized
-              : entry.name,
+          name: text(entry.name, draftText(localized)) || '',
           issuer: entry.issuer,
           date: entry.date,
           credentialUrl: entry.credentialUrl,
@@ -1296,13 +1538,18 @@ export class OnlineCVsService {
       awards: normalizedProfile.awards.map((entry, index) => {
         const localized = generated.awards[index];
         return {
-          name: entry.name,
+          name:
+            locale === 'en-US'
+              ? entry.description
+                ? 'Award'
+                : text(entry.name, draftText(localized)) || 'Award'
+              : entry.name,
           issuer: entry.issuer,
           date: entry.date,
           description:
-            typeof localized === 'string' && localized.trim()
-              ? localized
-              : entry.description,
+            locale === 'en-US' && !entry.description
+              ? null
+              : text(entry.description, draftText(localized)),
         };
       }),
       sectionOrder: generated.section_order,
@@ -1314,6 +1561,68 @@ export class OnlineCVsService {
       isDeleted: false,
       createdBy: { _id: user._id, email: user.email },
     };
+
+    if (
+      locale === 'en-US' &&
+      [
+        ...sourceExperiences,
+        ...sourceProjects,
+        ...normalizedProfile.education,
+      ].some((entry) => entry.description?.trim()) &&
+      ![
+        ...(newCvData.workExperience || []),
+        ...projectDrafts,
+        ...(newCvData.education || []),
+      ].some((entry) => entry.description?.trim())
+    ) {
+      throw new BadGatewayException(
+        'AI could not localize the CV narratives; the original profile was not changed',
+      );
+    }
+
+    if (
+      locale === 'en-US' &&
+      warnings.some(
+        (warning) =>
+          warning.includes('localization_omission') ||
+          warning.includes('skill_member_locale_omission'),
+      )
+    ) {
+      newCvData.generationSnapshot = {
+        ...normalizedProfile,
+        localizationRetry: localizationRetry(
+          {
+            careerObjective: normalizedProfile.objective,
+            workExperience: selectedSourceRows(
+              sourceExperiences,
+              generated.work_experience,
+            ).map(({ source }) => source),
+            education: normalizedProfile.education,
+            projects: selectedSourceRows(
+              sourceProjects,
+              generated.projects,
+            ).map(({ source }) => source),
+            certificates: normalizedProfile.certificates,
+            activities: normalizedProfile.activities,
+            awards: normalizedProfile.awards,
+          },
+          newCvData as OnlineCV,
+          targetCvId ? (pendingGeneration?.expectedContentVersion || 0) + 1 : 1,
+          warnings.some((warning) =>
+            warning.includes('skill_member_locale_omission'),
+          )
+            ? candidate.skills.filter(
+                (skill) =>
+                  !skillGroups(
+                    generated.skills,
+                    ownedSkillLiterals(candidate),
+                    candidate.skills,
+                  ).some((group) => group.members.includes(skill)),
+              )
+            : [],
+        ),
+      };
+    }
 
     const persist = async (manager: EntityManager): Promise<OnlineCV> => {
       const persistPrerequisites = await this.assertGenerationPrerequisites(
@@ -1374,9 +1683,9 @@ export class OnlineCVsService {
             ...newCvData.revision?.sourceTrace,
             generation: {
               ...currentOperation,
-              status: generated.warnings?.length ? 'DEGRADED' : 'COMPLETE',
+              status: warnings.length ? 'DEGRADED' : 'COMPLETE',
               finishedAt: new Date().toISOString(),
-              warnings: generated.warnings || [],
+              warnings,
             },
           },
         };
@@ -1397,10 +1706,10 @@ export class OnlineCVsService {
     };
     const saved = await this.onlineCVRepo.manager.transaction(persist);
     return {
-      status: generated.warnings?.length ? 'DEGRADED' : 'COMPLETE',
+      status: warnings.length ? 'DEGRADED' : 'COMPLETE',
       draft: saved,
       onlineCv: saved,
-      warnings: generated.warnings || [],
+      warnings,
       generationMode: saved.generationMode,
       contentVersion: saved.contentVersion,
       sourceVersion: saved.sourceVersion,

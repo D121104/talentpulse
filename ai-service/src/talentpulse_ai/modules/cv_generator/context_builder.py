@@ -24,6 +24,7 @@ from talentpulse_ai.modules.cv_generator.validators import (
     _is_intentionally_preserved,
     _locale_literals,
     _locale_matches,
+    _project_narrative_rejection,
     _skill_member_display,
     _skill_member_is_relevant,
     _source_locale_matches,
@@ -259,6 +260,33 @@ def _fallback_bullets(
     # technology-only clause is safe for sparse, language-neutral source data,
     # but labels such as ``Documented technologies`` are misleading filler.
     literals = tuple(preserved_literals)
+    if not locale.casefold().startswith("vi"):
+        # Retain meaningful English source clauses, including achievements without
+        # a verb from our small action vocabulary. Never substitute a role/stack.
+        english = [
+            bullet
+            for clause in clauses
+            if _locale_matches(clause, locale, preserved_literals=literals)
+            and (
+                not isinstance(source, CandidateProject)
+                or _project_narrative_rejection(clause, source) is None
+            )
+            and not re.match(
+                r"^(?:skills?|technologies|tools|tech stack)\s*:", clause, re.IGNORECASE
+            )
+            and not all(
+                token.casefold() in _TECHNOLOGY_TERMS
+                or token.casefold() in {"apis", "api", "backend", "frontend"}
+                for token in _TOKEN_RE.findall(clause)
+            )
+            for bullet in _shape_bullet(
+                _deterministic_rewrite(
+                    clause, locale=locale, kind=kind, preserved_literals=literals
+                )
+                or clause
+            )
+        ]
+        return _dedupe_texts(english), not bool(english)
     if description and not _locale_matches(description, locale, preserved_literals=literals):
         if not _locale_matches(
             description, "en-US", preserved_literals=literals

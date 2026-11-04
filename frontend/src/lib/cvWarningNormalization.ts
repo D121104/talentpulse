@@ -93,6 +93,14 @@ export function normalizeCvGenerationWarnings(
   for (const warning of warnings) {
     const normalized = warning.trim();
     if (!normalized) continue;
+    if (/\bcv_generation\.(?:localization_omission=|diagnostic=skill_member_locale_omission\b)/i.test(normalized)) {
+      add(localizedMessage(
+        locale,
+        "Một số nội dung chưa thể chuyển sang ngôn ngữ CV đã chọn nên đã được bỏ qua. Hãy kiểm tra và bổ sung nội dung còn thiếu.",
+        "Some content could not be converted to the selected CV language and was omitted. Review and add any missing content.",
+      ));
+      continue;
+    }
 
     // Strip all internal tokens, including new diagnostic values. If nothing
     // remains, this is telemetry only and must not create a warning row.

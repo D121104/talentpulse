@@ -171,6 +171,451 @@ function canonicalJob() {
 }
 
 describe('OnlineCVsService.generateFromCareerProfile', () => {
+  it.each([
+    ['en-US', 'none'],
+    ['vi-VN', 'none'],
+    ['en-US', 'project'],
+    ['en-US', 'all'],
+    ['en-US', 'skill'],
+  ] as const)(
+    'regenerates localized %s fields without losing canonical metadata (%s)',
+    async (locale, omission) => {
+      const { service, onlineCVRepo, aiServiceClient } = createService();
+      const cv = {
+        _id: 'cv-1',
+        userId: user._id,
+        templateType: 'template1',
+        contentVersion: 1,
+        revision: {
+          locale,
+          sourceTrace: {
+            skillGroups:
+              omission === 'skill'
+                ? [
+                    {
+                      name: 'Skills',
+                      description: 'Python; Giao tiếp tốt',
+                      members: ['Python', 'Giao tiếp tốt'],
+                    },
+                  ]
+                : [],
+          },
+        },
+        position: 'Engineer',
+        skills:
+          omission === 'skill'
+            ? [{ name: 'Skills', description: 'Python; Giao tiếp tốt' }]
+            : [],
+        workExperience: [
+          {
+            _id: 'exp-1',
+            companyName: 'Company',
+            position: 'Lập trình viên',
+            description: 'Xây dựng API',
+          },
+        ],
+        education: [
+          {
+            _id: 'edu-1',
+            schoolName: 'University',
+            degree: 'Cử nhân',
+            major: 'Tin học',
+            description: 'Nghiên cứu',
+          },
+        ],
+        projects: [
+          {
+            _id: 'project-1',
+            projectName: 'Project',
+            role: 'Lập trình viên',
+            description: 'Mô tả dự án',
+            technologies: ['NestJS'],
+          },
+        ],
+        certificates: [
+          {
+            _id: 'cert-1',
+            name: 'Chứng chỉ',
+            date: '2025-01',
+            issuer: 'Issuer',
+            credentialUrl: 'https://example.com/cert',
+          },
+        ],
+        activities: [
+          {
+            _id: 'act-1',
+            organizationName: 'Organization',
+            position: omission === 'skill' ? '' : 'Trưởng nhóm',
+            startDate: '2024',
+            description: 'Hoạt động',
+          },
+        ],
+        awards: [
+          {
+            _id: 'award-1',
+            name: 'Giải thưởng xuất sắc',
+            issuer: 'Issuer',
+            date: '2024',
+            description: 'Giải thưởng',
+          },
+        ],
+        generationSnapshot: { skills: ['NestJS'] },
+      };
+      Object.assign(onlineCVRepo, { findOne: jest.fn().mockResolvedValue(cv) });
+      onlineCVRepo.update.mockResolvedValue({ affected: 1 });
+      Object.assign(service, { redisService: { deleteValue: jest.fn() } });
+      aiServiceClient.generateCvDraft.mockImplementation(async (request) => ({
+        ...generatedDraft(),
+        target_job_id: request.job.job_id,
+        source_version: request.source_version,
+        content_version: request.content_version,
+        skills:
+          omission === 'skill'
+            ? [
+                {
+                  name: 'Skills',
+                  description: request.candidate.skills
+                    .filter((skill) => skill !== 'Giao tiếp tốt')
+                    .join('; '),
+                },
+              ]
+            : [],
+        work_experience: [
+          {
+            source_index: 0,
+            position: 'Software Engineer',
+            description: omission === 'all' ? null : 'Built APIs',
+            bullets: [],
+          },
+        ],
+        education: [
+          {
+            degree: 'Bachelor',
+            major: 'Computer Science',
+            description: omission === 'all' ? null : 'Studied computing',
+          },
+        ],
+        projects: [
+          {
+            source_index: 0,
+            role: 'Developer',
+            description:
+              omission === 'none' || omission === 'skill'
+                ? 'Implemented recruitment workflows'
+                : null,
+            bullets: [],
+          },
+        ],
+        certificates: ['Professional Certificate'],
+        activities: ['Organized events'],
+        awards: ['Recognized for delivery'],
+        warnings:
+          omission === 'skill'
+            ? [
+                'cv_generation.diagnostic=skill_member_locale_omission:count=1',
+                'provider provenance',
+              ]
+            : omission === 'none'
+            ? ['provider provenance']
+            : [
+                'provider provenance',
+                'cv_generation.localization_omission=narrative:unresolved',
+              ],
+      }));
+      if (omission === 'all') {
+        await expect(service.generate(cv._id, {}, user)).rejects.toThrow(
+          'could not localize',
+        );
+        expect(onlineCVRepo.update).not.toHaveBeenCalled();
+        expect(cv.projects[0].description).toBe('Mô tả dự án');
+        return;
+      }
+      await service.generate(cv._id, {}, user);
+      const saved = onlineCVRepo.update.mock.calls[0][1];
+      expect(saved.workExperience[0]).toMatchObject({
+        _id: 'exp-1',
+        position: 'Software Engineer',
+        description: 'Built APIs',
+      });
+      expect(saved.education[0]).toMatchObject({
+        _id: 'edu-1',
+        degree: 'Bachelor',
+        major: 'Computer Science',
+      });
+      expect(saved.projects[0]).toMatchObject({
+        _id: 'project-1',
+        role: 'Developer',
+        description:
+          omission === 'none' || omission === 'skill'
+            ? 'Implemented recruitment workflows'
+            : null,
+      });
+      expect(saved.certificates[0]).toEqual({
+        ...cv.certificates[0],
+        name: 'Professional Certificate',
+      });
+      expect(saved.activities[0]).toEqual({
+        ...cv.activities[0],
+        position: locale === 'en-US' ? null : cv.activities[0].position,
+        description: 'Organized events',
+      });
+      expect(saved.awards[0]).toEqual({
+        ...cv.awards[0],
+        name: locale === 'en-US' ? 'Award' : cv.awards[0].name,
+        description: 'Recognized for delivery',
+      });
+      expect(saved.revision.warnings).toContain('provider provenance');
+      if (omission === 'skill') {
+        expect(saved.generationSnapshot.previousCvContent.skills).toEqual(
+          cv.skills,
+        );
+        expect(saved.generationSnapshot.previousCvContent.skillGroups).toEqual(
+          cv.revision.sourceTrace.skillGroups,
+        );
+        expect(saved.generationSnapshot.localizationRetry.skills).toEqual([
+          'Giao tiếp tốt',
+        ]);
+        (onlineCVRepo as any).findOne.mockResolvedValue({ ...cv, ...saved });
+        await service.generate(cv._id, {}, user);
+        expect(
+          aiServiceClient.generateCvDraft.mock.calls[1][0].candidate.skills,
+        ).toEqual(['Python', 'Giao tiếp tốt']);
+        const retried = onlineCVRepo.update.mock.calls[1][1];
+        expect(retried.generationSnapshot.previousCvContent).toEqual(
+          saved.generationSnapshot.previousCvContent,
+        );
+        (onlineCVRepo as any).findOne.mockResolvedValue({
+          ...cv,
+          ...retried,
+          contentVersion: retried.contentVersion + 1,
+          skills: [{ name: 'Rust' }],
+        });
+        await service.generate(cv._id, {}, user);
+        expect(
+          aiServiceClient.generateCvDraft.mock.calls[2][0].candidate.skills,
+        ).toEqual(['Rust']);
+      }
+      if (omission === 'project') {
+        expect(saved.revision.warnings).toContain(
+          'cv_generation.localization_omission=narrative:unresolved',
+        );
+        expect(saved.generationSnapshot.previousCvContent.projects).toEqual(
+          cv.projects,
+        );
+        expect(saved.generationSnapshot.previousCvContent.skills).toEqual(
+          cv.skills,
+        );
+        const retryCv = { ...cv, ...saved };
+        (onlineCVRepo as any).findOne.mockResolvedValue(retryCv);
+        await service.generate(cv._id, {}, user);
+        expect(
+          aiServiceClient.generateCvDraft.mock.calls[1][0].candidate.projects[0]
+            .description,
+        ).toBe('Mô tả dự án');
+        const retried = onlineCVRepo.update.mock.calls[1][1];
+        expect(retried.generationSnapshot.previousCvContent).toEqual(
+          saved.generationSnapshot.previousCvContent,
+        );
+        (onlineCVRepo as any).findOne.mockResolvedValue({
+          ...retryCv,
+          ...retried,
+          contentVersion: retried.contentVersion + 1,
+          projects: [
+            {
+              ...retryCv.projects[0],
+              description: 'My edited project description',
+            },
+          ],
+        });
+        await service.generate(cv._id, {}, user);
+        expect(
+          aiServiceClient.generateCvDraft.mock.calls[2][0].candidate.projects[0]
+            .description,
+        ).toBe('My edited project description');
+        (onlineCVRepo as any).findOne.mockResolvedValue({
+          ...retryCv,
+          contentVersion: retryCv.contentVersion + 1,
+        });
+        await service.generate(cv._id, {}, user);
+        expect(
+          aiServiceClient.generateCvDraft.mock.calls[3][0].candidate.projects[0]
+            .description,
+        ).toBeNull();
+      }
+      expect(cv.projects[0].description).toBe('Mô tả dự án');
+      expect(
+        aiServiceClient.generateCvDraft.mock.calls[0][0].candidate.awards,
+      ).toEqual(['Giải thưởng xuất sắc - Giải thưởng']);
+    },
+  );
+
+  it.each(['en-US', 'vi-VN'] as const)(
+    'keeps certificate metadata separate and respects omitted %s narratives',
+    async (locale) => {
+      const { service, careerProfileService, aiServiceClient, onlineCVRepo } =
+        createService();
+      const profile = await careerProfileService.requireMine();
+      profile.objective = 'Xây dựng hệ thống';
+      profile.projects[0].description = 'Phát triển hệ thống tuyển dụng';
+      profile.education = [
+        { schoolName: 'University', description: 'Nghiên cứu hệ thống' },
+      ];
+      profile.certificates = [
+        {
+          name: 'Cloud 2024 - Professional',
+          date: '2025-01',
+          issuer: 'Issuer',
+        },
+      ];
+      profile.activities = [
+        {
+          organizationName: 'Câu lạc bộ',
+          position: 'Trưởng nhóm',
+          description: 'Tổ chức sự kiện',
+        },
+      ];
+      profile.awards = [
+        {
+          name: 'Giải nhất',
+          description: 'Dự án giúp giảm thời gian xử lý',
+          date: '2024',
+        },
+        { name: 'Giải sáng tạo', date: '2025' },
+      ];
+      aiServiceClient.generateCvDraft.mockImplementation(async (request) => ({
+        ...generatedDraft(),
+        target_job_id: request.job.job_id,
+        source_version: request.source_version,
+        career_objective: null,
+        education: [{ description: 'Studied software systems' }],
+        projects: [
+          { ...generatedDraft().projects[0], description: null, bullets: [] },
+        ],
+        certificates: request.candidate.certificates,
+        content_version: request.content_version,
+        activities: ['Led community events'],
+        awards: [
+          'First prize for a project that reduced processing time',
+          'Innovation Prize',
+        ],
+        warnings: ['generation_fallback'],
+      }));
+      const result = await service.generateFromCareerProfile({ locale }, user);
+      expect(
+        aiServiceClient.generateCvDraft.mock.calls[0][0].candidate.certificates,
+      ).toEqual(['Cloud 2024 - Professional']);
+      expect(result.draft.certificates[0]).toMatchObject(
+        profile.certificates[0],
+      );
+      expect(
+        aiServiceClient.generateCvDraft.mock.calls[0][0].candidate.awards,
+      ).toEqual([
+        'Giải nhất - Dự án giúp giảm thời gian xử lý',
+        'Giải sáng tạo',
+      ]);
+      expect(result.draft.activities[0]).toMatchObject({
+        organizationName: 'Câu lạc bộ',
+        position: locale === 'en-US' ? null : 'Trưởng nhóm',
+        description: 'Led community events',
+      });
+      expect(result.draft.awards[0]).toMatchObject({
+        name: locale === 'en-US' ? 'Award' : 'Giải nhất',
+        date: '2024',
+        description: 'First prize for a project that reduced processing time',
+      });
+      expect(result.draft.awards[1]).toMatchObject({
+        name: locale === 'en-US' ? 'Innovation Prize' : 'Giải sáng tạo',
+        date: '2025',
+        description: locale === 'en-US' ? null : 'Innovation Prize',
+      });
+      expect(result.draft.projects[0].description).toBe(
+        locale === 'en-US' ? null : profile.projects[0].description,
+      );
+      expect(result.draft.careerObjective).toBe(
+        locale === 'en-US' ? null : profile.objective,
+      );
+      expect(result.warnings).toContain('generation_fallback');
+      expect(result.draft.revision.warnings).toEqual(result.warnings);
+      if (locale === 'en-US') {
+        expect(result.warnings).toContain(
+          'cv_generation.localization_omission=narrative:unresolved',
+        );
+        expect(result.status).toBe('DEGRADED');
+        Object.assign(onlineCVRepo, {
+          findOne: jest.fn().mockResolvedValue(result.draft),
+        });
+        onlineCVRepo.update.mockResolvedValue({ affected: 1 });
+        onlineCVRepo.update.mockClear();
+        Object.assign(service, { redisService: { deleteValue: jest.fn() } });
+        await service.generate(result.draft._id, {}, user);
+        const retryRequest = aiServiceClient.generateCvDraft.mock.calls[1][0];
+        expect(retryRequest.candidate.projects[0].description).toBe(
+          profile.projects[0].description,
+        );
+        expect(retryRequest.candidate.career_objective).toBe(profile.objective);
+        expect(retryRequest.candidate.activities[0]).toContain('Trưởng nhóm');
+        const regenerated = onlineCVRepo.update.mock.calls[0][1];
+        expect(regenerated.activities[0].position).toBeNull();
+        expect(regenerated.awards[1]).toMatchObject({
+          name: 'Innovation Prize',
+          description: null,
+          date: '2025',
+        });
+      }
+    },
+  );
+
+  it('does not persist when every supplied rich English narrative is unresolved', async () => {
+    const { service, aiServiceClient, onlineCVRepo } = createService();
+    aiServiceClient.generateCvDraft.mockImplementation(async (request) => ({
+      ...generatedDraft(),
+      target_job_id: request.job.job_id,
+      source_version: request.source_version,
+      projects: [
+        { ...generatedDraft().projects[0], description: null, bullets: [] },
+      ],
+      warnings: [
+        'cv_generation.localization_omission=projects[0].description:unresolved',
+      ],
+    }));
+    await expect(
+      service.generateFromCareerProfile({ locale: 'en-US' }, user),
+    ).rejects.toThrow('could not localize');
+    expect(onlineCVRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('accepts an English profile without narrative evidence without inventing content', async () => {
+    const { service, careerProfileService, aiServiceClient } = createService();
+    const profile = await careerProfileService.requireMine();
+    profile.projects = [];
+    profile.objective = null;
+    aiServiceClient.generateCvDraft.mockImplementation(async (request) => ({
+      ...generatedDraft(),
+      target_job_id: request.job.job_id,
+      source_version: request.source_version,
+      projects: [],
+      career_objective: null,
+    }));
+    const result = await service.generateFromCareerProfile(
+      { locale: 'en-US' },
+      user,
+    );
+    expect(result.status).toBe('COMPLETE');
+    expect(result.draft.careerObjective).toBeNull();
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('maps provider failure without saving a replacement draft', async () => {
+    const { service, aiServiceClient, onlineCVRepo } = createService();
+    aiServiceClient.generateCvDraft.mockRejectedValue(
+      new Error('provider unavailable'),
+    );
+    await expect(
+      service.generateFromCareerProfile({ locale: 'en-US' }, user),
+    ).rejects.toThrow('không khả dụng');
+    expect(onlineCVRepo.save).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     'persists authoritative job-filtered skills (empty=%s)',
     async (empty) => {
@@ -1216,12 +1661,12 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
     });
     expect(saved.activities[0]).toMatchObject({
       organizationName: 'Câu lạc bộ Công nghệ',
-      position: 'Tình nguyện viên',
+      position: null,
       startDate: '2020-01',
       description: 'Supported the technology community as a volunteer',
     });
     expect(saved.awards[0]).toMatchObject({
-      name: 'Giải thưởng Sáng tạo',
+      name: 'Award',
       issuer: 'Cuộc thi ABC',
       date: '2022-05',
       description: 'First prize in the ABC competition',

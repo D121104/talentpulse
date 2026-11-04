@@ -226,6 +226,11 @@ def _protected_anchors(values: Iterable[str]) -> set[str]:
         )
         for token in _TOKEN_RE.findall(value):
             folded = token.casefold()
+            # English plural suffixes do not change the underlying acronym (KPI/KPIs).
+            if token.endswith("s") and len(token) > 2 and token[:-1].isupper():
+                folded = token[:-1].casefold()
+                anchors.add(folded)
+                continue
             if folded in {"api", "apis", "restapi", "pgsql", "postgres", "postgresql"}:
                 anchors.add(_target_skill_literal(token).casefold())
                 continue
@@ -267,6 +272,11 @@ def _locale_matches(text: str, locale: str, *, preserved_literals: Iterable[str]
         if literal.strip():
             text = re.sub(rf"(?<!\w){re.escape(literal)}(?!\w)", " ", text, flags=re.IGNORECASE)
     vi = locale.casefold().startswith("vi")
+    # The old keyword list missed achievements such as “Tăng ... lên ...”.
+    # Owned names were removed above. Use Vietnamese-specific characters, not
+    # arbitrary accents in English loanwords or symbols such as multiplication.
+    if not vi and _has_vietnamese_diacritic(text):
+        return False
     words = {word.casefold() for word in re.findall(r"[A-Za-zÀ-ỹĐđ]+", text)}
     words -= _LOCALE_TECHNOLOGY_TERMS
     vi_markers = words & {
@@ -414,7 +424,9 @@ def _without_diacritics(value: str) -> str:
 
 
 def _has_vietnamese_diacritic(value: str) -> bool:
-    return bool(re.search(r"[À-ỹĐđ]", value))
+    vietnamese_characters = "ăđơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịỏọốồổỗộớờởỡợụủứừửữựỳỵỷỹ"
+    normalized = unicodedata.normalize("NFC", value).casefold()
+    return any(character in vietnamese_characters for character in normalized)
 
 
 def _has_vietnamese_short_signal(value: str) -> bool:
@@ -1034,7 +1046,57 @@ def _locale_literals(candidate: CandidateProfile) -> list[str]:
 
 
 def _is_generic_bullet(text: str) -> bool:
-    return bool(_GENERIC_BULLET_RE.search(" ".join(text.split())))
+    normalized = " ".join(text.split()).strip(" .")
+    tokens = _TOKEN_RE.findall(normalized)
+    keyword_only = bool(tokens) and all(
+        token.casefold() in _TECHNOLOGY_TERMS
+        or token.casefold() in {"apis", "api", "backend", "frontend"}
+        for token in tokens
+    )
+    return bool(
+        keyword_only
+        or _GENERIC_BULLET_RE.search(normalized)
+        or re.fullmatch(
+            r"(?:(?:senior|junior|full[ -]?stack|backend|frontend|technical)\s+)*"
+            r"(?:developer|engineer|lead)(?:\s*/\s*(?:technical\s+)?lead)?",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _project_narrative_rejection(
+    text: str, source: CandidateProject, *, require_coverage: bool = False
+) -> str | None:
+    # Technology vocabulary is open-ended (Redux Toolkit, Socket.IO, etc.).
+    # Use the owning entry's exact stack rather than a global keyword whitelist.
+    prose = re.sub(
+        r"^(?:skills?|technologies|tools|tech stack|công nghệ)\s*:\s*",
+        "",
+        text.strip(),
+        flags=re.IGNORECASE,
+    )
+    for technology in sorted(source.technologies, key=len, reverse=True):
+        prose = re.sub(rf"(?<!\w){re.escape(technology)}(?!\w)", " ", prose, flags=re.IGNORECASE)
+    if not _TOKEN_RE.findall(prose) or _is_generic_bullet(prose):
+        return "localization_generic_rejection"
+    if require_coverage and source.description:
+        # Reject only an obvious short feature fragment, not concise action prose.
+        # Sentence/conjunction counts cannot establish semantic completeness: a
+        # comma-separated feature list may express the entire source in one sentence.
+        source_parts = [
+            part
+            for part in re.split(r"[.!?;\n]+(?:\s|$)", source.description)
+            if _TOKEN_RE.findall(part) and _project_narrative_rejection(part, source) is None
+        ]
+        if (
+            len(source_parts) > 1
+            and len(_TOKEN_RE.findall(prose)) <= 8
+            and not _RESPONSIBILITY_ACTION_RE.search(prose)
+            and not re.search(r"[,;\n]", prose)
+        ):
+            return "localization_coverage_rejection"
+    return None
 
 
 def _normalize_localization_text(value: str) -> str:
@@ -1193,13 +1255,73 @@ def _localized_value_is_grounded(
         return None, "grounding_anchor_rejection"
     normalized_value = _normalize_localization_text(value)
     if (
+        not request.locale.casefold().startswith("vi")
+        and section == "projects"
+        and field == "description"
+        and 0 <= source_index < len(request.candidate.projects)
+    ):
+        project_rejection = _project_narrative_rejection(
+            value, request.candidate.projects[source_index], require_coverage=True
+        )
+        if project_rejection is not None:
+            return None, project_rejection
+    if (
+        not request.locale.casefold().startswith("vi")
+        and section in {"experience", "projects"}
+        and field == "description"
+        and (
+            _is_generic_bullet(value)
+            or (
+                section == "experience"
+                and re.match(
+                    r"^(?:skills?|technologies|tools|tech stack)\s*:", value, re.IGNORECASE
+                )
+            )
+        )
+    ):
+        return None, "localization_generic_rejection"
+    if (
         normalized_value in _GENERIC_LOCALIZATION_VALUES
         or normalized_value in _GENERIC_SECTION_VALUES.get(section, set())
     ):
         return None, "localization_generic_rejection"
     evidence = _source_localization_evidence(request, section, source_index)
+    grounding_value = value
+    if (
+        source is not None
+        and section == "projects"
+        and field == "description"
+        and not request.locale.casefold().startswith("vi")
+    ):
+        # Translated headings and line-initial actions are not invented named entities.
+        # Admit only ordinary English equivalents backed by this project's own source.
+        source_text = source.casefold()
+        # Only a source-owned CV licenses its recruitment-document equivalents.
+        # Do not interpret the ordinary verb "resume" as an acronym globally.
+        if re.search(r"\bCVs?\b", source):
+            grounding_value = re.sub(
+                r"\b(?:résumés?|resumes?|curriculum\s+vitae)\b",
+                "CV",
+                value,
+                flags=re.IGNORECASE,
+            )
+        for source_phrase, (stem, forms) in {
+            "phát triển": ("develop", ("", "s", "ed", "ing")),
+            "thiết kế": ("design", ("", "s", "ed", "ing")),
+            "theo dõi": ("track", ("", "s", "ed", "ing")),
+            "quản lý": ("manag", ("e", "es", "ed", "ing")),
+            "chức năng": ("feature", ("", "s")),
+            "tính năng": ("feature", ("", "s")),
+            "công việc": ("job", ("", "s")),
+            "người dùng": ("user", ("", "s")),
+            "đăng nhập": ("user", ("", "s")),
+        }.items():
+            if source_phrase in source_text:
+                evidence.extend((stem + suffix).capitalize() for suffix in forms)
+        if "đăng nhập" in source_text:
+            evidence.extend(("Login", "Logins"))
     rejection = _grounding_rejection_reason(
-        value,
+        grounding_value,
         evidence,
         locale=request.locale,
         preserved_literals=_locale_literals(request.candidate),
@@ -1214,7 +1336,7 @@ def _localized_value_is_grounded(
         return None, rejection
     if source is not None:
         source_anchors = _protected_anchors([source])
-        if not source_anchors.issubset(_protected_anchors([value])):
+        if not source_anchors.issubset(_protected_anchors([grounding_value])):
             return None, "localization_anchor_rejection"
         for entity in _canonical_named_entities(request.candidate):
             if entity.casefold() == source.casefold():

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
   useParams,
   useSearchParams,
@@ -17,6 +18,8 @@ import {
   ZoomOut,
   Crown,
   CheckCircle2,
+  Info,
+  ChevronDown,
   AlertTriangle,
   Loader2,
   X,
@@ -499,6 +502,11 @@ export default function CVEditorPage() {
   // CV Display Language
   const [cvLanguage, setCvLanguage] = useState<"vi" | "en">(initialLanguage);
   const cvLocale: CVLocale = cvLanguage === "en" ? "en-US" : "vi-VN";
+  const { i18n } = useTranslation();
+  const uiLocale: CVLocale = (i18n.resolvedLanguage || i18n.language || "vi").toLowerCase().startsWith("en") ? "en-US" : "vi-VN";
+  const uiVi = uiLocale === "vi-VN";
+  const saveCopy = (vi: string, en: string) =>
+    (i18n.resolvedLanguage || i18n.language || "vi").toLowerCase().startsWith("en") ? en : vi;
   const localeLabels = CV_TEMPLATE_LABELS[cvLocale];
 
   const SECTION_LABELS = {
@@ -546,7 +554,11 @@ export default function CVEditorPage() {
   const [generationStatus, setGenerationStatus] =
     useState<CVGenerationStatus>("IDLE");
   const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
-  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [showGenerationWarnings, setShowGenerationWarnings] = useState(false);
+  const [generationErrorStatus, setGenerationError] = useState<CVGenerationJobStatus | "NAME_REQUIRED" | null>(null);
+  const generationError = generationErrorStatus === "NAME_REQUIRED"
+    ? uiVi ? "Hãy nhập họ tên trước khi tạo CV bằng AI." : "Enter a full name before creating an AI CV."
+    : generationErrorStatus ? localizedGenerationStatus(generationErrorStatus, uiLocale) : null;
   const [generationJobId, setGenerationJobId] = useState("");
   const [generationJobStatus, setGenerationJobStatus] = useState<
     CVGenerationJobStatus | "IDLE"
@@ -569,13 +581,14 @@ export default function CVEditorPage() {
   const normalizedGenerationWarnings = normalizeCvGenerationWarnings(
     generationWarnings,
     generationStatus,
-    cvLocale,
+    uiLocale,
   );
   const generationProvenance = normalizedGenerationWarnings.provenance;
   const visibleGenerationWarnings = normalizedGenerationWarnings.messages;
   const hasActionableGenerationWarnings = visibleGenerationWarnings.length > 0;
   const hasGenerationBannerWarning =
     generationProvenance !== "ai" ||
+    generationStatus === "DEGRADED" ||
     generationStatus === "NO_EVIDENCE" ||
     hasActionableGenerationWarnings;
   const generationIsActive =
@@ -1174,7 +1187,7 @@ export default function CVEditorPage() {
     }
     setGenerationStatus(result.status === "DEGRADED" ? "DEGRADED" : "COMPLETE");
     setGenerationError(
-      draftFetchFailed ? localizedGenerationStatus("FAILED", cvLocale) : null,
+      draftFetchFailed ? "FAILED" : null,
     );
   };
 
@@ -1241,7 +1254,7 @@ export default function CVEditorPage() {
       const terminalStatus = status === "CANCELLED" || status === "STALE" ? status : "FAILED";
       setGenerationJobStatus(terminalStatus);
       setGenerationStatus(terminalStatus);
-      setGenerationError(localizedGenerationStatus(terminalStatus, cvLocale));
+      setGenerationError(terminalStatus);
       pollingOperationRef.current = null;
       clearGenerationQuery();
     } catch (error) {
@@ -1251,11 +1264,11 @@ export default function CVEditorPage() {
           error.status === 404 || error.status === 409 ? "STALE" : "FAILED";
         setGenerationJobStatus(terminalStatus);
         setGenerationStatus(terminalStatus);
-        setGenerationError(localizedGenerationStatus(terminalStatus, cvLocale));
+        setGenerationError(terminalStatus);
         pollingOperationRef.current = null;
         clearGenerationQuery();
       } else {
-        setGenerationError(localizedGenerationStatus("FAILED", cvLocale));
+        setGenerationError("FAILED");
         scheduleGenerationPoll(cvId, operationId, 5);
       }
     } finally {
@@ -1327,7 +1340,7 @@ export default function CVEditorPage() {
           : "CANCELLED";
       setGenerationJobStatus(terminalStatus);
       setGenerationStatus(terminalStatus);
-      setGenerationError(localizedGenerationStatus(terminalStatus, cvLocale));
+      setGenerationError(terminalStatus);
       pollingOperationRef.current = null;
       clearGenerationQuery();
     } catch (error) {
@@ -1337,12 +1350,12 @@ export default function CVEditorPage() {
           error.status === 404 || error.status === 409 ? "STALE" : "FAILED";
         setGenerationJobStatus(terminalStatus);
         setGenerationStatus(terminalStatus);
-        setGenerationError(localizedGenerationStatus(terminalStatus, cvLocale));
+        setGenerationError(terminalStatus);
         pollingOperationRef.current = null;
         clearGenerationQuery();
       } else {
         pollingOperationRef.current = operationId;
-        setGenerationError(localizedGenerationStatus("FAILED", cvLocale));
+        setGenerationError("FAILED");
         startGenerationPolling(cvId, operationId, 5);
       }
     }
@@ -1391,11 +1404,11 @@ export default function CVEditorPage() {
     payloadGenerationMode: CVGenerationMode = generationMode,
   ): Promise<string | null> => {
     if (!salaryValid) {
-      toast.error(cvLanguage === 'en' ? 'Enter a whole-number salary from 0 to 2,147,483,647 VND/month.' : 'Nhập lương nguyên từ 0 đến 2.147.483.647 VND/tháng.');
+      toast.error(!uiVi ? 'Enter a whole-number salary from 0 to 2,147,483,647 VND/month.' : 'Nhập lương nguyên từ 0 đến 2.147.483.647 VND/tháng.');
       return null;
     }
     if (!fullName.trim()) {
-      alert("Vui lòng nhập Họ và tên trong CV!");
+      toast.error(uiVi ? "Vui lòng nhập họ tên trong CV." : "Enter a full name in the CV.");
       return null;
     }
 
@@ -1422,12 +1435,14 @@ export default function CVEditorPage() {
 
       if (!redirectAfterSave) return saved._id;
 
-      const message = activeCvId
-        ? "Cập nhật CV thành công!"
-        : "Tạo mới CV thành công!";
-      const description = `Bản CV "${title.trim() || fullName}" đã được lưu vào danh sách của bạn.`;
-
       setTimeout(() => {
+        const message = activeCvId
+          ? saveCopy("Đã cập nhật CV.", "CV updated.")
+          : saveCopy("Đã tạo CV.", "CV created.");
+        const description = saveCopy(
+          `Bản CV "${title.trim() || fullName}" đã được lưu vào danh sách của bạn.`,
+          `CV "${title.trim() || fullName}" has been saved to your list.`,
+        );
         navigate("/my-cv", {
           state: {
             toast: {
@@ -1439,10 +1454,10 @@ export default function CVEditorPage() {
         });
       }, 200);
       return saved._id;
-    } catch (error: any) {
+    } catch {
       toast.error(
-        "Lỗi khi lưu CV",
-        error.message || "Không thể lưu CV. Vui lòng thử lại!",
+        saveCopy("Lỗi khi lưu CV", "Could not save CV"),
+        saveCopy("Không thể lưu CV. Vui lòng thử lại.", "The CV could not be saved. Please try again."),
       );
       return null;
     } finally {
@@ -1474,11 +1489,7 @@ export default function CVEditorPage() {
       if (!cvId) {
         setGenerationStatus("FAILED");
         setGenerationJobStatus("FAILED");
-        setGenerationError(
-          cvLocale === "vi-VN"
-            ? "Hãy nhập họ tên trước khi tạo CV bằng AI."
-            : "Enter a full name before creating an AI CV.",
-        );
+        setGenerationError("NAME_REQUIRED");
         return;
       }
 
@@ -1507,7 +1518,7 @@ export default function CVEditorPage() {
       if (!generationRequestContextIsCurrent()) return;
       setGenerationStatus("FAILED");
       setGenerationJobStatus("FAILED");
-      setGenerationError(localizedGenerationStatus("FAILED", cvLocale));
+      setGenerationError("FAILED");
     }
   };
 
@@ -1616,10 +1627,10 @@ export default function CVEditorPage() {
             <div className="w-full max-w-sm rounded-2xl border border-white/20 bg-white/95 p-6 text-center shadow-2xl dark:border-slate-700 dark:bg-slate-900/95">
               <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
               <p className="mt-3 text-sm font-bold text-slate-900 dark:text-white">
-                {localizedGenerationStatus(generationJobStatus, cvLocale)}
+                {localizedGenerationStatus(generationJobStatus, uiLocale)}
               </p>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {cvLocale === "vi-VN"
+                {uiVi
                   ? "Bạn có thể hủy yêu cầu, nội dung hiện tại vẫn được giữ nguyên."
                   : "You can cancel the request; your current content will be kept."}
               </p>
@@ -1629,7 +1640,7 @@ export default function CVEditorPage() {
                 className="mt-5 inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-rose-200 px-4 text-xs font-bold text-rose-700 transition hover:bg-rose-50 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30"
               >
                 <X className="h-4 w-4" />
-                {cvLocale === "vi-VN" ? "Hủy tạo bản nháp" : "Cancel generation"}
+                {uiVi ? "Hủy tạo bản nháp" : "Cancel generation"}
               </button>
             </div>
           </div>
@@ -1718,7 +1729,7 @@ export default function CVEditorPage() {
               type="button"
               onClick={() => setShowAiModal(true)}
               className="flex h-11 w-11 flex-col items-center justify-center rounded-xl text-[10px] font-bold text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-all cursor-pointer relative"
-              title="Tạo CV bằng AI"
+              title={uiVi ? "Tạo CV bằng AI" : "Create a CV with AI"}
             >
               <Sparkles className="h-4.5 w-4.5 text-amber-500" />
               <span className="mt-0.5 scale-90 text-amber-600 dark:text-amber-400">
@@ -2235,42 +2246,63 @@ export default function CVEditorPage() {
             )}
 
           {generationMode === "EDITOR_ONLY" && (
-            <div
-              className={`mb-4 w-full max-w-[210mm] rounded-xl border px-4 py-3 text-left text-xs shadow-sm ${
+            <section
+              aria-labelledby="cv-generation-notice-title"
+              className={`mb-4 w-full max-w-[210mm] shrink-0 rounded-xl border p-4 text-left text-sm leading-6 shadow-sm ${
                 hasGenerationBannerWarning
                   ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200"
-                  : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-200"
+                  : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
               }`}
-              role="status"
-              aria-live="polite"
             >
-              <div className="flex items-center gap-2 font-bold">
+              <div className="flex items-start gap-3">
                 {hasGenerationBannerWarning ? (
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <AlertTriangle aria-hidden="true" className="mt-1 h-5 w-5 shrink-0" />
                 ) : (
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <Info aria-hidden="true" className="mt-1 h-5 w-5 shrink-0" />
                 )}
-                <span>
-                  {generationProvenance === "mixed"
-                    ? localeLabels.statusMixed
-                    : generationProvenance === "fallback"
-                      ? localeLabels.statusFallback
-                      : localeLabels.statusAi}
-                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 id="cv-generation-notice-title" className="font-semibold">
+                    {uiVi
+                      ? hasGenerationBannerWarning ? "Bản nháp CV cần rà soát" : "Bản nháp CV từ AI"
+                      : hasGenerationBannerWarning ? "CV draft needs review" : "AI CV draft"}
+                  </h2>
+                  <p className="mt-1">
+                    {generationProvenance === "mixed"
+                      ? uiVi
+                        ? "Một số nội dung dùng bản dự phòng từ hồ sơ, kết hợp với nội dung AI. Hãy kiểm tra trước khi sử dụng."
+                        : "This draft combines AI content with profile-based fallback content. Review it before use."
+                      : generationProvenance === "fallback"
+                        ? uiVi
+                          ? "Bản nháp dùng nội dung dự phòng từ hồ sơ. Hãy kiểm tra và chỉnh sửa trước khi sử dụng."
+                          : "This draft uses profile-based fallback content. Review and edit it before use."
+                        : uiVi
+                          ? "Hãy kiểm tra thông tin và cách diễn đạt trước khi sử dụng CV."
+                          : "Check the facts and wording before using this CV."}
+                  </p>
+                </div>
               </div>
               {hasActionableGenerationWarnings && (
-                <>
-                  <p className="mt-2 font-semibold">
-                    {localeLabels.warningsTitle}
-                  </p>
-                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                <div className="mt-3 border-t border-current/15 pt-2 sm:ml-8">
+                  <button
+                    type="button"
+                    aria-expanded={showGenerationWarnings}
+                    aria-controls="cv-generation-warning-details"
+                    onClick={() => setShowGenerationWarnings((shown) => !shown)}
+                    className="flex min-h-11 w-full items-center justify-between gap-3 rounded-md text-left font-medium hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
+                  >
+                    {uiVi
+                      ? `${showGenerationWarnings ? "Thu gọn" : "Xem"} ${visibleGenerationWarnings.length} lưu ý`
+                      : `${showGenerationWarnings ? "Hide" : "View"} review notes (${visibleGenerationWarnings.length})`}
+                    <ChevronDown aria-hidden="true" className={`h-4 w-4 shrink-0 ${showGenerationWarnings ? "rotate-180" : ""}`} />
+                  </button>
+                  <ul id="cv-generation-warning-details" hidden={!showGenerationWarnings} className="mt-2 list-disc space-y-2 break-words pl-5 pb-1">
                     {visibleGenerationWarnings.map((warning) => (
                       <li key={warning}>{warning}</li>
                     ))}
                   </ul>
-                </>
+                </div>
               )}
-            </div>
+            </section>
           )}
 
           {/* ================= IN-PLACE A4 PAPER CANVAS ================= */}
@@ -2394,6 +2426,7 @@ export default function CVEditorPage() {
               <button
                 type="button"
                 onClick={() => setShowAiModal(false)}
+                aria-label={uiVi ? "Đóng" : "Close"}
                 className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 cursor-pointer"
               >
                 <X className="h-4 w-4" />
@@ -2406,17 +2439,15 @@ export default function CVEditorPage() {
               <div className="mt-4 text-center">
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-3 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-400">
                   <Sparkles className="h-3.5 w-3.5" />
-                  Bản nháp có thể chỉnh sửa
+                  {uiVi ? "Bản nháp có thể chỉnh sửa" : "Editable draft"}
                 </span>
 
                 <h3 className="mt-2 text-lg font-black text-slate-900 dark:text-white">
-                  Tạo CV bằng AI
+                  {uiVi ? "Tạo CV bằng AI" : "Create a CV with AI"}
                 </h3>
 
                 <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-                  AI sẽ dùng dữ liệu CV hiện tại để tạo một bản nháp có cấu
-                  trúc. Bạn luôn có thể rà soát và chỉnh sửa trực tiếp trong
-                  trình biên tập.
+                  {uiVi ? "AI sẽ dùng dữ liệu CV hiện tại để tạo một bản nháp có cấu trúc. Bạn có thể rà soát và chỉnh sửa trực tiếp trong trình biên tập." : "AI will use your current CV data to create a structured draft. You can review and edit it in the editor."}
                 </p>
 
                 <div className="mt-5 text-left">
@@ -2424,9 +2455,9 @@ export default function CVEditorPage() {
                     className="text-xs font-bold text-slate-700 dark:text-slate-300"
                     htmlFor="cv-generation-job-id"
                   >
-                    Mã công việc mục tiêu{" "}
+                    {uiVi ? "Mã công việc mục tiêu" : "Target job ID"}{" "}
                     <span className="font-normal text-slate-400">
-                      (không bắt buộc)
+                      {uiVi ? "(không bắt buộc)" : "(optional)"}
                     </span>
                   </label>
                   <input
@@ -2434,7 +2465,7 @@ export default function CVEditorPage() {
                     type="text"
                     value={generationJobId}
                     onChange={(event) => setGenerationJobId(event.target.value)}
-                    placeholder="Dán job ID nếu muốn tối ưu theo một vị trí cụ thể"
+                    placeholder={uiVi ? "Dán job ID nếu muốn tối ưu theo một vị trí cụ thể" : "Paste a job ID to tailor the draft to a role"}
                     disabled={generationIsActive}
                     className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   />
@@ -2454,7 +2485,7 @@ export default function CVEditorPage() {
                     onClick={() => setShowAiModal(false)}
                     className="flex-1 h-11 rounded-xl bg-slate-100 font-bold text-xs text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 cursor-pointer disabled:opacity-50"
                   >
-                    Đóng
+                    {uiVi ? "Đóng" : "Close"}
                   </button>
                   <button
                     type="button"
@@ -2465,12 +2496,12 @@ export default function CVEditorPage() {
                     {generationIsActive ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>Đang tạo bản nháp...</span>
+                        <span>{uiVi ? "Đang tạo bản nháp..." : "Creating draft..."}</span>
                       </>
                     ) : (
                       <>
                         <Sparkles className="h-4 w-4" />
-                        <span>Tạo bản nháp</span>
+                        <span>{uiVi ? "Tạo bản nháp" : "Create draft"}</span>
                       </>
                     )}
                   </button>

@@ -52,6 +52,7 @@ from talentpulse_ai.modules.cv_generator.validators import (
     _is_grounded,
     _locale_literals,
     _localized_value_is_grounded,
+    _project_narrative_rejection,
     _salient_anchors,
     _skill_member_display,
     _skill_member_is_relevant,
@@ -97,6 +98,9 @@ _LOCALIZATION_PROVENANCE = "cv_generation.localization=provider"
 # leave headroom for that observed latency; the total deadline, chunk size, one repair
 # pass, and provider-call cap keep work bounded. Failed provider timeouts are not retried.
 _LOCALIZATION_CHUNK_SIZE = 6
+# Six short labels are cheap; six full narratives are not. Keep source work bounded
+# as well as item count so a local model can finish within the existing call timeout.
+_LOCALIZATION_MAX_SOURCE_CHARS = 1500
 _REPAIR_CHUNK_SIZE = 6
 _MAX_REPAIR_CALLS = 1
 _MAX_PROVIDER_CALLS = 12
@@ -266,6 +270,7 @@ class CvDraftGenerationService:
             )
 
         warnings: list[str] = []
+        provider_warnings: list[str] = []
         diagnostics: Counter[str] = Counter()
         provider_call_count = 0
         provider_elapsed_seconds = 0.0
@@ -392,7 +397,11 @@ class CvDraftGenerationService:
                     for value in project_source.model_dump().values()
                     if isinstance(value, str)
                 ] + project_source.technologies
-                if _is_generic_bullet(project_bullet.text):
+                if _is_generic_bullet(project_bullet.text) or (
+                    not request.locale.casefold().startswith("vi")
+                    and _project_narrative_rejection(project_bullet.text, project_source)
+                    is not None
+                ):
                     mark("grounding_anchor_rejection")
                     warnings.append(_GROUNDED_WARNING)
                     continue
@@ -448,7 +457,12 @@ class CvDraftGenerationService:
             raw = getattr(model, "warnings", [])
             if not isinstance(raw, list):
                 return []
-            return [value for value in raw if isinstance(value, str)]
+            # Providers may supply review notes, never application-owned status markers.
+            return [
+                value
+                for value in raw
+                if isinstance(value, str) and "cv_generation." not in value.casefold()
+            ]
 
         def validate_core_payload(
             raw: object,
@@ -505,7 +519,7 @@ class CvDraftGenerationService:
                     tuple(sorted(core_indices_experience)),
                     tuple(sorted(core_indices_projects)),
                 )
-                warnings.extend(provider_warning_values(core))
+                provider_warnings.extend(provider_warning_values(core))
                 accept_core(core)
             except Exception as exc:
                 error_method = getattr(exc, "errors", None)
@@ -595,9 +609,20 @@ class CvDraftGenerationService:
                 ).issubset(_salient_anchors(" ".join(bullets_by_project[index])))
             )
         ]
+        # A localized description is already shaped into project bullets below.
+        # Do not spend another inference call rewriting that same rich source first.
+        project_translation_indices = {
+            target["source_index"]
+            for target in _localization_targets(request, localized_fields)
+            if target["section"] == "projects" and target["field"] == "description"
+        }
         repair_entries: list[tuple[list[int], list[int]]] = [
             ([index], []) for index in [*missing_experience, *focus_experience]
-        ] + [([], [index]) for index in [*missing_projects, *focus_projects]]
+        ] + [
+            ([], [index])
+            for index in [*missing_projects, *focus_projects]
+            if index not in project_translation_indices
+        ]
         for experience_indices, project_indices in repair_entries:
             if core is None or provider_call_count >= _MAX_PROVIDER_CALLS:
                 break
@@ -840,13 +865,38 @@ class CvDraftGenerationService:
                     failure_reasons.pop(key, None)
             return True
 
-        # Primary localization calls use six items by default. A provider response may be
+        def localization_batches(
+            targets: Sequence[dict[str, object]],
+            chunk_size: int,
+        ) -> list[list[dict[str, object]]]:
+            batches: list[list[dict[str, object]]] = []
+            batch: list[dict[str, object]] = []
+            source_chars = 0
+            for target in targets:
+                source = target.get("source")
+                size = len(source) if isinstance(source, str) else 0
+                if batch and (
+                    len(batch) >= chunk_size or source_chars + size > _LOCALIZATION_MAX_SOURCE_CHARS
+                ):
+                    batches.append(batch)
+                    batch = []
+                    source_chars = 0
+                batch.append(target)
+                source_chars += size
+            if batch:
+                batches.append(batch)
+            return batches
+
+        # Primary localization calls bound both source work and item count. A response may be
         # partial; retryable unresolved keys get one bounded repair batch. Timeout failures
         # are omitted safely instead of consuming another slow CPU inference call.
-        for offset in range(0, len(unique_plans), _LOCALIZATION_CHUNK_SIZE):
+        primary_batches = localization_batches(unique_plans, _LOCALIZATION_CHUNK_SIZE)
+        for batch_index, batch in enumerate(primary_batches):
             if provider_call_count >= _MAX_PROVIDER_CALLS:
                 mark("provider_call_cap")
-                for target in unique_plans[offset:]:
+                for target in (
+                    item for remaining in primary_batches[batch_index:] for item in remaining
+                ):
                     key = target.get("key")
                     if isinstance(key, str):
                         pending[key] = target
@@ -854,14 +904,16 @@ class CvDraftGenerationService:
                 break
             if monotonic() >= total_deadline:
                 mark("provider_deadline")
-                for target in unique_plans[offset:]:
+                for target in (
+                    item for remaining in primary_batches[batch_index:] for item in remaining
+                ):
                     key = target.get("key")
                     if isinstance(key, str):
                         pending[key] = target
                         failure_reasons[key] = "provider_deadline"
                 break
             process_localization_batch(
-                unique_plans[offset : offset + _LOCALIZATION_CHUNK_SIZE],
+                batch,
                 retry=False,
             )
 
@@ -872,7 +924,7 @@ class CvDraftGenerationService:
             if failure_reasons.get(str(target.get("key")))
             not in _NON_RETRYABLE_LOCALIZATION_FAILURES
         ]
-        for offset in range(0, len(pending_plans), _REPAIR_CHUNK_SIZE):
+        for repair_batch in localization_batches(pending_plans, _REPAIR_CHUNK_SIZE):
             if repair_calls >= _MAX_REPAIR_CALLS:
                 break
             if provider_call_count >= _MAX_PROVIDER_CALLS:
@@ -881,7 +933,6 @@ class CvDraftGenerationService:
             if monotonic() >= total_deadline:
                 mark("provider_deadline")
                 break
-            repair_batch = pending_plans[offset : offset + _REPAIR_CHUNK_SIZE]
             reasons = {
                 key: failure_reasons.get(key, "localization_missing")
                 for target in repair_batch
@@ -998,6 +1049,38 @@ class CvDraftGenerationService:
 
         # Same-locale source clauses can be safely shaped as deterministic bullets.
         # Opposite-locale rich prose is never replaced by generic filler.
+        if not request.locale.casefold().startswith("vi"):
+            for section, sources, mapped in action_groups:
+                for index, source in enumerate(sources):
+                    selected_indices = (
+                        selected_experience if section == "experience" else selected_projects
+                    )
+                    if index not in selected_indices:
+                        continue
+                    translated = localized_fields.get((section, index, "description"))
+                    if not translated:
+                        continue
+                    # Scalar translations have already passed locale, owning-entry
+                    # grounding and anchor-preservation validation. Reuse them even
+                    # when core output was partial, rather than losing source facts.
+                    translated_source = source.model_copy(update={"description": translated})
+                    enriched, _ = _fallback_bullets(
+                        translated_source,
+                        locale=request.locale,
+                        kind="experience" if section == "experience" else "project",
+                        preserved_literals=_locale_literals(request.candidate),
+                    )
+                    if enriched:
+                        # Project translations preserve this entry's full narrative.
+                        # Do not merge broader core claims that can borrow another
+                        # project's responsibilities without introducing new anchors.
+                        mapped[index] = (
+                            enriched
+                            if section == "projects"
+                            else [*mapped.get(index, []), *enriched]
+                        )
+                        provider_used = True
+
         for index, experience_source in enumerate(request.candidate.experience):
             if index not in selected_experience:
                 continue
@@ -1282,11 +1365,18 @@ class CvDraftGenerationService:
                         "để đóng góp trong vai trò này."
                     )
             else:
-                objective_value = f"Applying for the {application_role} role."
-                if supported_skills:
+                has_grounded_objective = bool(objective_value)
+                if objective_value:
+                    # Keep the candidate's grounded ambition rather than always
+                    # replacing it with a generated keyword list.
+                    objective_value = (
+                        f"Applying for the {application_role} role. " + objective_value
+                    )
+                else:
+                    objective_value = f"Applying for the {application_role} role."
+                if not has_grounded_objective and supported_skills:
                     objective_value += (
-                        f" Seeking to contribute experience with {', '.join(supported_skills[:4])} "
-                        "in this role."
+                        f" Bringing a background in {', '.join(supported_skills[:4])}."
                     )
         omitted_skill_members = sum(
             _skill_member_display(request, source) is None
@@ -1299,7 +1389,16 @@ class CvDraftGenerationService:
                 "cv_generation.diagnostic=skill_member_locale_omission:count="
                 + str(omitted_skill_members),
             )
-        unique_warnings = list(dict.fromkeys(warnings))[:20]
+        priority_prefixes = (
+            "cv_generation.localization_omission=",
+            "cv_generation.diagnostic=skill_member_locale_omission:",
+            "cv_generation.provenance=",
+            "cv_generation.localization=",
+        )
+        # Only locally produced markers are eligible for priority. Preserve stable
+        # ordering and useful provider notes within the existing response limit.
+        prioritized = sorted(warnings, key=lambda value: not value.startswith(priority_prefixes))
+        unique_warnings = list(dict.fromkeys([*prioritized, *provider_warnings]))[:20]
         return CvDraft(
             request_id=request.identity.request_id,
             trace_id=request.identity.trace_id,
