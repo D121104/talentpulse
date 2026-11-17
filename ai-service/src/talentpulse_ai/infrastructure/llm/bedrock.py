@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from math import isfinite
 from typing import Protocol, cast
 
 from talentpulse_ai.core.exceptions import ProviderFailure
@@ -14,15 +15,33 @@ class _GenerationClient(Protocol):
 class BedrockNovaGenerationAdapter:
     """Provider boundary for Amazon Nova Lite's Converse API."""
 
-    def __init__(self, client: object, model: str) -> None:
+    def __init__(
+        self,
+        client: object,
+        model: str,
+        agent_client_factory: Callable[[float], object] | None = None,
+    ) -> None:
         if not model:
             raise ValueError("generation model is required")
         self._client = client
         self._model = model
+        self._agent_client_factory = agent_client_factory
 
     def generate(self, prompt: str) -> object:
+        return self._generate_with_client(self._client, prompt)
+
+    def generate_with_timeout(self, prompt: str, *, timeout: float) -> object:
+        if not isfinite(timeout) or timeout <= 0 or self._agent_client_factory is None:
+            raise ProviderFailure("generation provider failed")
         try:
-            response = cast(_GenerationClient, self._client).converse(
+            client = self._agent_client_factory(timeout)
+        except Exception as exc:
+            raise ProviderFailure("generation provider failed") from exc
+        return self._generate_with_client(client, prompt)
+
+    def _generate_with_client(self, client: object, prompt: str) -> object:
+        try:
+            response = cast(_GenerationClient, client).converse(
                 modelId=self._model,
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 inferenceConfig={"temperature": 0.0},

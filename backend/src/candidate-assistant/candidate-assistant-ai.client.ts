@@ -184,6 +184,7 @@ export class CandidateAssistantAiServiceClient
 
   async generate(
     request: CandidateAssistantAiRequest,
+    options?: { signal?: AbortSignal },
   ): Promise<CandidateAssistantResponse> {
     if (!RAG_INTENTS.has(request.mode)) invalidResponse();
     const locale = request.locale || DEFAULT_AI_LOCALE;
@@ -215,16 +216,19 @@ export class CandidateAssistantAiServiceClient
 
     try {
       const retrieved = this.validateRetrievalResponse(
-        await this.aiServiceClient.retrieveRag({
-          identity,
-          normalized_user_message: request.message,
-          locale,
-          recent_history: history,
-          filter_state: filterState,
-          explicit_filters: explicitFilters,
-          filter_provenance: {},
-          policy,
-        }),
+        await this.aiServiceClient.retrieveRag(
+          {
+            identity,
+            normalized_user_message: request.message,
+            locale,
+            recent_history: history,
+            filter_state: filterState,
+            explicit_filters: explicitFilters,
+            filter_provenance: {},
+            policy,
+          },
+          options,
+        ),
         identity.request_id,
         identity.trace_id,
       );
@@ -297,6 +301,7 @@ export class CandidateAssistantAiServiceClient
             },
             locale,
           ),
+          options,
         );
         if (
           !comparison ||
@@ -309,47 +314,50 @@ export class CandidateAssistantAiServiceClient
         // the strict provenance contract above; no raw CV/JD data is copied.
         matchingEvidence = this.toGenerationMatchingEvidence(comparison);
       }
-      const generated = await this.aiServiceClient.generateRag({
-        identity,
-        normalized_user_message: request.message,
-        intent: request.mode,
-        locale,
-        recent_history: history,
-        filter_state: filterState,
-        authorized_cv_snapshot: request.cv
-          ? {
-              cv_id: request.cv.cvId,
-              content_hash: request.cv.contentHash,
-              title: request.cv.title,
-              target: null,
-              skills: request.cv.skills.slice(0, 30),
-              education: request.cv.education.slice(0, 30),
-              experience: request.cv.experience.slice(0, 30),
-              certificates: request.cv.certificates.slice(0, 30),
-              sanitized_text: request.cv.sanitizedText,
-              consent_version: request.consentVersion || null,
-            }
-          : null,
-        canonical_active_job_context: contextJobs.map((job) => ({
-          job_id: job.id,
-          title: job.title,
-          company_name: job.company?.name || 'Unknown company',
-          location: job.location,
-          level: job.level,
-          salary:
-            job.salary === null
-              ? null
-              : { amount: job.salary, currency: 'VND' },
-          skills: job.skills.slice(0, 30),
-          start_date: null,
-          end_date: null,
-        })),
-        retrieval_evidence: retrievalEvidence,
-        matching_evidence: matchingEvidence,
-        explicit_filters: explicitFilters,
-        policy,
-        consent_version: request.cv ? request.consentVersion : null,
-      });
+      const generated = await this.aiServiceClient.generateRag(
+        {
+          identity,
+          normalized_user_message: request.message,
+          intent: request.mode,
+          locale,
+          recent_history: history,
+          filter_state: filterState,
+          authorized_cv_snapshot: request.cv
+            ? {
+                cv_id: request.cv.cvId,
+                content_hash: request.cv.contentHash,
+                title: request.cv.title,
+                target: null,
+                skills: request.cv.skills.slice(0, 30),
+                education: request.cv.education.slice(0, 30),
+                experience: request.cv.experience.slice(0, 30),
+                certificates: request.cv.certificates.slice(0, 30),
+                sanitized_text: request.cv.sanitizedText,
+                consent_version: request.consentVersion || null,
+              }
+            : null,
+          canonical_active_job_context: contextJobs.map((job) => ({
+            job_id: job.id,
+            title: job.title,
+            company_name: job.company?.name || 'Unknown company',
+            location: job.location,
+            level: job.level,
+            salary:
+              job.salary === null
+                ? null
+                : { amount: job.salary, currency: 'VND' },
+            skills: job.skills.slice(0, 30),
+            start_date: null,
+            end_date: null,
+          })),
+          retrieval_evidence: retrievalEvidence,
+          matching_evidence: matchingEvidence,
+          explicit_filters: explicitFilters,
+          policy,
+          consent_version: request.cv ? request.consentVersion : null,
+        },
+        options,
+      );
       const response = this.toResponse(
         generated,
         request,

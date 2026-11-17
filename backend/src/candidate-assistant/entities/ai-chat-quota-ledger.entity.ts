@@ -27,6 +27,9 @@ import { AiQuotaReservationStatus } from '../candidate-assistant.types';
 @Index('IDX_ai_chat_quota_message', ['messageId'], {
   where: '"messageId" IS NOT NULL',
 })
+@Index('IDX_ai_chat_quota_lease_expiry', ['leaseExpiresAt', '_id'], {
+  where: '"status" = \'RESERVED\' AND "leaseExpiresAt" IS NOT NULL',
+})
 export class AiChatQuotaLedger {
   @PrimaryGeneratedColumn('uuid') _id: string;
   @Column({ type: 'uuid' }) userId: string;
@@ -40,4 +43,13 @@ export class AiChatQuotaLedger {
   @CreateDateColumn({ type: 'timestamptz' }) createdAt: Date;
   @UpdateDateColumn({ type: 'timestamptz' }) updatedAt: Date;
   @Column({ type: 'timestamptz', nullable: true }) finalizedAt: Date | null;
+  @Column({ type: 'uuid', nullable: true }) executionOwner: string | null;
+  @Column({ type: 'timestamptz', nullable: true }) leaseExpiresAt: Date | null;
+  @Column({ type: 'uuid', nullable: true }) executionSessionId: string | null;
+  @Column({ type: 'uuid', nullable: true }) executionUserMessageId:
+    | string
+    | null;
+  @Column({ type: 'uuid', nullable: true }) executionAssistantMessageId:
+    | string
+    | null;
 }

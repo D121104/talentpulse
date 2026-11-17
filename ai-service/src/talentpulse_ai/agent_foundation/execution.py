@@ -25,7 +25,6 @@ from talentpulse_ai.agent_foundation.contracts import (
     ToolCallDecision,
 )
 from talentpulse_ai.agent_foundation.model import AgentModelError
-from talentpulse_ai.agent_foundation.observability import record_execution_observation
 from talentpulse_ai.agent_foundation.policy import (
     check_execution_budget,
     interruption_error,
@@ -341,5 +340,4 @@ def execute_agent(
             elapsed_ms=elapsed_ms,
         ),
     )
-    record_execution_observation(result)
     return result

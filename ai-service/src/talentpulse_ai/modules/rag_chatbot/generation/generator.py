@@ -186,6 +186,44 @@ class GenerationService:
             return self._fallback(request, degraded=True, reason="locale_mismatch")
         return self._response(request, generated, degraded=degraded)
 
+    @staticmethod
+    def validate_agent_output(request: RagGenerateRequest, value: object) -> ProviderGeneration:
+        if request.intent == "CV_JOB_COMPARISON":
+            return GenerationService._parse_and_validate(value, request)
+
+        candidate = ProviderGeneration.model_validate(value)
+        deduplicated = candidate.model_copy(
+            update={
+                "citation_keys": list(dict.fromkeys(candidate.citation_keys)),
+                "referenced_job_ids": list(dict.fromkeys(candidate.referenced_job_ids)),
+                "claims": [
+                    claim.model_copy(
+                        update={
+                            "citation_keys": list(dict.fromkeys(claim.citation_keys)),
+                        }
+                    )
+                    for claim in candidate.claims
+                ],
+            }
+        )
+        return GenerationService._parse_and_validate(
+            deduplicated.model_dump(mode="python"), request
+        )
+
+    @staticmethod
+    def finalize_agent_output(request: RagGenerateRequest, value: object) -> RagGenerateResponse:
+        if request.intent == "JOB_SEARCH" and not request.retrieval_evidence:
+            return GenerationService._fallback(request, reason="insufficient_evidence")
+        try:
+            generated = GenerationService.validate_agent_output(request, value)
+        except (ValidationError, TypeError, ValueError):
+            return GenerationService._fallback(request, degraded=True, reason="validation_error")
+        if not _generated_answer_matches_locale(request, generated):
+            return GenerationService._fallback(request, degraded=True, reason="locale_mismatch")
+        if GenerationService._job_search_needs_fallback(request, generated):
+            return GenerationService._fallback(request, degraded=True)
+        return GenerationService._response(request, generated, degraded=False)
+
     def _generate_validated(self, prompt: str, request: RagGenerateRequest) -> ProviderGeneration:
         if request.intent == "CV_JOB_COMPARISON" and callable(
             getattr(self._provider, "generate_structured", None)

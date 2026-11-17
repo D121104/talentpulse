@@ -167,6 +167,7 @@ export class AiServiceTransport {
     data: unknown,
     scope: string,
     timeoutMs = this.timeoutMs,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     if (!this.baseUrl)
       throw new AiServiceError(
@@ -177,6 +178,7 @@ export class AiServiceTransport {
       method: 'POST',
       url: `${this.baseUrl}${path}`,
       data,
+      signal,
       timeout:
         Number.isInteger(timeoutMs) && timeoutMs >= 100
           ? timeoutMs

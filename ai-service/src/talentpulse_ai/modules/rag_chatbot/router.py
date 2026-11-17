@@ -4,7 +4,9 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, Request
 
+from talentpulse_ai.agent_foundation.selector import CapabilityImplementationSelector
 from talentpulse_ai.core.security import require_scope
+from talentpulse_ai.modules.rag_chatbot.agent import CareerChatAgent
 from talentpulse_ai.modules.rag_chatbot.generation.generator import GenerationService
 from talentpulse_ai.modules.rag_chatbot.schemas import (
     RagGenerateRequest,
@@ -33,5 +35,13 @@ def retrieve(payload: RagRetrieveRequest, request: Request) -> RagRetrieveRespon
     dependencies=[Depends(require_scope("rag_generate_scope"))],
 )
 def generate(payload: RagGenerateRequest, request: Request) -> RagGenerateResponse:
-    service = cast(GenerationService, request.app.state.generation_service)
+    selector = cast(CapabilityImplementationSelector, request.app.state.capability_selector)
+    service = cast(
+        GenerationService | CareerChatAgent,
+        selector.select(
+            "rag.generate",
+            legacy=cast(GenerationService, request.app.state.generation_service),
+            agent=cast(CareerChatAgent, request.app.state.agent_generation_service),
+        ),
+    )
     return service.generate(payload)

@@ -65,6 +65,18 @@ function setup(
       reserve: jest.fn().mockResolvedValue({ id: 'r', reused: false }),
       commit: jest.fn(),
       release: jest.fn(),
+      acquireLease: jest
+        .fn()
+        .mockImplementation((reservation, owner, context) => ({
+          reservation,
+          owner,
+          expiresAt: new Date(Date.now() + 30_000),
+          graceMs: 5_000,
+          ...context,
+        })),
+      renewLease: jest.fn().mockResolvedValue(true),
+      findExpiredLeases: jest.fn().mockResolvedValue([]),
+      terminalizeLease: jest.fn().mockResolvedValue(false),
     } as any,
     { getAll: jest.fn().mockResolvedValue([]), findOne: jest.fn() } as any,
     {
@@ -85,6 +97,340 @@ function setup(
   };
 }
 describe('CandidateAssistantService', () => {
+  it('returns the raced request when quota was already reserved by another instance', async () => {
+    const { service, messageRepo, quotaService, aiClient } = setup();
+    const userMessage = {
+      _id: 'user-raced',
+      sessionId: 'session-1',
+      clientMessageId: 'raced-message',
+      role: AiChatMessageRole.USER,
+      status: AiChatMessageStatus.COMPLETED,
+      content: 'advice',
+    };
+    const assistantMessage = {
+      _id: 'assistant-raced',
+      sessionId: 'session-1',
+      parentMessageId: 'user-raced',
+      role: AiChatMessageRole.ASSISTANT,
+      status: AiChatMessageStatus.COMPLETED,
+      content: 'existing result',
+    };
+    quotaService.reserve.mockResolvedValue({ id: 'r', reused: true });
+    messageRepo.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(userMessage)
+      .mockResolvedValueOnce(assistantMessage);
+
+    const result = await service.sendMessage(
+      'session-1',
+      { content: 'advice', clientMessageId: 'raced-message' },
+      user,
+    );
+
+    expect(result).toEqual({
+      userMessage,
+      assistantMessage,
+    });
+    expect(messageRepo.save).not.toHaveBeenCalled();
+    expect(quotaService.acquireLease).not.toHaveBeenCalled();
+    expect(quotaService.release).not.toHaveBeenCalled();
+    expect(aiClient.generate).not.toHaveBeenCalled();
+  });
+
+  describe('T034 cancellation and recovery guards', () => {
+    // Proposed internal T033 seam; keep missing methods as runtime RED failures,
+    // rather than preventing the existing service tests from compiling.
+    type LifecycleService = {
+      sendMessage(
+        ...args: [
+          ...Parameters<CandidateAssistantService['sendMessage']>,
+          AbortSignal?,
+        ]
+      ): ReturnType<CandidateAssistantService['sendMessage']>;
+      reconcileInterruptedRequests(now: Date): Promise<void>;
+    };
+
+    const now = new Date('2026-11-17T16:00:00Z');
+    const dto = { content: 'advice', clientMessageId: 'lease-guard-turn' };
+    const response = {
+      blocks: [{ type: 'ADVICE', text: 'late provider result' }],
+      citations: [],
+    };
+
+    function lifecycleSetup() {
+      const context = setup();
+      const reservation = { id: 'r', reused: false };
+      const lease = {
+        reservation,
+        owner: 'instance-a:execution-1',
+        expiresAt: new Date(now.getTime() + 30_000),
+        graceMs: 5_000,
+        sessionId: 'session-1',
+        userMessageId: 'user-turn',
+        assistantMessageId: 'assistant-turn',
+      };
+      const rows = [
+        {
+          _id: lease.userMessageId,
+          sessionId: lease.sessionId,
+          role: AiChatMessageRole.USER,
+          status: AiChatMessageStatus.COMPLETED,
+          content: dto.content,
+        },
+        {
+          _id: lease.assistantMessageId,
+          sessionId: lease.sessionId,
+          parentMessageId: lease.userMessageId,
+          role: AiChatMessageRole.ASSISTANT,
+          status: AiChatMessageStatus.PROCESSING,
+          content: null,
+        },
+      ];
+      context.messageRepo.save.mockImplementation(async (value) => {
+        const stored = {
+          ...value,
+          _id:
+            value._id ||
+            (value.role === AiChatMessageRole.USER
+              ? lease.userMessageId
+              : lease.assistantMessageId),
+        };
+        const index = rows.findIndex((row) => row._id === stored._id);
+        if (index === -1) rows.push(stored);
+        else rows[index] = stored;
+        return stored;
+      });
+      context.messageRepo.findOne.mockImplementation(
+        async ({ where }) =>
+          rows.find((row) =>
+            Object.entries(where).every(([key, value]) => row[key] === value),
+          ) || null,
+      );
+      Object.assign(context.quotaService, {
+        acquireLease: jest.fn().mockResolvedValue(lease),
+        renewLease: jest.fn().mockResolvedValue(true),
+        findExpiredLeases: jest.fn().mockResolvedValue([lease]),
+        terminalizeLease: jest.fn().mockResolvedValue(true),
+      });
+      return {
+        ...context,
+        lifecycle: context.service as unknown as LifecycleService,
+        lease,
+        rows,
+      };
+    }
+
+    afterEach(() => jest.useRealTimers());
+
+    it('renews the owned durable lease while an AI call is pending and stops renewing after completion', async () => {
+      jest.useFakeTimers().setSystemTime(now);
+      const { lifecycle, aiClient, quotaService, lease } = lifecycleSetup();
+      let finish!: (value: typeof response) => void;
+      const started = new Promise<void>((resolve) => {
+        aiClient.generate.mockImplementation(() => {
+          resolve();
+          return new Promise((done) => {
+            finish = done;
+          });
+        });
+      });
+      const pending = lifecycle.sendMessage('session-1', dto, user);
+      await started;
+      try {
+        await jest.advanceTimersByTimeAsync(10_000);
+        expect(quotaService.renewLease).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ...lease.reservation,
+            executionOwner: lease.owner,
+          }),
+          lease.owner,
+        );
+      } finally {
+        finish(response);
+        await pending;
+      }
+      const renewalCount = quotaService.renewLease.mock.calls.length;
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(quotaService.renewLease).toHaveBeenCalledTimes(renewalCount);
+      expect(quotaService.commit).toHaveBeenCalledTimes(1);
+      expect(quotaService.release).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['unexpired', 1],
+      ['expired but inside renewal grace', -4_999],
+      ['at the grace boundary', -5_000],
+    ])('does not reconcile an %s lease', async (_label, offset) => {
+      const { lifecycle, quotaService, lease, messageRepo, aiClient } =
+        lifecycleSetup();
+      lease.expiresAt = new Date(now.getTime() + Number(offset));
+      await lifecycle.reconcileInterruptedRequests(now);
+      expect(quotaService.terminalizeLease).not.toHaveBeenCalled();
+      expect(messageRepo.save).not.toHaveBeenCalled();
+      expect(quotaService.release).not.toHaveBeenCalled();
+      expect(aiClient.generate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['renewed by the live owner', AiChatMessageStatus.PROCESSING],
+      ['already completed', AiChatMessageStatus.COMPLETED],
+      ['already failed by another reconciler', AiChatMessageStatus.FAILED],
+    ])(
+      'does not change messages or release quota when the conditional transition loses: %s',
+      async (_label, status) => {
+        const { lifecycle, quotaService, lease, messageRepo, rows, aiClient } =
+          lifecycleSetup();
+        lease.expiresAt = new Date(now.getTime() - 5_001);
+        rows[1].status = status as AiChatMessageStatus;
+        quotaService.terminalizeLease.mockResolvedValue(false);
+        await lifecycle.reconcileInterruptedRequests(now);
+        expect(quotaService.terminalizeLease).toHaveBeenCalledWith(lease, now);
+        expect(messageRepo.save).not.toHaveBeenCalled();
+        expect(rows[0].status).toBe(AiChatMessageStatus.COMPLETED);
+        expect(rows[1].status).toBe(status);
+        expect(quotaService.release).not.toHaveBeenCalled();
+        expect(quotaService.commit).not.toHaveBeenCalled();
+        expect(aiClient.generate).not.toHaveBeenCalled();
+      },
+    );
+
+    it('reconciles an expired interrupted execution once without replaying its accepted turn', async () => {
+      const { lifecycle, quotaService, lease, rows, aiClient } =
+        lifecycleSetup();
+      lease.expiresAt = new Date(now.getTime() - 5_001);
+      quotaService.terminalizeLease
+        .mockImplementationOnce(async (recoveredLease) => {
+          recoveredLease.reservation.executionOwner = 'recovery-owner';
+          quotaService.renewLease.mockResolvedValue(false);
+          return true;
+        })
+        .mockResolvedValue(false);
+      await lifecycle.reconcileInterruptedRequests(now);
+      await lifecycle.reconcileInterruptedRequests(now);
+      expect(rows.find((row) => row._id === lease.userMessageId)?.status).toBe(
+        AiChatMessageStatus.COMPLETED,
+      );
+      expect(
+        rows.find((row) => row._id === lease.assistantMessageId),
+      ).toMatchObject({
+        status: AiChatMessageStatus.FAILED,
+        content: null,
+      });
+      expect(quotaService.release).toHaveBeenCalledTimes(1);
+      expect(quotaService.commit).not.toHaveBeenCalled();
+      expect(quotaService.reserve).not.toHaveBeenCalled();
+      expect(aiClient.generate).not.toHaveBeenCalled();
+    });
+
+    it.each(['resolve', 'reject'] as const)(
+      'keeps cancellation terminal when an uncooperative provider later %ss',
+      async (settlement) => {
+        const { lifecycle, aiClient, quotaService, rows, messageRepo } =
+          lifecycleSetup();
+        const controller = new AbortController();
+        let finish!: (value: typeof response) => void;
+        let fail!: (error: Error) => void;
+        const started = new Promise<void>((resolve) => {
+          aiClient.generate.mockImplementation(() => {
+            resolve();
+            return new Promise((done, reject) => {
+              finish = done;
+              fail = reject;
+            });
+          });
+        });
+        const pending = lifecycle
+          .sendMessage('session-1', dto, user, undefined, controller.signal)
+          .then(
+            () => 'completed',
+            () => 'failed',
+          );
+        await started;
+        controller.abort();
+        controller.abort();
+        // Let cancellation handlers run before the provider ignores the abort.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const failureBeforeLateResult = rows.find(
+          (row) => row.role === AiChatMessageRole.ASSISTANT,
+        )?.status;
+        if (settlement === 'resolve') finish(response);
+        else fail(new Error('late transport rejection'));
+        const outcome = await pending;
+        expect(failureBeforeLateResult).toBe(AiChatMessageStatus.FAILED);
+        expect(outcome).toBe('failed');
+        expect(
+          rows
+            .filter((row) => row.role === AiChatMessageRole.USER)
+            .every((row) => row.status === AiChatMessageStatus.COMPLETED),
+        ).toBe(true);
+        expect(
+          rows.find((row) => row.role === AiChatMessageRole.ASSISTANT),
+        ).toMatchObject({
+          status: AiChatMessageStatus.FAILED,
+          content: null,
+        });
+        expect(
+          messageRepo.save.mock.calls.some(
+            ([row]) =>
+              row.role === AiChatMessageRole.ASSISTANT &&
+              row.status === AiChatMessageStatus.COMPLETED,
+          ),
+        ).toBe(false);
+        expect(quotaService.release).toHaveBeenCalledTimes(1);
+        expect(quotaService.commit).not.toHaveBeenCalled();
+        expect(quotaService.reserve).toHaveBeenCalledTimes(1);
+        expect(aiClient.generate).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('discards an in-flight late result after another instance recovers the expired execution', async () => {
+      const { lifecycle, aiClient, quotaService, lease, rows } =
+        lifecycleSetup();
+      let finish!: (value: typeof response) => void;
+      const started = new Promise<void>((resolve) => {
+        aiClient.generate.mockImplementation(() => {
+          resolve();
+          return new Promise((done) => {
+            finish = done;
+          });
+        });
+      });
+      const pending = lifecycle.sendMessage('session-1', dto, user).then(
+        () => 'completed',
+        () => 'failed',
+      );
+      await started;
+      lease.expiresAt = new Date(now.getTime() - 5_001);
+      quotaService.terminalizeLease
+        .mockImplementationOnce(async (recoveredLease) => {
+          recoveredLease.reservation.executionOwner = 'recovery-owner';
+          quotaService.renewLease.mockResolvedValue(false);
+          return true;
+        })
+        .mockResolvedValue(false);
+      try {
+        await lifecycle.reconcileInterruptedRequests(now);
+        await lifecycle.reconcileInterruptedRequests(now);
+      } finally {
+        finish(response);
+        await pending;
+      }
+      expect(rows.find((row) => row._id === lease.userMessageId)?.status).toBe(
+        AiChatMessageStatus.COMPLETED,
+      );
+      expect(
+        rows.find((row) => row._id === lease.assistantMessageId),
+      ).toMatchObject({
+        status: AiChatMessageStatus.FAILED,
+        content: null,
+      });
+      expect(quotaService.release).toHaveBeenCalledTimes(1);
+      expect(quotaService.commit).not.toHaveBeenCalled();
+      expect(aiClient.generate).toHaveBeenCalledTimes(1);
+      expect(quotaService.reserve).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it.each([
     { source: 'llm', fallbackReason: null },
     { source: 'deterministic_fallback', fallbackReason: 'provider_error' },
@@ -180,6 +526,7 @@ describe('CandidateAssistantService', () => {
     ).toHaveBeenCalledWith(user._id, cvId, 'online', user.email);
     expect(aiClient.generate).toHaveBeenCalledWith(
       expect.objectContaining({ cv: snapshot, consentVersion: 'v1' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
   it('rejects HR before reading a session', async () => {
@@ -228,6 +575,7 @@ describe('CandidateAssistantService', () => {
           salary_max: 200,
         },
       }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
@@ -293,6 +641,7 @@ describe('CandidateAssistantService', () => {
 
     expect(aiClient.generate).toHaveBeenCalledWith(
       expect.objectContaining({ locale: 'vi-VN' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
@@ -497,6 +846,7 @@ describe('CandidateAssistantService', () => {
     expect(quotaService.commit).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'r2', reused: false }),
       'assistant-1',
+      expect.objectContaining({ status: AiChatMessageStatus.COMPLETED }),
     );
     expect(quotaService.release).not.toHaveBeenCalled();
     expect(aiClient.generate).toHaveBeenCalledTimes(1);

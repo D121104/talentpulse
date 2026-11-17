@@ -1,10 +1,21 @@
 import { HttpException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
+import {
+  DataSource,
+  FindOptionsWhere,
+  IsNull,
+  LessThan,
+  LessThanOrEqual,
+  Not,
+  Repository,
+} from 'typeorm';
 import { UsersService } from 'src/users/users.service';
 import { Role } from 'src/decorator/customize';
 import { PremiumPlan } from 'src/users/entities/user.entity';
 import { AiChatQuotaLedger } from './entities/ai-chat-quota-ledger.entity';
+import { AiChatMessage } from './entities/ai-chat-message.entity';
+import { AiChatMessageStatus } from './candidate-assistant.types';
 import { AiQuotaReservationStatus } from './candidate-assistant.types';
 import { PremiumPackage } from 'src/payments/entities/premium-package.entity';
 import { isUUID } from 'class-validator';
@@ -15,7 +26,23 @@ export interface AiQuotaReservation {
   quotaDate: string;
   reservationKey: string;
   reused: boolean;
+  executionOwner?: string;
 }
+
+export interface CandidateAssistantExecutionLease {
+  reservation: AiQuotaReservation;
+  owner: string;
+  expiresAt: Date;
+  graceMs: number;
+  sessionId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
+export const CANDIDATE_ASSISTANT_LEASE_TTL_MS = 30_000;
+export const CANDIDATE_ASSISTANT_LEASE_GRACE_MS = 5_000;
+
+class LeaseTransitionConflict extends Error {}
 
 @Injectable()
 export class CandidateAssistantQuotaService {
@@ -68,6 +95,11 @@ export class CandidateAssistantQuotaService {
       row.errorCode = null;
       row.finalizedAt = null;
       row.messageId = null;
+      row.executionOwner = null;
+      row.leaseExpiresAt = null;
+      row.executionSessionId = null;
+      row.executionUserMessageId = null;
+      row.executionAssistantMessageId = null;
       return this.toReservation(await repo.save(row), false);
     });
   }
@@ -93,24 +125,200 @@ export class CandidateAssistantQuotaService {
   async commit(
     reservation: AiQuotaReservation,
     messageId: string,
-  ): Promise<void> {
-    await this.update(reservation, {
-      status: AiQuotaReservationStatus.COMMITTED,
-      messageId,
-      finalizedAt: new Date(),
-      errorCode: null,
-    });
+    assistantUpdates?: Partial<AiChatMessage>,
+  ): Promise<boolean> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const ledger = manager.getRepository(AiChatQuotaLedger);
+        const updated = await ledger.update(
+          this.reservationWhere(reservation),
+          {
+            status: AiQuotaReservationStatus.COMMITTED,
+            messageId,
+            finalizedAt: new Date(),
+            errorCode: null,
+            executionOwner: null,
+            leaseExpiresAt: null,
+            executionSessionId: null,
+            executionUserMessageId: null,
+            executionAssistantMessageId: null,
+          },
+        );
+        if (updated.affected !== 1) return false;
+        if (assistantUpdates) {
+          const assistant = await manager
+            .getRepository(AiChatMessage)
+            .update(
+              { _id: messageId, status: AiChatMessageStatus.PROCESSING },
+              assistantUpdates,
+            );
+          if (assistant.affected !== 1) throw new LeaseTransitionConflict();
+        }
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof LeaseTransitionConflict) return false;
+      throw error;
+    }
   }
 
   async release(
     reservation: AiQuotaReservation,
     errorCode = 'AI_REQUEST_FAILED',
-  ): Promise<void> {
-    await this.update(reservation, {
-      status: AiQuotaReservationStatus.RELEASED,
-      finalizedAt: new Date(),
-      errorCode,
+    assistantUpdates?: Partial<AiChatMessage>,
+  ): Promise<boolean> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const ledger = manager.getRepository(AiChatQuotaLedger);
+        const updated = await ledger.update(
+          this.reservationWhere(reservation),
+          {
+            status: AiQuotaReservationStatus.RELEASED,
+            messageId: null,
+            finalizedAt: new Date(),
+            errorCode: errorCode.slice(0, 64),
+            executionOwner: null,
+            leaseExpiresAt: null,
+            executionSessionId: null,
+            executionUserMessageId: null,
+            executionAssistantMessageId: null,
+          },
+        );
+        if (updated.affected !== 1) return false;
+        const assistantId = assistantUpdates?._id;
+        if (assistantUpdates && typeof assistantId === 'string') {
+          const assistant = await manager
+            .getRepository(AiChatMessage)
+            .update(
+              { _id: assistantId, status: AiChatMessageStatus.PROCESSING },
+              assistantUpdates,
+            );
+          if (assistant.affected !== 1) throw new LeaseTransitionConflict();
+        }
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof LeaseTransitionConflict) return false;
+      throw error;
+    }
+  }
+
+  async acquireLease(
+    reservation: AiQuotaReservation,
+    owner: string,
+    context: Pick<
+      CandidateAssistantExecutionLease,
+      'sessionId' | 'userMessageId' | 'assistantMessageId'
+    >,
+    now = new Date(),
+  ): Promise<CandidateAssistantExecutionLease | null> {
+    const expiresAt = new Date(
+      now.getTime() + CANDIDATE_ASSISTANT_LEASE_TTL_MS,
+    );
+    const result = await this.ledgerRepo.update(
+      {
+        ...this.reservationWhere(reservation),
+        executionOwner: IsNull(),
+      },
+      {
+        executionOwner: owner,
+        leaseExpiresAt: expiresAt,
+        executionSessionId: context.sessionId,
+        executionUserMessageId: context.userMessageId,
+        executionAssistantMessageId: context.assistantMessageId,
+      },
+    );
+    if (result.affected !== 1) return null;
+    reservation.executionOwner = owner;
+    return {
+      reservation,
+      owner,
+      expiresAt,
+      graceMs: CANDIDATE_ASSISTANT_LEASE_GRACE_MS,
+      ...context,
+    };
+  }
+
+  async renewLease(
+    reservation: AiQuotaReservation,
+    owner: string,
+    now = new Date(),
+  ): Promise<boolean> {
+    const result = await this.ledgerRepo.update(
+      { ...this.reservationWhere(reservation), executionOwner: owner },
+      {
+        leaseExpiresAt: new Date(
+          now.getTime() + CANDIDATE_ASSISTANT_LEASE_TTL_MS,
+        ),
+      },
+    );
+    return result.affected === 1;
+  }
+
+  async findExpiredLeases(
+    now = new Date(),
+  ): Promise<CandidateAssistantExecutionLease[]> {
+    const cutoff = new Date(now.getTime() - CANDIDATE_ASSISTANT_LEASE_GRACE_MS);
+    const rows = await this.ledgerRepo.find({
+      where: {
+        status: AiQuotaReservationStatus.RESERVED,
+        executionOwner: Not(IsNull()),
+        leaseExpiresAt: LessThan(cutoff),
+      },
+      order: { leaseExpiresAt: 'ASC', _id: 'ASC' },
+      take: 100,
     });
+    return rows.flatMap((row) => {
+      if (
+        !row.executionOwner ||
+        !row.leaseExpiresAt ||
+        !row.executionSessionId ||
+        !row.executionUserMessageId ||
+        !row.executionAssistantMessageId
+      ) {
+        return [];
+      }
+      const reservation = this.toReservation(row, true);
+      return [
+        {
+          reservation,
+          owner: row.executionOwner,
+          expiresAt: row.leaseExpiresAt,
+          graceMs: CANDIDATE_ASSISTANT_LEASE_GRACE_MS,
+          sessionId: row.executionSessionId,
+          userMessageId: row.executionUserMessageId,
+          assistantMessageId: row.executionAssistantMessageId,
+        },
+      ];
+    });
+  }
+
+  async terminalizeLease(
+    lease: CandidateAssistantExecutionLease,
+    now = new Date(),
+  ): Promise<boolean> {
+    const recoveryOwner = randomUUID();
+    const cutoff = new Date(now.getTime() - lease.graceMs);
+    const result = await this.ledgerRepo.update(
+      {
+        ...this.reservationWhere(lease.reservation),
+        executionOwner: lease.owner,
+        leaseExpiresAt: LessThanOrEqual(cutoff),
+      },
+      {
+        executionOwner: recoveryOwner,
+        leaseExpiresAt: new Date(
+          now.getTime() + CANDIDATE_ASSISTANT_LEASE_TTL_MS,
+        ),
+      },
+    );
+    if (result.affected !== 1) return false;
+    lease.owner = recoveryOwner;
+    lease.reservation.executionOwner = recoveryOwner;
+    lease.expiresAt = new Date(
+      now.getTime() + CANDIDATE_ASSISTANT_LEASE_TTL_MS,
+    );
+    return true;
   }
 
   private async getDailyLimit(
@@ -173,19 +381,18 @@ export class CandidateAssistantQuotaService {
     return pkg.chatbotDailyLimit;
   }
 
-  private async update(
+  private reservationWhere(
     reservation: AiQuotaReservation,
-    values: Partial<AiChatQuotaLedger>,
-  ): Promise<void> {
-    await this.ledgerRepo.update(
-      {
-        _id: reservation.id,
-        userId: reservation.userId,
-        quotaDate: reservation.quotaDate,
-        status: AiQuotaReservationStatus.RESERVED,
-      },
-      values,
-    );
+  ): FindOptionsWhere<AiChatQuotaLedger> {
+    return {
+      _id: reservation.id,
+      userId: reservation.userId,
+      quotaDate: reservation.quotaDate,
+      status: AiQuotaReservationStatus.RESERVED,
+      ...(reservation.executionOwner
+        ? { executionOwner: reservation.executionOwner }
+        : {}),
+    };
   }
 
   private toReservation(
@@ -198,6 +405,7 @@ export class CandidateAssistantQuotaService {
       quotaDate: row.quotaDate,
       reservationKey: row.reservationKey,
       reused,
+      ...(row.executionOwner ? { executionOwner: row.executionOwner } : {}),
     };
   }
 

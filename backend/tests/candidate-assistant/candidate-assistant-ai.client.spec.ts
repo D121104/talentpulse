@@ -177,9 +177,11 @@ describe('CandidateAssistantAiServiceClient', () => {
 
     expect(aiServiceClient.retrieveRag).toHaveBeenCalledWith(
       expect.objectContaining({ locale: 'en' }),
+      undefined,
     );
     expect(aiServiceClient.generateRag).toHaveBeenCalledWith(
       expect.objectContaining({ locale: 'en' }),
+      undefined,
     );
   });
 
@@ -283,7 +285,7 @@ describe('CandidateAssistantAiServiceClient', () => {
         location: 'Hanoi',
         work_modes: [],
       },
-    });
+    }, undefined);
     expect(aiServiceClient.generateRag).toHaveBeenCalledWith(
       expect.objectContaining({
         canonical_active_job_context: [
@@ -320,6 +322,7 @@ describe('CandidateAssistantAiServiceClient', () => {
           },
         ],
       }),
+      undefined,
     );
   });
 

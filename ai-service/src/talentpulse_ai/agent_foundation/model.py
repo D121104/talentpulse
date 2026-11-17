@@ -37,6 +37,14 @@ class AgentModelAdapter:
                     cast(Mapping[str, object], self._decision_adapter.json_schema()),
                     timeout,
                 )
+            elif timeout is not None:
+                generate_with_timeout = getattr(self._provider, "generate_with_timeout", None)
+                if not callable(generate_with_timeout):
+                    raise AgentModelError(
+                        AgentErrorCode.PROVIDER_ERROR,
+                        "Model provider does not support bounded requests.",
+                    )
+                raw = generate_with_timeout(prompt, timeout=timeout)
             else:
                 raw = self._provider.generate(prompt)
         except Exception:

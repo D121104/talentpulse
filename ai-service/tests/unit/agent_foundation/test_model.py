@@ -36,6 +36,9 @@ class TextFakeProvider:
     def generate(self, prompt: str) -> object:
         return self.response
 
+    def generate_with_timeout(self, prompt: str, *, timeout: float) -> object:
+        return self.response
+
 
 def test_adapter_uses_structured_provider_and_normalizes_typed_decision() -> None:
     provider = StructuredFakeProvider({"kind": "final", "output": {"answer": "ok"}})
@@ -81,3 +84,61 @@ def test_adapter_normalizes_provider_failure_without_exposing_provider_detail() 
 
     assert error.value.code is AgentErrorCode.PROVIDER_ERROR
     assert "provider-secret-payload" not in str(error.value)
+
+
+def test_adapter_passes_remaining_timeout_to_every_structured_call() -> None:
+    provider = StructuredFakeProvider({"kind": "final", "output": {"answer": "ok"}})
+    adapter = AgentModelAdapter(provider)
+
+    for remaining_timeout in (2.5, 1.25, 0.125):
+        provider.received_timeout = None
+
+        decision = adapter.decide("capability prompt", timeout=remaining_timeout)
+
+        assert isinstance(decision, FinalDecision)
+        assert provider.received_timeout == remaining_timeout
+
+
+def test_adapter_passes_remaining_timeout_to_every_timeout_aware_text_call() -> None:
+    class TimeoutAwareProvider:
+        def __init__(self) -> None:
+            self.received_timeouts: list[float] = []
+            self.unbounded_calls = 0
+
+        def generate_with_timeout(self, prompt: str, *, timeout: float) -> object:
+            self.received_timeouts.append(timeout)
+            return json.dumps({"kind": "final", "output": {"answer": "ok"}})
+
+        def generate(self, prompt: str) -> object:
+            self.unbounded_calls += 1
+            return json.dumps({"kind": "final", "output": {"answer": "ok"}})
+
+    provider = TimeoutAwareProvider()
+    adapter = AgentModelAdapter(provider)
+    remaining_timeouts = (2.5, 1.25, 0.125)
+
+    for remaining_timeout in remaining_timeouts:
+        decision = adapter.decide("capability prompt", timeout=remaining_timeout)
+        assert isinstance(decision, FinalDecision)
+
+    assert provider.unbounded_calls == 0
+    assert provider.received_timeouts == list(remaining_timeouts)
+
+
+def test_adapter_rejects_plain_generation_provider_without_calling_it() -> None:
+    class UnboundedProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, prompt: str) -> object:
+            self.calls += 1
+            return json.dumps({"kind": "final", "output": {"answer": "ok"}})
+
+    provider = UnboundedProvider()
+    adapter = AgentModelAdapter(provider)
+
+    with pytest.raises(AgentModelError) as error:
+        adapter.decide("capability prompt", timeout=0.125)
+
+    assert error.value.code is AgentErrorCode.PROVIDER_ERROR
+    assert provider.calls == 0

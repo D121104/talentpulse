@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from botocore.config import Config
 from pydantic import ValidationError
 
 from talentpulse_ai.core.config import Settings
@@ -402,6 +403,89 @@ def test_factory_builds_clients_without_calling_paid_operations() -> None:
 
     assert bedrock.embedding_calls == []
     assert bedrock.converse_calls == []
+
+
+def test_factory_keeps_legacy_bedrock_client_configuration_and_shared_use(monkeypatch) -> None:
+    constructions: list[tuple[str, dict[str, object]]] = []
+    bedrock = FakeBedrock()
+
+    def fake_client(service_name: str, **kwargs: object) -> FakeBedrock:
+        constructions.append((service_name, kwargs))
+        return bedrock
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.provider_factory.boto3.client", fake_client)
+
+    bundle = create_provider_bundle(production_settings(), qdrant_client=FakeQdrant())
+
+    assert constructions == [("bedrock-runtime", {"region_name": "ap-southeast-2"})]
+    assert bedrock.embedding_calls == []
+    assert bedrock.converse_calls == []
+
+    assert bundle.embedding.embed_query("synthetic query") == [0.1] * 1024
+    assert bundle.generation.generate("synthetic legacy prompt") == {
+        "answer_blocks": [],
+        "claims": [],
+        "citation_keys": [],
+        "referenced_job_ids": [],
+    }
+    assert len(bedrock.embedding_calls) == 1
+    assert len(bedrock.converse_calls) == 1
+    assert len(constructions) == 1
+
+
+@pytest.mark.parametrize("remaining_timeout", [0.25, 7.5, 24.0])
+def test_factory_builds_agent_bedrock_clients_with_remaining_timeout_without_changing_legacy(
+    monkeypatch, remaining_timeout: float
+) -> None:
+    constructions: list[tuple[str, dict[str, object]]] = []
+    clients: list[FakeBedrock] = []
+
+    def fake_client(service_name: str, **kwargs: object) -> FakeBedrock:
+        constructions.append((service_name, kwargs))
+        client = FakeBedrock()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.provider_factory.boto3.client", fake_client)
+    bundle = create_provider_bundle(production_settings(), qdrant_client=FakeQdrant())
+    legacy = clients[0]
+    assert constructions == [("bedrock-runtime", {"region_name": "ap-southeast-2"})]
+
+    generate_with_timeout = getattr(bundle.generation, "generate_with_timeout", None)
+    assert callable(generate_with_timeout), "Bedrock agent calls require a timeout-aware method"
+
+    # A later model decision must use its smaller budget, not reuse the first call's timeout.
+    for timeout in (remaining_timeout, remaining_timeout / 2):
+        result = generate_with_timeout("synthetic agent prompt", timeout=timeout)
+
+        assert result == {
+            "answer_blocks": [],
+            "claims": [],
+            "citation_keys": [],
+            "referenced_job_ids": [],
+        }
+        service_name, options = constructions[-1]
+        assert service_name == "bedrock-runtime"
+        assert options["region_name"] == "ap-southeast-2"
+        config = options["config"]
+        assert isinstance(config, Config)
+        assert 0 < config.connect_timeout <= timeout
+        assert 0 < config.read_timeout <= timeout
+        assert config.retries["total_max_attempts"] == 1
+        assert clients[-1] is not legacy
+        assert clients[-1].embedding_calls == []
+        assert len(clients[-1].converse_calls) == 1
+        assert clients[-1].converse_calls[0]["modelId"] == "amazon.nova-lite-v1:0"
+
+    assert len(constructions) == 3
+    assert legacy.embedding_calls == []
+    assert legacy.converse_calls == []
+    bundle.generation.generate("synthetic legacy prompt")
+    assert len(legacy.converse_calls) == 1
+    assert bundle.embedding.embed_query("synthetic query") == [0.1] * 1024
+    assert len(legacy.embedding_calls) == 1
+    assert len(constructions) == 3
+    assert constructions[0] == ("bedrock-runtime", {"region_name": "ap-southeast-2"})
 
 
 def test_factory_rejects_missing_qdrant_endpoint_before_client_construction() -> None:

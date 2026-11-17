@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from talentpulse_ai.agent_foundation.approval import ApprovalManager
+from talentpulse_ai.agent_foundation.model import AgentModelAdapter
 from talentpulse_ai.core.config import Settings, get_settings
 from talentpulse_ai.core.exceptions import ServiceError
 from talentpulse_ai.dependencies import (
@@ -29,6 +30,7 @@ from talentpulse_ai.modules.cv_generator.service import CvDraftGenerationService
 from talentpulse_ai.modules.job_indexing.router import router as indexing_router
 from talentpulse_ai.modules.job_indexing.schemas import DocumentEmbeddingProvider, JobVectorWriter
 from talentpulse_ai.modules.rag_chatbot.ingestion.indexer import JobIndexingService
+from talentpulse_ai.modules.rag_chatbot.agent import CareerChatAgent
 from talentpulse_ai.modules.rag_chatbot.router import router as rag_router
 from talentpulse_ai.modules.rag_chatbot.schemas import (
     EmbeddingProvider,
@@ -196,7 +198,17 @@ def create_app(
         lifespan=lifespan,
     )
     application.state.settings = active_settings
-    application.state.capability_selector = _build_capability_selector(active_settings)
+    agent_generation_service = CareerChatAgent(
+        AgentModelAdapter(generation_service.provider)
+    )
+    agent_registered = _provider_has_methods(
+        generation_service.provider, "generate_structured"
+    ) or _provider_has_methods(generation_service.provider, "generate_with_timeout")
+    application.state.capability_selector = _build_capability_selector(
+        active_settings,
+        frozenset({"rag.generate"}) if agent_registered else frozenset(),
+    )
+    application.state.agent_generation_service = agent_generation_service
     application.state.retrieval_service = retrieval_service
     application.state.generation_service = generation_service
     application.state.embedding_provider = active_embedding

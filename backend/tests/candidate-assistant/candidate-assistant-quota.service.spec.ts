@@ -1,4 +1,5 @@
 import { CandidateAssistantQuotaService } from 'src/candidate-assistant/candidate-assistant-quota.service';
+import { AiChatQuotaLedger } from 'src/candidate-assistant/entities/ai-chat-quota-ledger.entity';
 describe('CandidateAssistantQuotaService', () => {
   const now = new Date('2026-11-02T00:00:00Z');
 
@@ -203,6 +204,199 @@ describe('CandidateAssistantQuotaService', () => {
         new Date('2026-01-01T17:00:00.000Z'),
       ),
     ).resolves.toMatchObject({ quotaDate: '2026-01-02' });
+  });
+
+  it('acquires and renews a request-owned lease with bounded expiry', async () => {
+    const ledger = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+    const service = new CandidateAssistantQuotaService(
+      ledger as any,
+      {} as any,
+      {} as any,
+    );
+    const reservation: {
+      id: string;
+      userId: string;
+      quotaDate: string;
+      reservationKey: string;
+      reused: boolean;
+      executionOwner?: string;
+    } = {
+      id: 'reservation-1',
+      userId: 'user-1',
+      quotaDate: '2026-11-17',
+      reservationKey: 'session-1:message-1',
+      reused: false,
+    };
+    const context = {
+      sessionId: 'session-1',
+      userMessageId: 'user-message-1',
+      assistantMessageId: 'assistant-message-1',
+    };
+
+    const lease = await service.acquireLease(
+      reservation,
+      'execution-owner',
+      context,
+      now,
+    );
+
+    expect(lease).toMatchObject({
+      owner: 'execution-owner',
+      expiresAt: new Date(now.getTime() + 30_000),
+      graceMs: 5_000,
+      ...context,
+    });
+    expect(reservation.executionOwner).toBe('execution-owner');
+    expect(ledger.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionOwner: expect.objectContaining({ _type: 'isNull' }),
+      }),
+      expect.objectContaining({
+        executionOwner: 'execution-owner',
+        leaseExpiresAt: new Date(now.getTime() + 30_000),
+      }),
+    );
+
+    ledger.update.mockResolvedValueOnce({ affected: 1 });
+    await expect(
+      service.renewLease(reservation, 'execution-owner', now),
+    ).resolves.toBe(true);
+    expect(ledger.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ executionOwner: 'execution-owner' }),
+      expect.objectContaining({
+        leaseExpiresAt: new Date(now.getTime() + 30_000),
+      }),
+    );
+    ledger.update.mockResolvedValueOnce({ affected: 0 });
+    await expect(
+      service.renewLease(reservation, 'stale-owner', now),
+    ).resolves.toBe(false);
+  });
+
+  it('only returns leases beyond expiry grace and conditionally claims recovery', async () => {
+    const row = {
+      _id: 'reservation-1',
+      userId: 'user-1',
+      quotaDate: '2026-11-17',
+      reservationKey: 'session-1:message-1',
+      status: 'RESERVED',
+      executionOwner: 'execution-owner',
+      leaseExpiresAt: new Date(now.getTime() - 5_001),
+      executionSessionId: 'session-1',
+      executionUserMessageId: 'user-message-1',
+      executionAssistantMessageId: 'assistant-message-1',
+    };
+    const ledger = {
+      find: jest.fn().mockResolvedValue([row]),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const service = new CandidateAssistantQuotaService(
+      ledger as any,
+      {} as any,
+      {} as any,
+    );
+
+    const leases = await service.findExpiredLeases(now);
+
+    expect(ledger.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'RESERVED',
+          leaseExpiresAt: expect.objectContaining({ _type: 'lessThan' }),
+        }),
+        take: 100,
+      }),
+    );
+    expect(leases).toHaveLength(1);
+    expect(await service.terminalizeLease(leases[0], now)).toBe(true);
+    expect(ledger.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionOwner: 'execution-owner',
+        leaseExpiresAt: expect.objectContaining({ _type: 'lessThanOrEqual' }),
+      }),
+      expect.objectContaining({ executionOwner: expect.any(String) }),
+    );
+    expect(leases[0].owner).not.toBe('execution-owner');
+
+    ledger.update.mockResolvedValueOnce({ affected: 0 });
+    expect(await service.terminalizeLease(leases[0], now)).toBe(false);
+  });
+
+  it('commits quota and assistant terminal state in one transaction', async () => {
+    const ledger = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+    const messages = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+    const manager = {
+      getRepository: (entity) =>
+        entity === AiChatQuotaLedger ? ledger : messages,
+    };
+    const dataSource = { transaction: (callback) => callback(manager) };
+    const service = new CandidateAssistantQuotaService(
+      {} as any,
+      dataSource as any,
+      {} as any,
+    );
+    const reservation = {
+      id: 'reservation-1',
+      userId: 'user-1',
+      quotaDate: '2026-11-17',
+      reservationKey: 'session-1:message-1',
+      executionOwner: 'execution-owner',
+      reused: false,
+    };
+
+    await expect(
+      service.commit(reservation, 'assistant-message-1', {
+        _id: 'assistant-message-1',
+        status: 'COMPLETED' as any,
+        content: 'Synthetic answer',
+      }),
+    ).resolves.toBe(true);
+
+    expect(ledger.update).toHaveBeenCalledWith(
+      expect.objectContaining({ executionOwner: 'execution-owner' }),
+      expect.objectContaining({ status: 'COMMITTED' }),
+    );
+    expect(messages.update).toHaveBeenCalledWith(
+      { _id: 'assistant-message-1', status: 'PROCESSING' },
+      expect.objectContaining({ status: 'COMPLETED' }),
+    );
+  });
+
+  it('does not persist a late assistant result after lease ownership is lost', async () => {
+    const ledger = { update: jest.fn().mockResolvedValue({ affected: 0 }) };
+    const messages = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+    const manager = {
+      getRepository: (entity) =>
+        entity === AiChatQuotaLedger ? ledger : messages,
+    };
+    const service = new CandidateAssistantQuotaService(
+      {} as any,
+      { transaction: (callback) => callback(manager) } as any,
+      {} as any,
+    );
+
+    await expect(
+      service.commit(
+        {
+          id: 'reservation-1',
+          userId: 'user-1',
+          quotaDate: '2026-11-17',
+          reservationKey: 'session-1:message-1',
+          executionOwner: 'stale-owner',
+          reused: false,
+        },
+        'assistant-message-1',
+        {
+          _id: 'assistant-message-1',
+          status: 'COMPLETED' as any,
+        },
+      ),
+    ).resolves.toBe(false);
+    expect(ledger.update).toHaveBeenCalledWith(
+      expect.objectContaining({ executionOwner: 'stale-owner' }),
+      expect.objectContaining({ status: 'COMMITTED' }),
+    );
+    expect(messages.update).not.toHaveBeenCalled();
   });
 
   it('reuses a released reservation row without counting it twice', async () => {

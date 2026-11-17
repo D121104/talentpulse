@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from urllib.parse import urlparse
 
 import boto3  # type: ignore[import-untyped]
+from botocore.config import Config  # type: ignore[import-untyped]
 from qdrant_client import QdrantClient
 
 from talentpulse_ai.core.config import Settings
@@ -42,6 +44,21 @@ def _validate_http_url(value: str, label: str) -> None:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise RuntimeError(f"{label} must be a valid HTTP(S) URL.")
+
+
+def _create_bedrock_agent_client(region: str, timeout: float) -> object:
+    if not isfinite(timeout) or timeout <= 0:
+        raise ValueError("agent provider timeout must be positive and finite")
+    connect_timeout = min(1.0, timeout / 4)
+    return boto3.client(
+        "bedrock-runtime",
+        region_name=region,
+        config=Config(
+            connect_timeout=connect_timeout,
+            read_timeout=timeout - connect_timeout,
+            retries={"total_max_attempts": 1},
+        ),
+    )
 
 
 def create_provider_bundle(
@@ -138,5 +155,9 @@ def create_provider_bundle(
             index_version=index_version,
             dimensions=settings.cohere_dimensions,
         ),
-        generation=BedrockNovaGenerationAdapter(active_bedrock, bedrock_model),
+        generation=BedrockNovaGenerationAdapter(
+            active_bedrock,
+            bedrock_model,
+            agent_client_factory=lambda timeout: _create_bedrock_agent_client(region, timeout),
+        ),
     )
