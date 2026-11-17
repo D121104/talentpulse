@@ -38,9 +38,7 @@ class TextFakeProvider:
 
 
 def test_adapter_uses_structured_provider_and_normalizes_typed_decision() -> None:
-    provider = StructuredFakeProvider(
-        {"kind": "final", "output": {"answer": "ok"}}
-    )
+    provider = StructuredFakeProvider({"kind": "final", "output": {"answer": "ok"}})
     adapter = AgentModelAdapter(provider)
 
     decision = adapter.decide("capability prompt", timeout=2.5)

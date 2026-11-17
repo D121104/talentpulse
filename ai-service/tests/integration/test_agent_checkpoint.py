@@ -117,7 +117,6 @@ def test_reject_stale_version_and_expiry_never_call_owner_action(
         can_start_approval=lambda _request: True,
     )
     try:
-
         rejected_request = make_request()
         manager.start(rejected_request)
         rejected = manager.resume(make_decision(rejected_request, decision="REJECT"))

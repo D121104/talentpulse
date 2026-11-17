@@ -5,9 +5,14 @@ __pycache__
 .mypy_cache
 .env
 .env.*
+.git
+node_modules/
+coverage/
+*.log*
+Dockerfile*
+.dockerignore
 *.pem
 *.key
-.git
 .gitignore
 tests
 README.md

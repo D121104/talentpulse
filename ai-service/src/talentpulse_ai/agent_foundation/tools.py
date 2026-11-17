@@ -67,8 +67,7 @@ class ToolDefinition:
 class ToolAuthorizer(Protocol):
     """Application-owned authorization boundary for a requested tool operation."""
 
-    def is_authorized(self, request: AgentRequest, operation: str) -> bool:
-        ...
+    def is_authorized(self, request: AgentRequest, operation: str) -> bool: ...
 
 
 class ToolRegistry:

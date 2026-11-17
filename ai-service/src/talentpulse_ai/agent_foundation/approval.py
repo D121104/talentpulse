@@ -318,11 +318,7 @@ def build_approval_graph(
         }
 
     def route_after_decision(state: ApprovalState) -> str:
-        return (
-            "execute_action"
-            if state.get("status") == ApprovalStatus.APPROVED.value
-            else END
-        )
+        return "execute_action" if state.get("status") == ApprovalStatus.APPROVED.value else END
 
     def execute_action(state: ApprovalState) -> dict[str, object]:
         raw_request = state.get("approval")
@@ -465,12 +461,15 @@ class ApprovalManager:
             config=self._config(decision.approval_id, request),
         )
         status = result.get("status", ApprovalStatus.FAILED)
-        if status in {item.value for item in (
-            ApprovalStatus.COMPLETE,
-            ApprovalStatus.REJECTED,
-            ApprovalStatus.EXPIRED,
-            ApprovalStatus.FAILED,
-        )}:
+        if status in {
+            item.value
+            for item in (
+                ApprovalStatus.COMPLETE,
+                ApprovalStatus.REJECTED,
+                ApprovalStatus.EXPIRED,
+                ApprovalStatus.FAILED,
+            )
+        }:
             self._checkpointer.delete_thread(decision.approval_id)
         return ApprovalResult(
             approval_id=decision.approval_id,
@@ -494,9 +493,7 @@ class ApprovalManager:
         if request is not None:
             config["metadata"] = {
                 "agent_approval_id": str(request.approval_id),
-                "agent_approval_expires_at": request.expires_at.isoformat(
-                    timespec="microseconds"
-                ),
+                "agent_approval_expires_at": request.expires_at.isoformat(timespec="microseconds"),
                 "graph_schema_version": request.graph_schema_version,
             }
         return config

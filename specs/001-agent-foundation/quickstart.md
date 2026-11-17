@@ -2,7 +2,7 @@
 
 ## Mục tiêu
 
-Kiểm chứng runtime chung với provider/tool giả lập trước khi bật bất kỳ capability production nào. Hướng dẫn này mô tả kiểm thử sau khi các implementation phases hoàn tất; hiện chưa có module Agent Foundation để chạy.
+Kiểm chứng runtime chung với provider/tool giả lập trước khi bật bất kỳ capability production nào. Các lệnh dưới đây chạy implementation Agent Foundation hiện tại cùng các regression tests của hệ thống.
 
 ## Điều kiện tiên quyết
 
@@ -39,7 +39,7 @@ uv run pytest tests/integration/test_agent_foundation.py
 uv run pytest tests/integration/test_agent_checkpoint.py
 ```
 
-`test_agent_checkpoint.py` chỉ chạy với PostgreSQL test instance đã provision checkpoint tables bằng migrations. Test phải xác nhận resume dùng cùng approval/thread ID sau process restart.
+`test_agent_checkpoint.py` chỉ chạy với PostgreSQL test instance đã provision checkpoint tables bằng migrations. Test xác nhận resume dùng cùng approval/thread ID sau khi tạo lại graph/checkpointer.
 
 Apply the checkpoint schema using `backend/src/database/migrations/20261117120000-AgentFoundationCheckpoints.ts` before running that integration test. The runtime checkpointer must never call `PostgresSaver.setup()`; schema DDL belongs to the migration step.
 
@@ -70,8 +70,9 @@ Kết quả kỳ vọng:
 - Tạo approval interrupt, restart worker, resume cùng thread bằng decision đã xác thực; reject/expiry/stale không chạy write handler và checkpoint bị xóa sau terminal state.
 - Dùng clock giả lập xác nhận decision ngay trước 24 giờ còn hợp lệ, decision tại/sau expiry bị từ chối, và cleanup xóa checkpoint hết hạn.
 - Kiểm tra checkpoint serializer/state thật chỉ chứa approval/resource/version/action references, không có CV text, prompts, messages hoặc model output.
+- Khi rollback, từ chối approval mới nhưng giữ action executors/graph tương thích cho pending threads đến khi resume/reject hoặc hết hạn.
 - Hủy hoặc làm stale CV operation trước khi worker persist; xác nhận existing NestJS version/consent fence chặn ghi kết quả muộn.
 
 ## Ranh giới kiểm thử
 
-Không chạy test gọi LLM production trong vòng unit. Provider integration tests nếu cần chạy tách biệt, phải dùng môi trường kiểm thử được phê duyệt, giới hạn dữ liệu và không dùng CV thật. Thực thi lệnh thực tế phụ thuộc task implementation có tạo đúng test modules nêu trên; hướng dẫn này không tuyên bố các test mới đã tồn tại hoặc đã chạy.
+Không chạy test gọi LLM production trong vòng unit. Provider integration tests nếu cần chạy tách biệt, phải dùng môi trường kiểm thử được phê duyệt, giới hạn dữ liệu và không dùng CV thật. Các PostgreSQL approval tests sẽ skip nếu không cấu hình `AGENT_TEST_DATABASE_URL`; không trỏ biến này tới production hoặc database có dữ liệu nghiệp vụ.

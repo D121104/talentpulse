@@ -159,9 +159,7 @@ def test_invalid_capability_output_returns_safe_classified_error() -> None:
 
 
 def test_interrupted_execution_retry_uses_a_new_run_without_resuming_state() -> None:
-    model = FixedModel(
-        AgentModelError(AgentErrorCode.INTERRUPTED, "Execution was interrupted.")
-    )
+    model = FixedModel(AgentModelError(AgentErrorCode.INTERRUPTED, "Execution was interrupted."))
     definition = make_definition("synthetic")
     interrupted_request = make_request("synthetic", "first run")
 

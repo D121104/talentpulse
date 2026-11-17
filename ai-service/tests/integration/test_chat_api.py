@@ -72,9 +72,7 @@ def test_enabled_unregistered_agent_flag_preserves_rag_generate_contract() -> No
     legacy = object()
     agent = object()
     assert (
-        application.state.capability_selector.select(
-            "rag.generate", legacy=legacy, agent=agent
-        )
+        application.state.capability_selector.select("rag.generate", legacy=legacy, agent=agent)
         is legacy
     )
     application.dependency_overrides.clear()

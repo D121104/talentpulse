@@ -246,11 +246,7 @@ def build_agent_graph(
         request = state.get("request")
         definition = state.get("definition")
         decision = state.get("decision")
-        if (
-            request is None
-            or definition is None
-            or not isinstance(decision, FinalDecision)
-        ):
+        if request is None or definition is None or not isinstance(decision, FinalDecision):
             return {
                 "status": AgentStatus.FAILED,
                 "error": _safe_error(AgentErrorCode.OUTPUT_INVALID, "Agent output is invalid."),

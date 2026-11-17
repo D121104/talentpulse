@@ -66,9 +66,7 @@ def test_enabled_registered_capability_selects_agent_without_affecting_others() 
     search_legacy = object()
     cv_legacy = object()
 
-    selected_search = selector.select(
-        "synthetic.search", legacy=search_legacy, agent=search_agent
-    )
+    selected_search = selector.select("synthetic.search", legacy=search_legacy, agent=search_agent)
     selected_cv = selector.select("synthetic.cv", legacy=cv_legacy, agent=object())
 
     assert selected_search is search_agent
@@ -89,9 +87,7 @@ def test_selected_agent_failure_does_not_retry_legacy_in_same_request() -> None:
     def agent() -> str:
         raise RuntimeError("agent failed")
 
-    selected: Callable[[], str] = selector.select(
-        "synthetic.search", legacy=legacy, agent=agent
-    )
+    selected: Callable[[], str] = selector.select("synthetic.search", legacy=legacy, agent=agent)
     with pytest.raises(RuntimeError, match="agent failed"):
         selected()
 

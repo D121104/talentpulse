@@ -161,7 +161,7 @@ def test_tool_call_budget_stops_before_extra_handler_call() -> None:
         make_definition(ExecutionPolicy(max_model_calls=3, max_tool_calls=1)),
         model,
         tool_dispatcher=make_dispatcher(
-            lambda value, context: (handler_calls.append(True) or {"value": "x"})
+            lambda value, context: handler_calls.append(True) or {"value": "x"}
         ),
     )
 

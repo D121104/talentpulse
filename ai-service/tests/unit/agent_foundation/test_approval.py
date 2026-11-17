@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from talentpulse_ai.agent_foundation.approval import (
     ApprovalDecision,
     ApprovalErrorCode,
+    ApprovalManager,
     ApprovalStatus,
     ApprovalValidationError,
     approval_state_payload,
@@ -26,6 +27,22 @@ class FakeActionExecutor:
     def execute(self, request, *, idempotency_key: str) -> str:
         self.calls.append((request.operation_ref, idempotency_key))
         return f"result:{request.operation_ref}"
+
+
+class MemoryApprovalCheckpointer:
+    def __init__(self) -> None:
+        self.saver = InMemorySaver()
+
+    def get_checkpoint(self, approval_id):
+        return self.saver.get_tuple(
+            {"configurable": {"thread_id": str(approval_id), "checkpoint_ns": ""}}
+        )
+
+    def delete_thread(self, approval_id) -> None:
+        self.saver.delete_thread(str(approval_id))
+
+    def cleanup_expired(self, now=None, *, exclude_approval_id=None) -> int:
+        return 0
 
 
 def make_request(*, now: datetime | None = None):
@@ -63,13 +80,9 @@ def test_approval_request_rejects_naive_or_arbitrary_expiry() -> None:
     raw = request.model_dump(mode="python")
 
     with pytest.raises(ValidationError):
-        type(request).model_validate(
-            {**raw, "expires_at": datetime(2026, 11, 18, 10, 0)}
-        )
+        type(request).model_validate({**raw, "expires_at": datetime(2026, 11, 18, 10, 0)})
     with pytest.raises(ValidationError):
-        type(request).model_validate(
-            {**raw, "expires_at": request.expires_at + timedelta(days=1)}
-        )
+        type(request).model_validate({**raw, "expires_at": request.expires_at + timedelta(days=1)})
 
 
 def test_approval_request_rejects_cv_text_prompt_and_extra_fields() -> None:
@@ -197,3 +210,30 @@ def test_rejected_approval_never_calls_owner_action() -> None:
 
     assert rejected["status"] == ApprovalStatus.REJECTED.value
     assert action.calls == []
+
+
+def test_rollback_disables_new_approvals_but_resumes_pending_approval() -> None:
+    checkpointer = MemoryApprovalCheckpointer()
+    action = FakeActionExecutor()
+    actions = {"PUBLISH_CV": action}
+    request = make_request()
+    active_manager = ApprovalManager(
+        checkpointer,
+        actions,
+        can_start_approval=lambda _request: True,
+    )
+    assert active_manager.start(request).status is ApprovalStatus.PENDING
+
+    rollback_manager = ApprovalManager(
+        checkpointer,
+        actions,
+        can_start_approval=lambda _request: False,
+    )
+    with pytest.raises(ApprovalValidationError) as disabled:
+        rollback_manager.start(make_request())
+    assert disabled.value.code is ApprovalErrorCode.CAPABILITY_DISABLED
+
+    result = rollback_manager.resume(make_decision(request))
+
+    assert result.status is ApprovalStatus.COMPLETE
+    assert len(action.calls) == 1

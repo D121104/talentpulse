@@ -1,10 +1,14 @@
 node_modules
 dist
+build
 .lambda-package
 lambda-deploy.zip
 .env
 .env.*
 coverage
+*.log*
+Dockerfile*
+.dockerignore
 test
 environment
 scripts

@@ -251,15 +251,18 @@ description: "Incremental implementation tasks for Agent Foundation"
 
 **Purpose**: Run the complete deterministic quality gate, inspect scope and confirm implementation remains reversible.
 
-- [ ] T036 [P] Run the Agent Foundation and existing AI regression quality gates from `specs/001-agent-foundation/quickstart.md`
+- [X] T036 [P] Run the Agent Foundation and existing AI regression quality gates from `specs/001-agent-foundation/quickstart.md`
   - Dependencies: T035.
   - Completion: relevant `pytest`, Ruff format/check and mypy commands pass; provider tests use fakes; PostgreSQL-only approval tests run only against the dedicated test instance.
-- [ ] T037 [P] Run NestJS Chat/CV compatibility regression tests in `backend/tests/candidate-assistant/` and `backend/tests/online-cvs/`
+  - Verification: 472 passed and 4 PostgreSQL tests skipped because no dedicated test URL was configured in this run; the checkpoint/migration cases were previously exercised against a disposable PostgreSQL instance. Ruff check, scoped format check and mypy passed.
+- [X] T037 [P] Run NestJS Chat/CV compatibility regression tests in `backend/tests/candidate-assistant/` and `backend/tests/online-cvs/`
   - Dependencies: T035.
   - Completion: relevant contract, loopback, queue, cancellation, stale/version and `EDITOR_ONLY` tests pass without public contract changes.
-- [ ] T038 Review final implementation scope and rollback path in `specs/001-agent-foundation/plan.md`, `specs/001-agent-foundation/spec.md` and the changed Agent Foundation modules
+  - Verification: 2 Jest suites passed, 9 tests passed on Node 24. The migration integration test skipped because no dedicated migration DB URL was configured in this run; it previously passed against the disposable test database.
+- [X] T038 Review final implementation scope and rollback path in `specs/001-agent-foundation/plan.md`, `specs/001-agent-foundation/spec.md` and the changed Agent Foundation modules
   - Dependencies: T036, T037.
   - Completion: confirm no full Chat/CV Agent, business tool catalog, public approval UI/API, raw sensitive checkpoint state, or same-request agent-to-legacy fallback was introduced; capability rollback and pending approval drain/expiry behavior are documented and tested.
+  - Review: current capabilities remain legacy by default; disabling selects legacy for later requests without retrying within a dispatched request. Approval rollback denies new starts while compatible pending actions can still resume and expire. No full Chat/CV Agent, business tool, public approval API/UI or sensitive checkpoint fields were added.
 
 **Commit boundary**: Keep quality-only fixes separate from functional changes; do not combine unrelated cleanup.
 **Tests after phase**: Run all commands in `specs/001-agent-foundation/quickstart.md` and applicable repository quality gates.
