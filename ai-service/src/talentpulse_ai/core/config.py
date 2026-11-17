@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 OcrLanguage = Literal["eng", "vie"]
@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     job_index_scope: Annotated[str, Field(min_length=1)] = "jobs:index"
     # Server-only rollout switch; the selector also requires a registered agent implementation.
     agent_enabled_capabilities: frozenset[str] = Field(default_factory=frozenset)
+    agent_resume_scope: Annotated[str, Field(min_length=1)] = "agent:resume"
+    agent_checkpoint_database_url: SecretStr | None = Field(default=None, repr=False)
     # Provider selection is explicit. Deterministic providers are intended for local/test only.
     embedding_provider: Literal["deterministic", "cohere", "ollama"] = "deterministic"
     vector_store_provider: Literal["memory", "qdrant"] = "memory"
@@ -58,6 +60,11 @@ class Settings(BaseSettings):
     qdrant_admin_enabled: bool = False
     bedrock_region: str | None = None
     bedrock_model: str | None = None
+
+    @field_validator("agent_checkpoint_database_url", mode="before")
+    @classmethod
+    def empty_checkpoint_url_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
 
     max_upload_bytes: int = Field(default=5 * 1024 * 1024, ge=1, le=50 * 1024 * 1024)
     max_encoded_upload_chars: int = Field(default=7_000_000, ge=4, le=70_000_000)

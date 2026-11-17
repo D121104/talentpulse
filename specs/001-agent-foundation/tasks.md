@@ -205,37 +205,37 @@ description: "Incremental implementation tasks for Agent Foundation"
 
 ### Tests for User Story 5
 
-- [ ] T026 [P] [US5] Add approval contract and state-privacy unit tests in `ai-service/tests/unit/agent_foundation/test_approval.py`
+- [X] T026 [P] [US5] Add approval contract and state-privacy unit tests in `ai-service/tests/unit/agent_foundation/test_approval.py`
   - Dependencies: T007.
   - Completion: tests cover reference/version/action-only state, decision schema/status, duplicate/stale/expired decisions and proof that serialized state excludes CV text, prompts, messages, model output and credentials.
-- [ ] T027 [P] [US5] Add PostgreSQL approval checkpoint recovery tests in `ai-service/tests/integration/test_agent_checkpoint.py`
+- [X] T027 [P] [US5] Add PostgreSQL approval checkpoint recovery tests in `ai-service/tests/integration/test_agent_checkpoint.py`
   - Dependencies: T026.
   - Completion: test fixture requires a dedicated migrated PostgreSQL test database and asserts pending interrupt, process/graph recreation, same-thread resume, cleanup and no write on reject/stale/expiry; no production database or business data is used.
 
 ### Implementation for User Story 5
 
-- [ ] T028 [US5] Define minimal approval request, decision and checkpoint graph contracts in `ai-service/src/talentpulse_ai/agent_foundation/approval.py`
+- [X] T028 [US5] Define minimal approval request, decision and checkpoint graph contracts in `ai-service/src/talentpulse_ai/agent_foundation/approval.py`
   - Dependencies: T026.
   - Completion: fields are limited to opaque approval/operation/resource references, expected version, allowlisted action, expiry and graph schema version; decision is trusted input and cannot contain CV content.
-- [ ] T029 [US5] Implement the separate approval StateGraph with interrupt and authorized resume routing in `ai-service/src/talentpulse_ai/agent_foundation/approval.py`
+- [X] T029 [US5] Implement the separate approval StateGraph with interrupt and authorized resume routing in `ai-service/src/talentpulse_ai/agent_foundation/approval.py`
   - Dependencies: T028.
   - Completion: graph pauses before any material write; only validated NestJS decision resumes it; write/action execution is delegated to an owner boundary and is idempotency-keyed; regular execution graph remains uncheckpointed.
-- [ ] T030 [US5] Add the restricted PostgresSaver adapter and lifecycle wiring in `ai-service/src/talentpulse_ai/infrastructure/agent_checkpointer.py` and `ai-service/src/talentpulse_ai/main.py`
+- [X] T030 [US5] Add the restricted PostgresSaver adapter and lifecycle wiring in `ai-service/src/talentpulse_ai/infrastructure/agent_checkpointer.py` and `ai-service/src/talentpulse_ai/main.py`
   - Dependencies: T003, T027, T029.
   - Completion: only approval graph uses PostgresSaver; setup/DDL is not run on a request path; runtime credentials are restricted to checkpoint tables and do not grant business-table access; pool closes with service lifecycle.
-- [ ] T031 [US5] Add checkpoint schema migration and rollback using the repository's established migration mechanism
+- [X] T031 [US5] Add checkpoint schema migration and rollback using the repository's established migration mechanism
   - Dependencies: T030.
   - Completion: migration provisions only PostgresSaver checkpoint tables/required privileges, supports rollback without touching business tables, and documents the dedicated runtime-role grants; exact migration location follows the repository migration convention confirmed during implementation.
-- [ ] T032 [US5] Implement 24-hour approval expiry, cleanup and resume validation in `ai-service/src/talentpulse_ai/agent_foundation/approval.py` and `ai-service/src/talentpulse_ai/infrastructure/agent_checkpointer.py`
+- [X] T032 [US5] Implement 24-hour approval expiry, cleanup and resume validation in `ai-service/src/talentpulse_ai/agent_foundation/approval.py` and `ai-service/src/talentpulse_ai/infrastructure/agent_checkpointer.py`
   - Dependencies: T028, T030, T031.
   - Completion: expiry is fixed at approval creation; decisions at/after expiry, duplicate decisions, non-pending IDs and stale versions are rejected before continuation; terminal/expired checkpoint threads are deleted; pending threads remain resumable during rollback.
-- [ ] T033 [US5] Add the service-scoped internal resume boundary in `ai-service/src/talentpulse_ai/modules/agent_foundation/router.py` and `ai-service/src/talentpulse_ai/core/security.py`
+- [X] T033 [US5] Add the service-scoped internal resume boundary in `ai-service/src/talentpulse_ai/modules/agent_foundation/router.py` and `ai-service/src/talentpulse_ai/core/security.py`
   - Dependencies: T032.
   - Completion: only trusted NestJS service identity with `agent:resume` is accepted; the handler uses server-held approval ID/thread mapping, validates decision/version/expiry and returns safe status only; no public approval endpoint or frontend flow is added.
-- [ ] T034 [US5] Verify approval integration, restart, expiry, rollback and privacy cases in `ai-service/tests/integration/test_agent_checkpoint.py` and `ai-service/tests/unit/agent_foundation/test_approval.py`
+- [X] T034 [US5] Verify approval integration, restart, expiry, rollback and privacy cases in `ai-service/tests/integration/test_agent_checkpoint.py` and `ai-service/tests/unit/agent_foundation/test_approval.py`
   - Dependencies: T031, T032, T033.
   - Completion: PostgreSQL recovery and all unit cases pass; inspection of persisted checkpoint data confirms reference-only content; rollback stops new approval graph starts but allows pending threads to resolve/cancel/expire.
-- [ ] T035 [US5] Verify future Career Chat/CV capability contracts using `ai-service/tests/unit/agent_foundation/test_future_capabilities.py`
+- [X] T035 [US5] Verify future Career Chat/CV capability contracts using `ai-service/tests/unit/agent_foundation/test_future_capabilities.py`
   - Dependencies: T010, T014, T019, T025, T034.
   - Completion: tests map the documented Career Chat and CV Generation input/output seams, model contract, tool policy and approval boundary to Foundation contracts; any unsupported requirement is an explicit failing assertion or documented gap; neither agent workflow nor business tool is implemented.
 

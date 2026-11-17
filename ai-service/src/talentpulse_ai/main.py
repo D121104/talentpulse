@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -7,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from talentpulse_ai.agent_foundation.approval import ApprovalManager
 from talentpulse_ai.core.config import Settings, get_settings
 from talentpulse_ai.core.exceptions import ServiceError
 from talentpulse_ai.dependencies import (
@@ -14,6 +19,8 @@ from talentpulse_ai.dependencies import (
     _build_services,
     _local_environment,
 )
+from talentpulse_ai.infrastructure.agent_checkpointer import AgentCheckpointer
+from talentpulse_ai.modules.agent_foundation.router import router as agent_foundation_router
 from talentpulse_ai.modules.cv_analysis.analysis import MatchAnalysisService
 from talentpulse_ai.modules.cv_analysis.matching import EmbeddingSemanticScorer, MatchService
 from talentpulse_ai.modules.cv_analysis.router import router
@@ -28,6 +35,20 @@ from talentpulse_ai.modules.rag_chatbot.schemas import (
     GenerationProvider,
     VectorRetriever,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def _cleanup_expired_approvals(manager: ApprovalManager) -> None:
+    while True:
+        await asyncio.sleep(300)
+        try:
+            await asyncio.to_thread(manager.cleanup_expired)
+        except Exception as exc:
+            _LOGGER.error(
+                "approval checkpoint cleanup failed error_type=%s",
+                type(exc).__name__,
+            )
 
 
 def _validate_non_local_auth(settings: Settings) -> None:
@@ -136,7 +157,44 @@ def create_app(
     retrieval_service, generation_service, active_embedding, active_vector = _build_services(
         active_settings, embedding_provider, vector_retriever, generation_provider
     )
-    application = FastAPI(title="TalentPulse AI Service", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        database_url = active_settings.agent_checkpoint_database_url
+        if database_url is None:
+            application.state.agent_checkpointer = None
+            application.state.approval_manager = None
+            yield
+            return
+
+        checkpointer = AgentCheckpointer(database_url)
+        await asyncio.to_thread(checkpointer.open)
+        cleanup_task: asyncio.Task[None] | None = None
+        try:
+            manager = ApprovalManager(
+                checkpointer,
+                {},
+                can_start_approval=lambda _request: False,
+            )
+            await asyncio.to_thread(manager.cleanup_expired)
+            application.state.agent_checkpointer = checkpointer
+            application.state.approval_manager = manager
+            cleanup_task = asyncio.create_task(_cleanup_expired_approvals(manager))
+            yield
+        finally:
+            if cleanup_task is not None:
+                cleanup_task.cancel()
+                try:
+                    await cleanup_task
+                except asyncio.CancelledError:
+                    pass
+            await asyncio.to_thread(checkpointer.close)
+
+    application = FastAPI(
+        title="TalentPulse AI Service",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
     application.state.settings = active_settings
     application.state.capability_selector = _build_capability_selector(active_settings)
     application.state.retrieval_service = retrieval_service
@@ -160,6 +218,7 @@ def create_app(
     )
     application.include_router(router)
     application.include_router(cv_generation_router)
+    application.include_router(agent_foundation_router)
     application.include_router(rag_router)
     application.include_router(indexing_router)
 

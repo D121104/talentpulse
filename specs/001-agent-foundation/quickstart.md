@@ -29,6 +29,8 @@ Các unit tests approval dùng `InMemorySaver` để kiểm tra interrupt/decisi
 
 ## Kịch bản integration và compatibility
 
+Approval persistence tests require a disposable PostgreSQL database with the `AgentFoundationCheckpoints` TypeORM migration applied. Provision `agent_checkpoint_runtime` as a `NOLOGIN` role before migration, and use a dedicated login that is a member of that role for `AGENT_TEST_DATABASE_URL`. The login must not have privileges on business schemas. `AGENT_CHECKPOINT_MIGRATION_TEST_URL` is a migration-owner connection used only by the migration integration test.
+
 Từ `ai-service/`:
 
 ```bash
@@ -38,6 +40,8 @@ uv run pytest tests/integration/test_agent_checkpoint.py
 ```
 
 `test_agent_checkpoint.py` chỉ chạy với PostgreSQL test instance đã provision checkpoint tables bằng migrations. Test phải xác nhận resume dùng cùng approval/thread ID sau process restart.
+
+Apply the checkpoint schema using `backend/src/database/migrations/20261117120000-AgentFoundationCheckpoints.ts` before running that integration test. The runtime checkpointer must never call `PostgresSaver.setup()`; schema DDL belongs to the migration step.
 
 Từ repository root, trong environment backend test đã cấu hình:
 
