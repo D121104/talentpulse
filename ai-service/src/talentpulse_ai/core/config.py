@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     rag_retrieve_scope: Annotated[str, Field(min_length=1)] = "rag:retrieve"
     rag_generate_scope: Annotated[str, Field(min_length=1)] = "rag:generate"
     job_index_scope: Annotated[str, Field(min_length=1)] = "jobs:index"
+    # Server-only rollout switch; the selector also requires a registered agent implementation.
+    agent_enabled_capabilities: frozenset[str] = Field(default_factory=frozenset)
     # Provider selection is explicit. Deterministic providers are intended for local/test only.
     embedding_provider: Literal["deterministic", "cohere", "ollama"] = "deterministic"
     vector_store_provider: Literal["memory", "qdrant"] = "memory"

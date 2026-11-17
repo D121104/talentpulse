@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from talentpulse_ai.agent_foundation.selector import CapabilityImplementationSelector
 from talentpulse_ai.core.config import Settings
 from talentpulse_ai.infrastructure.embeddings.model import DeterministicEmbeddingProvider
 from talentpulse_ai.infrastructure.llm.deterministic import DeterministicGenerationProvider
@@ -16,6 +17,13 @@ from talentpulse_ai.modules.rag_chatbot.service import RetrievalService
 
 def _local_environment(settings: Settings) -> bool:
     return settings.environment.casefold() in {"local", "development", "test"}
+
+
+def _build_capability_selector(
+    settings: Settings,
+    registered_capabilities: frozenset[str] = frozenset(),
+) -> CapabilityImplementationSelector:
+    return CapabilityImplementationSelector(settings, registered_capabilities)
 
 
 def _build_services(

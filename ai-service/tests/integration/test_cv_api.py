@@ -4,7 +4,13 @@ from uuid import uuid4
 
 import jwt
 import pytest
+from fastapi.testclient import TestClient
 from tests.cv_payload import draft_payload
+
+from talentpulse_ai.core.config import Settings, get_settings
+from talentpulse_ai.infrastructure.embeddings.model import DeterministicEmbeddingProvider
+from talentpulse_ai.infrastructure.vectorstore.memory import InMemoryVectorRetriever
+from talentpulse_ai.main import create_app
 
 
 def test_openapi_preserves_public_job_profile_components_and_refs(client) -> None:
@@ -56,6 +62,34 @@ def test_draft_route_returns_editable_draft_with_local_auth_disabled(client) -> 
     body = response.json()
     assert body["generation_mode"] == "EDITOR_ONLY"
     assert body["work_experience"][0]["company_name"] == "Acme"
+
+
+def test_enabled_unregistered_agent_flag_preserves_cv_editor_only_behavior() -> None:
+    settings = Settings(
+        environment="test",
+        auth_required=False,
+        agent_enabled_capabilities=frozenset({"cv.generate"}),
+    )
+    application = create_app(
+        settings,
+        embedding_provider=DeterministicEmbeddingProvider(settings.cohere_dimensions),
+        vector_retriever=InMemoryVectorRetriever(dimensions=settings.cohere_dimensions),
+    )
+    application.dependency_overrides[get_settings] = lambda: settings
+
+    with TestClient(application) as client:
+        response = client.post("/internal/v1/cv/draft", json=draft_payload())
+
+    assert response.status_code == 200
+    assert response.json()["generation_mode"] == "EDITOR_ONLY"
+    assert response.json()["work_experience"][0]["company_name"] == "Acme"
+    legacy = object()
+    agent = object()
+    assert (
+        application.state.capability_selector.select("cv.generate", legacy=legacy, agent=agent)
+        is legacy
+    )
+    application.dependency_overrides.clear()
 
 
 def test_parse_contract_rejects_unknown_fields(client) -> None:

@@ -1,7 +1,9 @@
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
-from talentpulse_ai.core.config import Settings
+from talentpulse_ai.core.config import Settings, get_settings
 from talentpulse_ai.infrastructure.embeddings.model import (
     CohereEmbeddingAdapter,
     DeterministicEmbeddingProvider,
@@ -15,6 +17,67 @@ class NullProvider:
     def generate(self, prompt: str) -> object:
         del prompt
         return None
+
+
+def test_enabled_unregistered_agent_flag_preserves_rag_generate_contract() -> None:
+    settings = Settings(
+        environment="test",
+        auth_required=False,
+        agent_enabled_capabilities=frozenset({"rag.generate"}),
+    )
+    application = create_app(
+        settings,
+        embedding_provider=DeterministicEmbeddingProvider(settings.cohere_dimensions),
+        vector_retriever=InMemoryVectorRetriever(dimensions=settings.cohere_dimensions),
+        generation_provider=NullProvider(),
+    )
+    application.dependency_overrides[get_settings] = lambda: settings
+    payload = {
+        "identity": {
+            "request_id": str(uuid4()),
+            "trace_id": str(uuid4()),
+            "operation_attempt_id": str(uuid4()),
+            "client_message_id": str(uuid4()),
+            "user_id": str(uuid4()),
+            "session_id": str(uuid4()),
+        },
+        "normalized_user_message": "Find a suitable role.",
+        "intent": "JOB_SEARCH",
+        "locale": "en",
+        "recent_history": [],
+        "filter_state": {},
+        "canonical_active_job_context": [],
+        "retrieval_evidence": [],
+        "explicit_filters": {},
+        "policy": {"data_scope": "PUBLIC_ACTIVE_JOBS", "max_candidates": 20},
+    }
+
+    with TestClient(application) as client:
+        response = client.post("/internal/v1/rag/generate", json=payload)
+        openapi = client.get("/openapi.json").json()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer_status"] == "NO_EVIDENCE"
+    assert body["citation_keys"] == []
+    assert body["referenced_job_ids"] == []
+    assert body["source"] == "deterministic_fallback"
+    generation_operation = openapi["paths"]["/internal/v1/rag/generate"]["post"]
+    assert generation_operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RagGenerateRequest"
+    }
+    assert generation_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RagGenerateResponse"
+    }
+    legacy = object()
+    agent = object()
+    assert (
+        application.state.capability_selector.select(
+            "rag.generate", legacy=legacy, agent=agent
+        )
+        is legacy
+    )
+    application.dependency_overrides.clear()
 
 
 def test_health_endpoints_keep_compatibility_and_are_local_only() -> None:

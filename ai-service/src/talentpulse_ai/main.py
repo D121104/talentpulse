@@ -9,7 +9,11 @@ from fastapi.responses import JSONResponse
 
 from talentpulse_ai.core.config import Settings, get_settings
 from talentpulse_ai.core.exceptions import ServiceError
-from talentpulse_ai.dependencies import _build_services, _local_environment
+from talentpulse_ai.dependencies import (
+    _build_capability_selector,
+    _build_services,
+    _local_environment,
+)
 from talentpulse_ai.modules.cv_analysis.analysis import MatchAnalysisService
 from talentpulse_ai.modules.cv_analysis.matching import EmbeddingSemanticScorer, MatchService
 from talentpulse_ai.modules.cv_analysis.router import router
@@ -134,6 +138,7 @@ def create_app(
     )
     application = FastAPI(title="TalentPulse AI Service", version="0.1.0")
     application.state.settings = active_settings
+    application.state.capability_selector = _build_capability_selector(active_settings)
     application.state.retrieval_service = retrieval_service
     application.state.generation_service = generation_service
     application.state.embedding_provider = active_embedding
