@@ -110,6 +110,7 @@ temp/
 .cache/
 
 # Model, dataset and serialized local artifacts
+ai-service/src/talentpulse_ai/modules/rag_chatbot/onet_skill_framework_v31.json
 *.bin
 *.ckpt
 *.gguf
