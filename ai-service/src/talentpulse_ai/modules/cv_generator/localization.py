@@ -194,6 +194,10 @@ class _LocalizationStage:
                     failure_reasons[key] = reason
             return False
         except Exception as exc:
+            if not _is_timeout_exception(exc) and (
+                callable(getattr(exc, "errors", None)) or isinstance(exc, (TypeError, ValueError))
+            ):
+                runtime.log_invalid_output(type(exc).__name__)
             reason = (
                 "schema_validation"
                 if callable(getattr(exc, "errors", None))

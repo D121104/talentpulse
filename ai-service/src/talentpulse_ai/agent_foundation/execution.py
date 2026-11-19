@@ -31,10 +31,23 @@ from talentpulse_ai.agent_foundation.policy import (
     remaining_time_seconds,
 )
 from talentpulse_ai.agent_foundation.tools import ToolDispatcher, ToolDispatchError
+from talentpulse_ai.core.logging import (
+    agent_response_shape,
+    log_ai_agent_validation_failure,
+    validation_error_summary,
+)
 
 
 class AgentModelPort(Protocol):
-    def decide(self, prompt: str, *, timeout: float | None = None) -> ModelDecision: ...
+    def decide(
+        self,
+        prompt: str,
+        *,
+        timeout: float | None = None,
+        final_output_schema: Mapping[str, object] | None = None,
+        tool_input_schemas: Mapping[str, Mapping[str, object]] | None = None,
+        allow_text_recovery: bool = False,
+    ) -> ModelDecision: ...
 
 
 def _safe_error(
@@ -117,6 +130,27 @@ def build_agent_graph(
                 "model_call_count": model_call_count,
             }
         prompt = request.prompt
+        definition = state.get("definition")
+        tool_input_schemas: dict[str, Mapping[str, object]] = {}
+        if definition is not None:
+            prompt += (
+                "\n\nAPPLICATION-DEFINED FINAL OUTPUT SCHEMA (trusted; return only this shape):\n"
+                + json.dumps(definition.output_model.model_json_schema(), ensure_ascii=True)
+            )
+        if isinstance(tool_dispatcher, ToolDispatcher) and definition is not None:
+            tool_catalog = tool_dispatcher.describe_tools(definition)
+            if tool_catalog:
+                tool_input_schemas = {
+                    tool_id: input_schema
+                    for tool in tool_catalog
+                    if isinstance((tool_id := tool.get("tool_id")), str)
+                    and isinstance((input_schema := tool.get("input_schema")), Mapping)
+                }
+                prompt += (
+                    "\n\nAPPLICATION-DEFINED TOOL CATALOG (trusted schemas; use only these "
+                    "tool IDs and inputs):\n"
+                    + json.dumps(tool_catalog, ensure_ascii=True, sort_keys=True)
+                )
         tool_results = state.get("tool_results", [])
         if tool_results:
             prompt += (
@@ -127,6 +161,11 @@ def build_agent_graph(
             decision = model.decide(
                 prompt,
                 timeout=remaining_time_seconds(policy, started_at),
+                final_output_schema=(
+                    definition.output_model.model_json_schema() if definition is not None else None
+                ),
+                tool_input_schemas=tool_input_schemas,
+                allow_text_recovery=bool(tool_results),
             )
         except AgentModelError as exc:
             interruption = interruption_error(policy, started_at, cancellation_event)
@@ -253,7 +292,21 @@ def build_agent_graph(
 
         try:
             output_model: BaseModel = definition.output_model.model_validate(decision.output)
-        except (ValidationError, TypeError, ValueError):
+        except (ValidationError, TypeError, ValueError) as exc:
+            authorized_request = request.authorized_context.get("rag_request")
+            identity = getattr(authorized_request, "identity", None)
+            log_ai_agent_validation_failure(
+                stage="capability_output",
+                request_id=getattr(identity, "request_id", None),
+                trace_id=request.correlation_id,
+                attempt_index=state.get("model_call_count", 0),
+                validation_errors=(
+                    validation_error_summary(exc)
+                    if isinstance(exc, ValidationError)
+                    else "contract:rejected"
+                ),
+                response_shape=agent_response_shape({"kind": "final", "output": decision.output}),
+            )
             return {
                 "status": AgentStatus.FAILED,
                 "error": _safe_error(AgentErrorCode.OUTPUT_INVALID, "Agent output is invalid."),

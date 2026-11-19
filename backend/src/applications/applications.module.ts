@@ -17,6 +17,7 @@ import { ApplicationAiConsentEvent } from './entities/application-ai-consent-eve
 import { Company } from 'src/companies/entities/company.entity';
 
 import { OnlineCVsModule } from 'src/online-cvs/online-cvs.module';
+import { AiCvConsentsModule } from 'src/ai-consents/ai-cv-consents.module';
 
 const queueWorkersEnabled = areQueueWorkersEnabled();
 
@@ -32,6 +33,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
       ? [BullModule.registerQueue({ name: 'mail-queue' })]
       : []),
     UsersModule,
+    AiCvConsentsModule,
     UserCVsModule,
     OnlineCVsModule,
     NotificationsModule,

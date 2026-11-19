@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 
-from talentpulse_ai.core.exceptions import ProviderFailure
+from talentpulse_ai.core.exceptions import (
+    ProviderFailure,
+    ProviderFailureCategory,
+    provider_failure_details,
+)
 from talentpulse_ai.infrastructure.llm.client import (
     _MAX_OLLAMA_TIMEOUT_SECONDS,
     _ollama_json_request,
@@ -93,34 +98,56 @@ class OllamaGenerationAdapter:
     ) -> object:
         if num_predict is not None and not 1 <= num_predict <= 4_096:
             raise ValueError("num_predict must be between 1 and 4096")
+        if timeout is not None and not 0 < timeout <= _MAX_OLLAMA_TIMEOUT_SECONDS:
+            raise ValueError("generation timeout must be between 0 and 120 seconds")
+        options: dict[str, object] = {"temperature": 0}
+        if num_predict is not None:
+            options["num_predict"] = num_predict
+        generation_payload: dict[str, object] = {
+            "model": self._model,
+            "prompt": prompt,
+            "stream": False,
+            "format": _ollama_schema(schema),
+            "options": options,
+        }
+        if self._model.lower().startswith("qwen3"):
+            generation_payload["think"] = False
+        request_timeout = timeout if timeout is not None else self._timeout
+        started_at = time.perf_counter()
         try:
-            options: dict[str, object] = {"temperature": 0}
-            if num_predict is not None:
-                options["num_predict"] = num_predict
-            generation_payload: dict[str, object] = {
-                "model": self._model,
-                "prompt": prompt,
-                "stream": False,
-                "format": _ollama_schema(schema),
-                "options": options,
-            }
-            if self._model.lower().startswith("qwen3"):
-                generation_payload["think"] = False
-            request_timeout = self._timeout
-            if timeout is not None:
-                if not 0 < timeout <= _MAX_OLLAMA_TIMEOUT_SECONDS:
-                    raise ValueError("generation timeout must be between 0 and 120 seconds")
-                # CV worker calls supply an explicit bounded timeout that may be longer
-                # than the default used by synchronous generation callers.
-                request_timeout = timeout
             response = _ollama_json_request(
                 self._base_url,
                 "/api/generate",
                 generation_payload,
                 request_timeout,
             )
+        except Exception as exc:
+            category: ProviderFailureCategory | None = None
+            if isinstance(exc, (json.JSONDecodeError, ValueError)):
+                category = "invalid_response"
+            raise ProviderFailure(
+                "generation provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="ollama",
+                    model=self._model,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                    category=category,
+                ),
+            ) from exc
+
+        try:
             if not isinstance(response, Mapping) or not isinstance(response.get("response"), str):
                 raise ValueError("generation response has no JSON text")
             return _parse_ollama_json_object(response["response"])
-        except Exception as exc:
-            raise ProviderFailure("generation provider failed") from exc
+        except (TypeError, ValueError) as exc:
+            raise ProviderFailure(
+                "generation provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="ollama",
+                    model=self._model,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                    category="invalid_response",
+                ),
+            ) from exc

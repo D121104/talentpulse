@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "TalentPulse Career Chat Agent",
+    "output": "career-chat-architecture.html",
+    "quality_profile": "showcase"
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [70, 90],
+    "cols": 5,
+    "gapX": 64,
+    "gapY": 112,
+    "cellW": 150,
+    "cellH": 88
+  },
+  "components": [
+    { "id": "browser", "type": "frontend", "label": "Frontend hiện tại", "sublabel": "Candidate Assistant API", "row": 1, "col": 0 },
+    { "id": "app", "type": "backend", "label": "Chat application", "sublabel": "Auth · history · quota", "row": 1, "col": 1 },
+    { "id": "chatdb", "type": "database", "label": "PostgreSQL", "sublabel": "Session / messages", "row": 2, "col": 1 },
+    { "id": "retrieval", "type": "backend", "label": "RAG retrieval", "sublabel": "Prepared evidence", "row": 0, "col": 2 },
+    { "id": "qdrant", "type": "database", "label": "Qdrant", "sublabel": "Derived job index", "row": 0, "col": 3 },
+    { "id": "route", "type": "backend", "label": "RAG generate route", "sublabel": "Selector · same contract", "row": 1, "col": 2 },
+    { "id": "legacy", "type": "backend", "label": "Legacy generator", "sublabel": "Default / rollback", "row": 2, "col": 3 },
+    { "id": "agent", "type": "backend", "label": "Career Chat Agent", "sublabel": "Foundation StateGraph", "row": 1, "col": 3 },
+    { "id": "provider", "type": "external", "label": "Configured LLM", "sublabel": "Existing provider adapter", "row": 0, "col": 4 },
+    { "id": "tool", "type": "backend", "label": "Context tool", "sublabel": "Read prepared evidence", "row": 2, "col": 4 },
+    { "id": "validator", "type": "backend", "label": "RAG validators", "sublabel": "Grounding · citations", "row": 1, "col": 4 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Application-owned data and authorization", "wraps": ["app", "chatdb"] },
+    { "kind": "region", "label": "AI service · existing RAG and Agent Foundation", "wraps": ["retrieval", "route", "legacy", "agent", "tool", "validator"] }
+  ],
+  "connections": [
+    { "id": "user-message", "from": "browser", "to": "app", "variant": "emphasis" },
+    { "id": "persist-chat", "from": "app", "to": "chatdb" },
+    { "id": "retrieve", "from": "app", "to": "retrieval" },
+    { "id": "vector-search", "from": "retrieval", "to": "qdrant" },
+    { "id": "prepared-generation", "from": "app", "to": "route", "variant": "emphasis" },
+    { "id": "legacy-selection", "from": "route", "to": "legacy", "variant": "dashed" },
+    { "id": "agent-selection", "from": "route", "to": "agent", "variant": "emphasis" },
+    { "id": "model-call", "from": "agent", "to": "provider" },
+    { "id": "read-context", "from": "agent", "to": "tool" },
+    { "id": "agent-validation", "from": "agent", "to": "validator" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Compatibility", "items": ["Keep public chat API and RAG request/response", "Application still owns history, consent and quota"] },
+    { "dot": "emerald", "title": "Agent boundary", "items": ["One registered rag.generate capability", "Foundation runtime, model adapter and bounded tool loop"] },
+    { "dot": "amber", "title": "Retrieval constraint", "items": ["Vector retrieval and canonical hydration stay in the current host flow", "Agent tool reads only prepared evidence/context"] }
+  ]
+}

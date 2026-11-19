@@ -29,8 +29,8 @@ from talentpulse_ai.modules.cv_generator.router import router as cv_generation_r
 from talentpulse_ai.modules.cv_generator.service import CvDraftGenerationService
 from talentpulse_ai.modules.job_indexing.router import router as indexing_router
 from talentpulse_ai.modules.job_indexing.schemas import DocumentEmbeddingProvider, JobVectorWriter
-from talentpulse_ai.modules.rag_chatbot.ingestion.indexer import JobIndexingService
 from talentpulse_ai.modules.rag_chatbot.agent import CareerChatAgent
+from talentpulse_ai.modules.rag_chatbot.ingestion.indexer import JobIndexingService
 from talentpulse_ai.modules.rag_chatbot.router import router as rag_router
 from talentpulse_ai.modules.rag_chatbot.schemas import (
     EmbeddingProvider,
@@ -198,9 +198,7 @@ def create_app(
         lifespan=lifespan,
     )
     application.state.settings = active_settings
-    agent_generation_service = CareerChatAgent(
-        AgentModelAdapter(generation_service.provider)
-    )
+    agent_generation_service = CareerChatAgent(AgentModelAdapter(generation_service.provider))
     agent_registered = _provider_has_methods(
         generation_service.provider, "generate_structured"
     ) or _provider_has_methods(generation_service.provider, "generate_with_timeout")

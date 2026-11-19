@@ -9,6 +9,13 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
+@dataclass(frozen=True, slots=True)
+class UnstructuredTextResponse:
+    """Text returned by a structured provider that could not be decoded as JSON."""
+
+    text: str = field(repr=False)
+
+
 class AgentStatus(StrEnum):
     RUNNING = "RUNNING"
     AWAITING_APPROVAL = "AWAITING_APPROVAL"

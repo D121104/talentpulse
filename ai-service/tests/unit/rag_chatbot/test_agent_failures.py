@@ -119,9 +119,13 @@ def run(monkeypatch):
     def set_budget(**limits):
         updated = replace(module._EXECUTION_POLICY, **limits)
         monkeypatch.setattr(module, "_EXECUTION_POLICY", updated)
-        monkeypatch.setattr(
-            agent, "_definition", replace(agent._definition, execution_policy=updated)
-        )
+        for definition_name in ("_definition", "_advice_definition"):
+            definition = getattr(agent, definition_name)
+            monkeypatch.setattr(
+                agent,
+                definition_name,
+                replace(definition, execution_policy=updated),
+            )
 
     def assert_stopped(code, *, model_calls, handler_calls=0, status=AgentStatus.FAILED):
         with pytest.raises(ServiceError) as caught:
@@ -143,10 +147,13 @@ def run(monkeypatch):
         return result
 
     return SimpleNamespace(
+        agent=agent,
+        request=request,
         model=model,
         handler=handler,
         authorizer=authorizer,
         cancelled=cancelled,
+        results=results,
         set_budget=set_budget,
         assert_stopped=assert_stopped,
     )
@@ -182,9 +189,18 @@ def test_tool_failure_never_reaches_another_model_step(run):
 
 
 @pytest.mark.parametrize("failure", [RuntimeError(PRIVATE_MARKER), TimeoutError(PRIVATE_MARKER)])
-def test_provider_failure_or_timeout_stops_without_tool_or_retry(run, failure):
+def test_provider_failure_returns_safe_fallback_without_tool_or_retry(run, failure):
     run.model.decide.side_effect = failure
-    run.assert_stopped(AgentErrorCode.PROVIDER_ERROR, model_calls=1)
+    response = run.agent.generate(run.request)
+
+    assert response.answer_status == "DEGRADED"
+    assert response.source == "deterministic_fallback"
+    assert response.fallbackReason == "provider_error"
+    assert response.degraded is True
+    assert len(run.results) == 1
+    assert run.results[0].error is not None
+    assert run.results[0].error.code is AgentErrorCode.PROVIDER_ERROR
+    run.handler.assert_not_called()
 
 
 @pytest.mark.parametrize("malformed", [False, True], ids=["final-schema", "decision-envelope"])

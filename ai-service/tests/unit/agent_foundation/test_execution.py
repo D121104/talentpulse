@@ -29,7 +29,10 @@ class FixedModel:
         self.decision = decision
         self.calls = 0
 
-    def decide(self, prompt: str, *, timeout: float | None = None) -> ModelDecision:
+    def decide(
+        self, prompt: str, *, timeout: float | None = None, **kwargs: object
+    ) -> ModelDecision:
+        del kwargs
         self.calls += 1
         if isinstance(self.decision, AgentModelError):
             raise self.decision

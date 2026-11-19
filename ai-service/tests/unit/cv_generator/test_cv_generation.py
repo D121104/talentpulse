@@ -9,7 +9,8 @@ from uuid import uuid4
 import pytest
 from tests.cv_payload import draft_payload
 
-from talentpulse_ai.core.exceptions import ServiceError
+from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails, ServiceError
+from talentpulse_ai.infrastructure.llm.bedrock import BedrockNovaGenerationAdapter
 from talentpulse_ai.modules.cv_generator.context_builder import (
     _fallback_bullets,
     _group_skills,
@@ -2065,9 +2066,7 @@ def test_project_translation_preserves_metrics_dates_and_numbered_identifiers(
 
 @pytest.mark.parametrize("resume", ["CV", "resume", "résumé", "curriculum vitae", "resumes"])
 @pytest.mark.parametrize("action", ["Manage", "Manages", "Managed", "Managing"])
-def test_project_recruitment_translation_preserves_resume_meaning(
-    resume: str, action: str
-) -> None:
+def test_project_recruitment_translation_preserves_resume_meaning(resume: str, action: str) -> None:
     payload = draft_payload(locale="en-US")
     payload["candidate"]["projects"] = [
         {
@@ -2576,16 +2575,174 @@ def test_provider_mixed_language_boilerplate_is_rejected_but_technology_is_allow
 
 def test_provider_failure_logs_safe_diagnostics(caplog) -> None:
     request = CvDraftRequest.model_validate(draft_payload())
+    provider = FakeProvider({"bullets": [{"source_index": "bad"}]})
+    provider.provider_name = "ollama"
+    provider.model_name = "qwen3:8b"
     with caplog.at_level("WARNING"):
-        CvDraftGenerationService(FakeProvider({"bullets": [{"source_index": "bad"}]})).generate(
-            request
-        )
+        CvDraftGenerationService(provider).generate(request)
     message = " ".join(record.getMessage() for record in caplog.records)
     assert "request_id=" in message and "trace_id=" in message
     assert "provider_validation_error" in message
     assert "bullets.0.source_index" in message
+    events = [
+        record.getMessage()
+        for record in caplog.records
+        if "ai_provider_failure" in record.getMessage()
+    ]
+    assert len(events) == 1
+    assert "capability=cv_generation" in events[0]
+    assert "provider=ollama" in events[0]
+    assert "category=invalid_output" in events[0]
     assert "Nguyen An" not in message
     assert "example.com" not in message
+
+
+@pytest.mark.parametrize(
+    "failed_kind,operation,attempt,expected_kinds",
+    [
+        ("core", "generate", "initial", ["core"]),
+        ("core_repair", "generate", "repair", ["core", "core_repair"]),
+        (
+            "localization_primary",
+            "localize",
+            "initial",
+            ["core", "core_repair", "localization_primary", "localization_repair"],
+        ),
+        (
+            "localization_repair",
+            "localize",
+            "repair",
+            ["core", "core_repair", "localization_primary", "localization_repair"],
+        ),
+    ],
+)
+def test_provider_call_failure_logs_cv_generation_context_without_sensitive_data(
+    caplog, monkeypatch, failed_kind, operation, attempt, expected_kinds
+) -> None:
+    import talentpulse_ai.modules.cv_generator.service as cv_generation
+
+    payload = draft_payload(locale="en-US")
+    payload["candidate"]["projects"] = []
+    payload["candidate"]["education"] = []
+    source = payload["candidate"]["experience"][0]["description"]
+    if failed_kind.startswith("localization"):
+        payload["candidate"]["activities"] = ["Hỗ trợ cộng đồng Python."]
+    request = CvDraftRequest.model_validate(payload)
+    before = request.model_dump()
+    clock = [0.0]
+    monkeypatch.setattr(cv_generation, "monotonic", lambda: clock[0])
+    exception_message = "PRIVATE_PROVIDER_EXCEPTION_7781"
+    raw_body = "PRIVATE_PROVIDER_BODY_9923"
+
+    class FailingProvider(FakeProvider):
+        model_name = "qwen3:8b"
+        provider_name = "ollama"
+
+        def __init__(self):
+            super().__init__(None)
+            self.kinds = []
+            self.timeouts = []
+            self.failed_index = None
+
+        def generate_structured(self, prompt, schema, timeout=None, *, num_predict=None):
+            self.prompts.append(prompt)
+            self.timeouts.append(timeout)
+            if "bullets" in schema.get("properties", {}):
+                kind = "core" if not self.kinds else "core_repair"
+                value = (
+                    {"bullets": []}
+                    if failed_kind == "core_repair"
+                    else {"bullets": [{"source_index": 0, "text": source}]}
+                )
+            else:
+                data = BatchLocalizationProvider._payload(prompt)
+                kind = "localization_repair" if data.get("repair") else "localization_primary"
+                value = (
+                    {"items": []}
+                    if failed_kind == "localization_repair"
+                    else {
+                        "items": [
+                            {"key": item["key"], "text": "Supported the Python community."}
+                            for item in data["items"]
+                        ]
+                    }
+                )
+            self.kinds.append(kind)
+            clock[0] += 1
+            if kind == failed_kind:
+                self.failed_index = len(self.kinds)
+                raise ProviderFailure(
+                    exception_message,
+                    details=ProviderFailureDetails(
+                        provider="ollama",
+                        model=self.model_name,
+                        category="rate_limited",
+                        provider_status=429,
+                        exception_type="RuntimeError",
+                    ),
+                ) from RuntimeError(raw_body)
+            return value
+
+    provider = FailingProvider()
+    service = CvDraftGenerationService(provider)
+    with caplog.at_level("WARNING"):
+        result = service.generate(request)
+
+    # Diagnostics must not add retries, consume the deadline, or change factual fallback.
+    assert provider.kinds == expected_kinds
+    assert service.last_metrics["provider_calls"] == len(expected_kinds)
+    assert service.last_metrics["provider_call_kinds"] == expected_kinds
+    assert clock[0] == len(expected_kinds)
+    assert all(
+        0 < timeout <= cv_generation._CV_TOTAL_TIMEOUT_SECONDS - index
+        for index, timeout in enumerate(provider.timeouts)
+    )
+    assert result.work_experience[0].bullets == [
+        "Built FastAPI services using Python and PostgreSQL."
+    ]
+    assert request.model_dump() == before
+    if failed_kind in {"core", "core_repair", "localization_repair"}:
+        assert "cv_generation.provenance=fallback" in result.warnings
+    if failed_kind == "localization_primary":
+        assert result.activities == ["Supported the Python community."]
+    elif failed_kind == "localization_repair":
+        assert result.activities == []
+
+    logs = caplog.text
+    for private_value in (
+        request.candidate.full_name,
+        request.candidate.email,
+        source,
+        "Hỗ trợ cộng đồng Python.",
+        exception_message,
+        raw_body,
+        request.candidate.model_dump_json(),
+        *provider.prompts,
+    ):
+        assert private_value not in logs
+    assert all(record.exc_info is None for record in caplog.records)
+    events = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("talentpulse_ai") and "ai_provider_failure" in record.getMessage()
+    ]
+    assert len(events) == 1
+    fields = dict(re.findall(r"(\w+)=([^\s]+)", events[0]))
+    assert (
+        fields.items()
+        >= {
+            "capability": "cv_generation",
+            "provider": "ollama",
+            "model": provider.model_name,
+            "operation": operation,
+            "attempt": attempt,
+            "request_id": str(request.identity.request_id),
+            "trace_id": str(request.identity.trace_id),
+            "category": "rate_limited",
+        }.items()
+    )
+    assert 1 <= int(fields["attempt_index"]) <= 12
+    assert int(fields["attempt_index"]) == provider.failed_index
 
 
 def test_provider_duplicate_bullets_are_normalized_per_source() -> None:
@@ -3657,6 +3814,112 @@ def test_total_deadline_bounds_slow_primary_group_calls(monkeypatch) -> None:
         "provider_deadline" in warning or "repair_failure/omission" in warning
         for warning in result.warnings
     )
+
+
+@pytest.mark.parametrize("provider_kind", ["bedrock", "structured"])
+@pytest.mark.parametrize("locale", ["en-US", "vi-VN"])
+def test_provider_contract_preserves_localized_editable_draft(provider_kind, locale) -> None:
+    request = CvDraftRequest.model_validate(_all_sections_payload(locale))
+    before = request.model_dump(mode="json")
+    calls = []
+    translations = FlatStructuredProvider._TRANSLATIONS
+
+    def response_for(prompt):
+        data = BatchLocalizationProvider._payload(prompt)
+        calls.append(data)
+        instructions = prompt.split("<untrusted_data>", 1)[0]
+        assert locale in instructions
+        assert "JSON" in instructions
+        assert prompt.count("</untrusted_data>") == 1
+        if "candidate" in data:
+            assert "project_bullets" in instructions
+            assert "source_index" in instructions
+            text = (
+                "Developed FastAPI services using Python."
+                if locale == "en-US"
+                else "Phát triển dịch vụ FastAPI với Python."
+            )
+            return {
+                "bullets": [
+                    {"source_index": 0, "text": text},
+                    {"source_index": 0, "text": "Invented Rust systems with 99% savings."},
+                ],
+                "project_bullets": [
+                    {
+                        "source_index": 0,
+                        "text": "Built a hiring API with Python."
+                        if locale == "en-US"
+                        else "Xây dựng API tuyển dụng bằng Python.",
+                    }
+                ],
+            }
+        assert "items" in instructions and "key" in instructions
+        return {
+            "items": [
+                {"key": item["key"], "text": translations[item["source_text"]]}
+                for item in data["items"]
+            ]
+        }
+
+    class ConverseClient:
+        def converse(self, **kwargs):
+            assert set(kwargs) == {"modelId", "messages", "inferenceConfig"}
+            assert kwargs["modelId"] == "amazon.nova-lite-v1:0"
+            assert kwargs["inferenceConfig"] == {"temperature": 0.0}
+            message = kwargs["messages"][0]
+            assert message["role"] == "user"
+            value = response_for(message["content"][0]["text"])
+            return {"output": {"message": {"content": [{"text": json.dumps(value)}]}}}
+
+    class StructuredProvider:
+        def generate(self, prompt):
+            pytest.fail("Structured-capable providers must not use legacy generation")
+
+        def generate_structured(self, prompt, schema, timeout=None, *, num_predict=None):
+            assert timeout > 0
+            assert num_predict is None or num_predict > 0
+            properties = schema["properties"]
+            data = BatchLocalizationProvider._payload(prompt)
+            assert ("bullets" if "candidate" in data else "items") in properties
+            return response_for(prompt)
+
+    provider = (
+        BedrockNovaGenerationAdapter(ConverseClient(), "amazon.nova-lite-v1:0")
+        if provider_kind == "bedrock"
+        else StructuredProvider()
+    )
+    result = CvDraftGenerationService(provider).generate(request)
+    assert any("candidate" in call for call in calls)
+    localized_keys = {item["key"] for call in calls for item in call.get("items", [])}
+    assert {
+        "experience:0:description",
+        "projects:0:description",
+        "education:0:degree",
+        "activities:0:text",
+        "awards:0:text",
+    } <= localized_keys
+    fields = _translatable_fields(request, result)
+    assert not _mixed_or_wrong_locale(fields, locale)
+    assert result.position == translations[request.candidate.headline]
+    assert result.education[0].degree == translations[request.candidate.education[0].degree]
+    assert result.activities == [translations[request.candidate.activities[0]]]
+    assert result.awards == [translations[request.candidate.awards[0]]]
+    assert result.work_experience[0].description
+    assert result.projects[0].description
+    assert result.work_experience[0].bullets
+    assert result.projects[0].bullets
+    assert "Rust" not in result.model_dump_json() and "99%" not in result.model_dump_json()
+    assert result.work_experience[0].source_index == result.projects[0].source_index == 0
+    assert result.work_experience[0].company_name == "Acme"
+    assert result.work_experience[0].start_date == "2022-01"
+    assert result.projects[0].technologies == ["Python", "FastAPI"]
+    assert result.certificates == request.candidate.certificates
+    assert result.source_version == request.source_version
+    assert result.content_version == request.content_version
+    assert result.target_job_id == request.job.job_id
+    result.work_experience[0].bullets.append("Manual reviewer edit")
+    assert result.work_experience[0].bullets[-1] == "Manual reviewer edit"
+    assert request.model_dump(mode="json") == before
 
 
 def test_legacy_generate_adapter_still_accepts_grounded_core_payload() -> None:

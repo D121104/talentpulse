@@ -128,6 +128,8 @@ class CvDraftGenerationService:
             ),
             clock=clock,
             started_at=started_at,
+            request_id=request.identity.request_id,
+            trace_id=request.identity.trace_id,
         )
         localization_policy = LocalizationPolicy(
             chunk_size=_LOCALIZATION_CHUNK_SIZE,

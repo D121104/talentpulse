@@ -3,10 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections.abc import Mapping, Sequence
 from typing import Protocol, cast
 
-from talentpulse_ai.core.exceptions import ProviderFailure
+from talentpulse_ai.core.exceptions import (
+    ProviderFailure,
+    ProviderFailureCategory,
+    ProviderName,
+    provider_failure_details,
+    provider_response_failure_category,
+)
 from talentpulse_ai.infrastructure.llm.client import (
     _MAX_OLLAMA_TIMEOUT_SECONDS,
     _ollama_json_request,
@@ -62,10 +69,13 @@ class CohereEmbeddingAdapter:
         return self._embed(text, "search_document")
 
     def _embed(self, text: str, input_type: str) -> list[float]:
+        client = cast(_EmbeddingClient, self._client)
+        bedrock_hosted = hasattr(client, "invoke_model")
+        provider: ProviderName = "bedrock" if bedrock_hosted else "cohere"
+        started_at = time.perf_counter()
         try:
-            client = cast(_EmbeddingClient, self._client)
-            if hasattr(client, "invoke_model"):
-                response = client.invoke_model(
+            if bedrock_hosted:
+                raw_response = client.invoke_model(
                     modelId=self._model,
                     contentType="application/json",
                     accept="application/json",
@@ -77,14 +87,26 @@ class CohereEmbeddingAdapter:
                         }
                     ),
                 )
-                response = _response_body(response)
             else:
-                response = client.embed(
+                raw_response = client.embed(
                     texts=[text],
                     model=self._model,
                     input_type=input_type,
                     embedding_types=["float"],
                 )
+        except Exception as exc:
+            raise ProviderFailure(
+                "embedding provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider=provider,
+                    model=self._model,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                ),
+            ) from exc
+
+        try:
+            response = _response_body(raw_response) if bedrock_hosted else raw_response
             raw: object = getattr(response, "embeddings", response)
             if isinstance(raw, Mapping):
                 raw = raw.get("float", raw.get("embeddings"))
@@ -108,7 +130,16 @@ class CohereEmbeddingAdapter:
                 raise ValueError("embedding response has invalid dimensions")
             return [float(item) for item in vector]
         except Exception as exc:
-            raise ProviderFailure("embedding provider failed") from exc
+            raise ProviderFailure(
+                "embedding provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider=provider,
+                    model=self._model,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                    category=provider_response_failure_category(exc),
+                ),
+            ) from exc
 
 
 class OllamaEmbeddingAdapter:
@@ -136,6 +167,7 @@ class OllamaEmbeddingAdapter:
         return self._embed(text)
 
     def _embed(self, text: str) -> list[float]:
+        started_at = time.perf_counter()
         try:
             response = _ollama_json_request(
                 self._base_url,
@@ -148,6 +180,22 @@ class OllamaEmbeddingAdapter:
                 },
                 self._timeout,
             )
+        except Exception as exc:
+            category: ProviderFailureCategory | None = None
+            if isinstance(exc, (json.JSONDecodeError, ValueError)):
+                category = "invalid_response"
+            raise ProviderFailure(
+                "embedding provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="ollama",
+                    model=self._model,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                    category=category,
+                ),
+            ) from exc
+
+        try:
             if not isinstance(response, Mapping):
                 raise ValueError("embedding response is not an object")
             raw = response.get("embeddings")
@@ -166,4 +214,13 @@ class OllamaEmbeddingAdapter:
                 raise ValueError("embedding response has invalid dimensions")
             return [float(item) for item in vector]
         except Exception as exc:
-            raise ProviderFailure("embedding provider failed") from exc
+            raise ProviderFailure(
+                "embedding provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="ollama",
+                    model=self._model,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                    category="invalid_response",
+                ),
+            ) from exc

@@ -38,6 +38,8 @@ readonly LOCAL_OLLAMA_MEMORY_SWAP_LIMIT="${OLLAMA_MEMORY_SWAP_LIMIT:-10g}"
 readonly LOCAL_OLLAMA_TIMEOUT_SECONDS=120
 readonly DETERMINISTIC_AI_SERVICE_TIMEOUT_MS=10000
 readonly OLLAMA_AI_SERVICE_TIMEOUT_MS=180000
+readonly GEMINI_AI_SERVICE_TIMEOUT_MS=40000
+readonly BEDROCK_AI_SERVICE_TIMEOUT_MS=150000
 readonly CV_OCR_NATIVE_TEXT_MIN_CHARS=250
 readonly CV_OCR_MAX_PAGES=5
 readonly CV_OCR_DPI=200
@@ -59,17 +61,19 @@ SERVICE_LOGS=()
 
 usage() {
   cat <<'EOF'
-Usage: scripts/start-local.sh [--ai-profile=deterministic|ollama] [--cv-ocr] [--index-bootstrap] [--dry-run] [--help]
+Usage: scripts/start-local.sh [--ai-profile=deterministic|ollama|gemini|bedrock] [--cv-ocr] [--index-bootstrap] [--dry-run] [--help]
 
 Starts local PostgreSQL and Redis, then FastAPI, NestJS, and the Vite frontend.
 The Ollama profile additionally starts local Ollama and Qdrant and pulls missing models.
+The Gemini profile uses local Ollama embeddings/Qdrant and Gemini for generation; set AI_GEMINI_API_KEY.
+The Bedrock profile uses local Ollama embeddings/Qdrant and Bedrock generation; set AI_BEDROCK_REGION and log in with AWS CLI.
 CV generation defaults to qwen3:8b; set AI_OLLAMA_GENERATION_MODEL to preserve a
 different local model when needed. Embeddings default to qwen3-embedding:4b
 (2560 dimensions). OCR is disabled by default; --cv-ocr opts the
 local FastAPI child into host-local OCR.
 Ctrl-C stops the three application processes; Docker dependencies remain running.
 
---ai-profile=...  Select deterministic (default) or the explicit Ollama/Qdrant profile.
+--ai-profile=...  Select deterministic, Ollama, Gemini, or Bedrock with local embeddings.
 --cv-ocr          Enable bounded local PDF OCR (requires pdftoppm, tesseract, eng, and vie).
 --index-bootstrap Run the bounded local reindex/backfill into the new Qdrant version after services are ready.
 --dry-run         Print the planned commands and change nothing.
@@ -271,7 +275,7 @@ wait_for_dependencies() {
     done
   done
 
-  if [[ "$AI_PROFILE" == ollama ]]; then
+  if [[ "$AI_PROFILE" != deterministic ]]; then
     wait_for_http_dependency qdrant "$QDRANT_URL/healthz"
     wait_for_http_dependency ollama "$OLLAMA_URL/api/tags"
   fi
@@ -378,7 +382,13 @@ configure_ai_profile() {
 
   export AI_EMBEDDING_PROVIDER=ollama
   export AI_VECTOR_STORE_PROVIDER=qdrant
-  export AI_GENERATION_PROVIDER=ollama
+  if [[ "$AI_PROFILE" == gemini ]]; then
+    export AI_GENERATION_PROVIDER=gemini
+  elif [[ "$AI_PROFILE" == bedrock ]]; then
+    export AI_GENERATION_PROVIDER=bedrock
+  else
+    export AI_GENERATION_PROVIDER=ollama
+  fi
   export AI_COHERE_DIMENSIONS="$LOCAL_OLLAMA_EMBEDDING_DIMENSIONS"
   export AI_QDRANT_URL="$QDRANT_URL"
   export AI_QDRANT_COLLECTION="$LOCAL_QDRANT_COLLECTION"
@@ -500,6 +510,8 @@ while (($#)); do
   case "$1" in
     --ai-profile=deterministic) AI_PROFILE=deterministic; shift ;;
     --ai-profile=ollama) AI_PROFILE=ollama; shift ;;
+    --ai-profile=gemini) AI_PROFILE=gemini; shift ;;
+    --ai-profile=bedrock) AI_PROFILE=bedrock; shift ;;
     --cv-ocr) CV_OCR=true; shift ;;
     --index-bootstrap) INDEX_BOOTSTRAP=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
@@ -507,6 +519,12 @@ while (($#)); do
     *) die "unknown option: $1" ;;
   esac
 done
+
+if [[ "$AI_PROFILE" == bedrock ]]; then
+  export AI_BEDROCK_REGION="${AI_BEDROCK_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-}}}"
+  export AI_BEDROCK_MODEL="${AI_BEDROCK_MODEL:-global.moonshotai.kimi-k3.1}"
+  [[ -n "$AI_BEDROCK_REGION" ]] || die 'AI_BEDROCK_REGION (or AWS_REGION) is required for the Bedrock profile'
+fi
 
 check_cv_ocr_prerequisites
 
@@ -516,13 +534,14 @@ Dry run: no files or services will be changed.
 AI profile: $AI_PROFILE
 CV OCR: $(if [[ "$CV_OCR" == true ]]; then printf 'enabled for FastAPI only (pdftoppm + tesseract; eng+vie verified)'; else printf 'disabled (default; no OCR binaries required)'; fi)
 CV OCR limits: $(if [[ "$CV_OCR" == true ]]; then printf 'native threshold=%s chars, pages=%s, DPI=%s, render pixels=%s, render timeout=%ss, recognition timeout=%ss, total timeout=%ss, output bytes=%s, languages=%s' "$CV_OCR_NATIVE_TEXT_MIN_CHARS" "$CV_OCR_MAX_PAGES" "$CV_OCR_DPI" "$CV_OCR_MAX_RENDER_PIXELS" "$CV_OCR_RENDER_TIMEOUT_SECONDS" "$CV_OCR_RECOGNIZE_TIMEOUT_SECONDS" "$CV_OCR_TOTAL_TIMEOUT_SECONDS" "$CV_OCR_MAX_STDOUT_BYTES" "$CV_OCR_LANGUAGES"; else printf 'inactive (FastAPI receives AI_CV_OCR_ENABLED=false)'; fi)
-Compose: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'docker compose -f %s --profile ollama up -d postgres redis qdrant ollama' "$COMPOSE_FILE"; else printf 'docker compose -f %s up -d postgres redis' "$COMPOSE_FILE"; fi)
-Dependency waits: PostgreSQL and Redis$(if [[ "$AI_PROFILE" == ollama ]]; then printf ', Qdrant %s, Ollama %s' "$QDRANT_URL" "$OLLAMA_URL"; fi)
-Ollama models: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s, %s (pull only when absent)' "$LOCAL_OLLAMA_EMBEDDING_MODEL" "$LOCAL_OLLAMA_GENERATION_MODEL"; else printf 'skipped (deterministic profile)'; fi)
-Ollama memory: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'limit=%s swap-limit=%s (local Compose only)' "$LOCAL_OLLAMA_MEMORY_LIMIT" "$LOCAL_OLLAMA_MEMORY_SWAP_LIMIT"; else printf 'skipped (deterministic profile)'; fi)
-Ollama embedding: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s (%s dimensions)' "$LOCAL_OLLAMA_EMBEDDING_MODEL" "$LOCAL_OLLAMA_EMBEDDING_DIMENSIONS"; else printf 'skipped (deterministic profile)'; fi)
-Ollama generation: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s (override AI_OLLAMA_GENERATION_MODEL is preserved)' "$LOCAL_OLLAMA_GENERATION_MODEL"; else printf 'skipped (deterministic profile)'; fi)
-Qdrant initialization: $(if [[ "$AI_PROFILE" == ollama ]]; then printf 'collection=%s alias=%s index=%s (new/non-destructive)' "$LOCAL_QDRANT_COLLECTION" "$LOCAL_QDRANT_ALIAS" "$LOCAL_QDRANT_INDEX_VERSION"; else printf 'skipped (deterministic profile)'; fi)
+Compose: $(if [[ "$AI_PROFILE" != deterministic ]]; then printf 'docker compose -f %s --profile ollama up -d postgres redis qdrant ollama' "$COMPOSE_FILE"; else printf 'docker compose -f %s up -d postgres redis' "$COMPOSE_FILE"; fi)
+Dependency waits: PostgreSQL and Redis$(if [[ "$AI_PROFILE" != deterministic ]]; then printf ', Qdrant %s, Ollama %s' "$QDRANT_URL" "$OLLAMA_URL"; fi)
+Ollama models: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s, %s (pull only when absent)' "$LOCAL_OLLAMA_EMBEDDING_MODEL" "$LOCAL_OLLAMA_GENERATION_MODEL"; elif [[ "$AI_PROFILE" == gemini || "$AI_PROFILE" == bedrock ]]; then printf '%s (pull only when absent)' "$LOCAL_OLLAMA_EMBEDDING_MODEL"; else printf 'skipped (deterministic profile)'; fi)
+Ollama memory: $(if [[ "$AI_PROFILE" != deterministic ]]; then printf 'limit=%s swap-limit=%s (local Compose only)' "$LOCAL_OLLAMA_MEMORY_LIMIT" "$LOCAL_OLLAMA_MEMORY_SWAP_LIMIT"; else printf 'skipped (deterministic profile)'; fi)
+Ollama embedding: $(if [[ "$AI_PROFILE" != deterministic ]]; then printf '%s (%s dimensions)' "$LOCAL_OLLAMA_EMBEDDING_MODEL" "$LOCAL_OLLAMA_EMBEDDING_DIMENSIONS"; else printf 'skipped (deterministic profile)'; fi)
+Ollama generation: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%s (override AI_OLLAMA_GENERATION_MODEL is preserved)' "$LOCAL_OLLAMA_GENERATION_MODEL"; elif [[ "$AI_PROFILE" == gemini ]]; then printf 'Gemini API'; elif [[ "$AI_PROFILE" == bedrock ]]; then printf 'Bedrock'; else printf 'skipped (deterministic profile)'; fi)
+Bedrock generation: $(if [[ "$AI_PROFILE" == bedrock ]]; then printf 'model=%s region=%s AWS_PROFILE=%s' "$AI_BEDROCK_MODEL" "$AI_BEDROCK_REGION" "${AWS_PROFILE:-default-credential-chain}"; else printf 'skipped'; fi)
+Qdrant initialization: $(if [[ "$AI_PROFILE" != deterministic ]]; then printf 'collection=%s alias=%s index=%s (new/non-destructive)' "$LOCAL_QDRANT_COLLECTION" "$LOCAL_QDRANT_ALIAS" "$LOCAL_QDRANT_INDEX_VERSION"; else printf 'skipped (deterministic profile)'; fi)
 FastAPI: (cd $AI_DIR && uv run --no-sync uvicorn talentpulse_ai.main:app --app-dir src --reload --reload-dir src --host 127.0.0.1 --port 8001 --ssl-keyfile $TLS_KEY --ssl-certfile $TLS_CERT)
 NestJS:  (cd $BACKEND_DIR && npm run start:dev)
 Frontend: (cd $FRONTEND_DIR && npm run dev -- --host 127.0.0.1 --port 5173)
@@ -531,8 +550,8 @@ Backend health: $BACKEND_URL/api/v1/health/ready
 Frontend: $FRONTEND_URL/
 Environment files are preserved; backend launch variables explicitly override .env AI connection settings.
 Index bootstrap: $(if [[ "$INDEX_BOOTSTRAP" == true ]]; then printf 'requested explicitly (bounded reconcile/backfill to 100 jobs; old vectors untouched)'; else printf 'not run'; fi)
-NestJS AI timeout: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%sms (local Ollama)' "$OLLAMA_AI_SERVICE_TIMEOUT_MS"; else printf '%sms (deterministic)' "$DETERMINISTIC_AI_SERVICE_TIMEOUT_MS"; fi)
-FastAPI Ollama provider timeout: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%ss (bounded)' "$LOCAL_OLLAMA_TIMEOUT_SECONDS"; else printf 'not used (deterministic profile)'; fi)
+NestJS AI timeout: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%sms (local Ollama)' "$OLLAMA_AI_SERVICE_TIMEOUT_MS"; elif [[ "$AI_PROFILE" == gemini ]]; then printf '%sms (Gemini)' "$GEMINI_AI_SERVICE_TIMEOUT_MS"; elif [[ "$AI_PROFILE" == bedrock ]]; then printf '%sms (Bedrock)' "$BEDROCK_AI_SERVICE_TIMEOUT_MS"; else printf '%sms (deterministic)' "$DETERMINISTIC_AI_SERVICE_TIMEOUT_MS"; fi)
+FastAPI generation provider timeout: $(if [[ "$AI_PROFILE" == ollama ]]; then printf '%ss (Ollama, bounded)' "$LOCAL_OLLAMA_TIMEOUT_SECONDS"; elif [[ "$AI_PROFILE" == gemini ]]; then printf '%ss (Gemini, bounded)' "${AI_GEMINI_TIMEOUT_SECONDS:-25}"; elif [[ "$AI_PROFILE" == bedrock ]]; then printf 'bounded per Agent model call'; else printf 'not used (deterministic profile)'; fi)
 EOF
   exit 0
 fi
@@ -548,7 +567,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 check_application_ports
-if [[ "$AI_PROFILE" == ollama ]]; then
+if [[ "$AI_PROFILE" != deterministic ]]; then
   compose --profile ollama up -d postgres redis qdrant ollama >/dev/null || \
     die 'could not start PostgreSQL, Redis, Qdrant, and Ollama with Docker Compose'
 else
@@ -557,9 +576,11 @@ fi
 wait_for_dependencies
 configure_ai_profile
 
-if [[ "$AI_PROFILE" == ollama ]]; then
+if [[ "$AI_PROFILE" != deterministic ]]; then
   pull_ollama_model_if_missing "$LOCAL_OLLAMA_EMBEDDING_MODEL"
-  pull_ollama_model_if_missing "$LOCAL_OLLAMA_GENERATION_MODEL"
+  if [[ "$AI_PROFILE" == ollama ]]; then
+    pull_ollama_model_if_missing "$LOCAL_OLLAMA_GENERATION_MODEL"
+  fi
   initialize_local_qdrant
 fi
 
@@ -606,6 +627,10 @@ export AI_SERVICE_JWT_ALGORITHM=RS256
 export AI_SERVICE_JWT_TTL_SECONDS=60
 if [[ "$AI_PROFILE" == ollama ]]; then
   export AI_SERVICE_TIMEOUT_MS="$OLLAMA_AI_SERVICE_TIMEOUT_MS"
+elif [[ "$AI_PROFILE" == gemini ]]; then
+  export AI_SERVICE_TIMEOUT_MS="$GEMINI_AI_SERVICE_TIMEOUT_MS"
+elif [[ "$AI_PROFILE" == bedrock ]]; then
+  export AI_SERVICE_TIMEOUT_MS="$BEDROCK_AI_SERVICE_TIMEOUT_MS"
 else
   export AI_SERVICE_TIMEOUT_MS="$DETERMINISTIC_AI_SERVICE_TIMEOUT_MS"
 fi

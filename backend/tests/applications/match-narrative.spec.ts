@@ -36,6 +36,7 @@ function harness() {
   const result = {
     _id: 'result',
     applicationId: 'app',
+    userId: 'candidate',
     jobId: 'job',
     matchScore: 0.75,
     components: {
@@ -77,6 +78,14 @@ function harness() {
     usersService,
     cvProcessingService,
     aiServiceClient,
+    aiCvConsentsService: {
+      getPolicyMetadata: jest.fn().mockReturnValue({
+        scope: 'cv_matching',
+        consentVersion: 'v1',
+        policyHash: 'policy',
+      }),
+      hasValidConsent: jest.fn().mockResolvedValue(true),
+    },
     jobsService: {
       findOneForInternal: jest
         .fn()

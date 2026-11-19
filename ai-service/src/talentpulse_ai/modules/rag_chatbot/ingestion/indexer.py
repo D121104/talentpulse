@@ -8,7 +8,8 @@ from html import unescape
 from typing import Final
 from uuid import UUID
 
-from talentpulse_ai.core.exceptions import ServiceError
+from talentpulse_ai.core.exceptions import ProviderFailure, ServiceError
+from talentpulse_ai.core.logging import log_ai_provider_failure
 from talentpulse_ai.modules.job_indexing.schemas import (
     CanonicalJobSnapshot,
     DocumentEmbeddingProvider,
@@ -135,6 +136,19 @@ class JobIndexingService:
         if not self._date_window_active(job):
             try:
                 self._vector.delete_point(str(point_id))
+            except ProviderFailure as exc:
+                if exc.details is not None:
+                    log_ai_provider_failure(
+                        details=exc.details,
+                        capability="job_indexing",
+                        operation="index_delete",
+                        attempt="single",
+                        request_id=request.identity.request_id,
+                        trace_id=request.identity.trace_id,
+                    )
+                raise ServiceError(
+                    "index_unavailable", "Job indexing is temporarily unavailable.", 503
+                ) from exc
             except Exception as exc:
                 raise ServiceError(
                     "index_unavailable", "Job indexing is temporarily unavailable.", 503
@@ -160,16 +174,49 @@ class JobIndexingService:
         try:
             embed_document = self._embedding.embed_document
             vector = embed_document(document)
-            if len(vector) != self._dimensions:
-                raise ValueError("embedding dimensions do not match configuration")
-            if not all(
-                isinstance(item, (int, float)) and not isinstance(item, bool) for item in vector
-            ):
-                raise ValueError("embedding values are invalid")
-            payload = _safe_payload(job, request, point_id)
+        except ProviderFailure as exc:
+            if exc.details is not None:
+                log_ai_provider_failure(
+                    details=exc.details,
+                    capability="job_indexing",
+                    operation="embed_document",
+                    attempt="single",
+                    request_id=request.identity.request_id,
+                    trace_id=request.identity.trace_id,
+                )
+            raise ServiceError(
+                "index_unavailable", "Job indexing is temporarily unavailable.", 503
+            ) from exc
+        except Exception as exc:
+            raise ServiceError(
+                "index_unavailable", "Job indexing is temporarily unavailable.", 503
+            ) from exc
+        if len(vector) != self._dimensions:
+            raise ServiceError(
+                "index_unavailable", "Job indexing is temporarily unavailable.", 503
+            ) from ValueError("embedding dimensions do not match configuration")
+        if not all(
+            isinstance(item, (int, float)) and not isinstance(item, bool) for item in vector
+        ):
+            raise ServiceError(
+                "index_unavailable", "Job indexing is temporarily unavailable.", 503
+            ) from ValueError("embedding values are invalid")
+        payload = _safe_payload(job, request, point_id)
+        try:
             self._vector.upsert_point(str(point_id), vector, payload)
-        except ServiceError:
-            raise
+        except ProviderFailure as exc:
+            if exc.details is not None:
+                log_ai_provider_failure(
+                    details=exc.details,
+                    capability="job_indexing",
+                    operation="index_upsert",
+                    attempt="single",
+                    request_id=request.identity.request_id,
+                    trace_id=request.identity.trace_id,
+                )
+            raise ServiceError(
+                "index_unavailable", "Job indexing is temporarily unavailable.", 503
+            ) from exc
         except Exception as exc:
             raise ServiceError(
                 "index_unavailable", "Job indexing is temporarily unavailable.", 503
@@ -201,6 +248,19 @@ class JobIndexingService:
             return cached
         try:
             self._vector.delete_point(str(point_id))
+        except ProviderFailure as exc:
+            if exc.details is not None:
+                log_ai_provider_failure(
+                    details=exc.details,
+                    capability="job_indexing",
+                    operation="index_delete",
+                    attempt="single",
+                    request_id=request.identity.request_id,
+                    trace_id=request.identity.trace_id,
+                )
+            raise ServiceError(
+                "index_unavailable", "Job indexing is temporarily unavailable.", 503
+            ) from exc
         except Exception as exc:
             raise ServiceError(
                 "index_unavailable", "Job indexing is temporarily unavailable.", 503

@@ -1,3 +1,4 @@
+import logging
 from uuid import uuid4
 
 import pytest
@@ -14,6 +15,102 @@ from talentpulse_ai.infrastructure.vectorstore.memory import InMemoryVectorRetri
 from talentpulse_ai.infrastructure.vectorstore.qdrant import QdrantVectorRetriever
 from talentpulse_ai.main import create_app
 from talentpulse_ai.modules.rag_chatbot.schemas import RagGenerateResponse
+
+
+@pytest.mark.parametrize("boundary", ["embedding", "vector"])
+def test_retrieval_provider_failure_preserves_controlled_response(
+    client, valid_rag_retrieve_payload, monkeypatch, boundary
+) -> None:
+    from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails
+
+    def fail(*args, **kwargs):
+        raise ProviderFailure(
+            "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+            details=ProviderFailureDetails(
+                provider="cohere" if boundary == "embedding" else "qdrant",
+                model="synthetic-model",
+                category="rate_limited",
+                provider_status=429,
+                provider_code="SyntheticQuotaExceeded",
+            ),
+        )
+
+    service = client.app.state.retrieval_service
+    target, method = (
+        (service._embedding, "embed_query")
+        if boundary == "embedding"
+        else (service._vector_store, "search")
+    )
+    monkeypatch.setattr(target, method, fail)
+    response = client.post("/internal/v1/rag/retrieve", json=valid_rag_retrieve_payload)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "code": "retrieval_unavailable",
+        "message": "Job retrieval is temporarily unavailable.",
+    }
+
+
+def test_generation_provider_failure_preserves_fallback_response(
+    client, monkeypatch, caplog
+) -> None:
+    from tests.unit.rag_chatbot.test_rag import generate_request
+
+    from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails
+
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise ProviderFailure(
+            "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+            details=ProviderFailureDetails(
+                provider="gemini",
+                model="synthetic-model",
+                category="rate_limited",
+                provider_status=429,
+                provider_code="SyntheticQuotaExceeded",
+            ),
+        )
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(client.app.state.generation_service._provider, "generate", fail)
+    request = generate_request("ADVICE", locale="en")
+    response = client.post("/internal/v1/rag/generate", json=request.model_dump(mode="json"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert calls
+    assert body["request_id"] == str(request.identity.request_id)
+    assert body["trace_id"] == str(request.identity.trace_id)
+    assert body["source"] == "deterministic_fallback"
+    assert body["fallbackReason"] == "provider_error"
+    assert body["degraded"] is True
+    assert body["claims"] == []
+    assert body["citation_keys"] == []
+    assert body["referenced_job_ids"] == []
+    completion_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("rag_generation_completed ")
+    ]
+    assert completion_logs == [
+        "rag_generation_completed "
+        f"request_id={request.identity.request_id} trace_id={request.identity.trace_id} "
+        "intent=ADVICE source=deterministic_fallback answer_status=DEGRADED "
+        "degraded=True fallback_reason=provider_error"
+    ]
+    for internal in (
+        "ai_provider_failure",
+        "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+        "category",
+        "provider_status",
+        "provider_code",
+        "provider_message",
+        "SyntheticQuotaExceeded",
+        "synthetic-model",
+    ):
+        assert internal not in response.text
 
 
 class NullProvider:

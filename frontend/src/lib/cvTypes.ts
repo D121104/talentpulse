@@ -200,6 +200,19 @@ export interface AiCvGenerationConsent {
   revokedAt?: string | null;
 }
 
+export interface AiCvMatchingConsentPolicy {
+  scope: "cv_matching";
+  consentVersion: string;
+  policyHash: string;
+}
+
+export interface AiCvMatchingConsent extends AiCvMatchingConsentPolicy {
+  _id: string;
+  status: "GRANTED" | "REVOKED";
+  grantedAt?: string | null;
+  revokedAt?: string | null;
+}
+
 export type CVGenerationResultStatus = "COMPLETE" | "DEGRADED" | "NO_EVIDENCE";
 
 export type CVGenerationJobStatus =

@@ -12,7 +12,7 @@
 
 **Purpose**: Add only the missing test support required for the consent UI.
 
-- [ ] T001 Add Vitest, jsdom, and React Testing Library configuration plus a `test` script in `frontend/package.json`, `frontend/vitest.config.ts`, and `frontend/src/test/setup.ts`.
+- [x] T001 Add Vitest, jsdom, and React Testing Library configuration plus a `test` script in `frontend/package.json`, `frontend/vitest.config.ts`, and `frontend/src/test/setup.ts`.
 
 ---
 
@@ -20,10 +20,10 @@
 
 **Purpose**: Complete the audit and evaluation foundation before changing prompts, schemas, or provider dispatch.
 
-- [ ] T002 Inventory each in-scope generation journey, current prompt/schema/provider settings, retries, bounds, validators, and fallback in `specs/004-api-model-prompt-cleanup/research.md`; classify each constraint as retain, simplify, or remove with evidence before editing implementation files.
-- [ ] T003 Create `ai-service/evals/datasets/generation_quality_eval_v1.json` with at least 30 synthetic cases for each journey: RAG `JOB_SEARCH`, `ADVICE`, and `CV_JOB_COMPARISON`; Career Chat Agent; CV match analysis; CV generation; and CV localization. Include expected contract/evidence checks and case-specific reviewer criteria; do not include real CV data.
-- [ ] T004 Write failing fixture-validation, PII/secret rejection, provider outcome classification, and report sanitization tests in `ai-service/tests/unit/evals/test_hosted_generation_eval.py` against the evaluation data and CLI contract in `specs/004-api-model-prompt-cleanup/quickstart.md`.
-- [ ] T005 Implement the opt-in evaluation runner in `ai-service/src/talentpulse_ai/scripts/evaluation/hosted_generation_eval.py` to run every fixture against selected/all currently enabled providers, report contract/safety outcomes, and emit a sanitized human-review sheet; support the `--provider`, `--dataset`, and `--output` arguments documented in `specs/004-api-model-prompt-cleanup/quickstart.md`.
+- [x] T002 Inventory each in-scope generation journey, current prompt/schema/provider settings, retries, bounds, validators, and fallback in `specs/004-api-model-prompt-cleanup/research.md`; classify each constraint as retain, simplify, or remove with evidence before editing implementation files.
+- [x] T003 Create `ai-service/evals/datasets/generation_quality_eval_v1.json` with at least 30 synthetic cases for each journey: RAG `JOB_SEARCH`, `ADVICE`, and `CV_JOB_COMPARISON`; Career Chat Agent; CV match analysis; CV generation; and CV localization. Include expected contract/evidence checks and case-specific reviewer criteria; do not include real CV data.
+- [x] T004 Write failing fixture-validation, PII/secret rejection, provider outcome classification, and report sanitization tests in `ai-service/tests/unit/evals/test_hosted_generation_eval.py` against the evaluation data and CLI contract in `specs/004-api-model-prompt-cleanup/quickstart.md`.
+- [x] T005 Implement the opt-in evaluation runner in `ai-service/src/talentpulse_ai/scripts/evaluation/hosted_generation_eval.py` to run every fixture against selected/all currently enabled providers, report contract/safety outcomes, and emit a sanitized human-review sheet; support the `--provider`, `--dataset`, and `--output` arguments documented in `specs/004-api-model-prompt-cleanup/quickstart.md`.
 
 **Checkpoint**: The change inventory is complete, evaluation fixtures contain only synthetic data, and the opt-in runner passes deterministic tests before any prompt/schema cleanup begins.
 
@@ -39,24 +39,24 @@
 
 > Write these tests first and confirm they fail for the missing behavior before implementation.
 
-- [ ] T006 [P] [US1] Add Gemini supported-schema request/projection and Bedrock Nova Lite no-native-schema request tests in `ai-service/tests/unit/providers/test_hosted_generation_contract.py`.
-- [ ] T007 [P] [US1] Add RAG advice, job-search, comparison, invalid-output, and repair contract tests in `ai-service/tests/unit/rag_chatbot/test_rag.py`.
-- [ ] T008 [P] [US1] Add agent structured-output and bounded-repair regression tests in `ai-service/tests/unit/rag_chatbot/test_agent_generation.py`.
-- [ ] T009 [P] [US1] Add hosted provider and invalid-evidence narrative tests in `ai-service/tests/unit/cv_analysis/test_analysis_hosted.py`; assert the full `MatchNarrative` validation remains active.
-- [ ] T010 [P] [US1] Add CV generation/localization provider-contract and prompt-regression tests in `ai-service/tests/unit/cv_generator/test_cv_generation.py`.
-- [ ] T011 [P] [US1] Add NestJS tests for valid, missing, revoked, stale-policy, and wrong-applicant `cv_matching` consent in `backend/tests/applications/applications.service.spec.ts`; assert no AI client call on denied cases.
-- [ ] T012 [P] [US1] Add grant/revoke, loading/error, and policy-version/hash interaction tests for the matching consent control in `frontend/tests/consent/AiCvMatchingConsentCard.test.tsx`.
-- [ ] T013 [P] [US1] Extend `ai-service/tests/integration/test_cv_match_api.py` to verify hosted analysis preserves the existing request/response contract and rejects malformed or semantically unsupported narratives.
+- [x] T006 [P] [US1] Add Gemini supported-schema request/projection and Bedrock Nova Lite no-native-schema request tests in `ai-service/tests/unit/providers/test_hosted_generation_contract.py`.
+- [x] T007 [P] [US1] Add RAG advice, job-search, comparison, invalid-output, and repair contract tests in `ai-service/tests/unit/rag_chatbot/test_rag.py`.
+- [x] T008 [P] [US1] Add agent structured-output and bounded-repair regression tests in `ai-service/tests/unit/rag_chatbot/test_agent_generation.py`.
+- [x] T009 [P] [US1] Add hosted provider and invalid-evidence narrative tests in `ai-service/tests/unit/cv_analysis/test_analysis_hosted.py`; assert the full `MatchNarrative` validation remains active.
+- [x] T010 [P] [US1] Add CV generation/localization provider-contract and prompt-regression tests in `ai-service/tests/unit/cv_generator/test_cv_generation.py`.
+- [x] T011 [P] [US1] Add NestJS tests for valid, missing, revoked, stale-policy, and wrong-applicant `cv_matching` consent in `backend/tests/applications/applications.service.spec.ts`; assert no AI client call on denied cases.
+- [x] T012 [P] [US1] Add grant/revoke, loading/error, and policy-version/hash interaction tests for the matching consent control in `frontend/tests/consent/AiCvMatchingConsentCard.test.tsx`.
+- [x] T013 [P] [US1] Extend `ai-service/tests/integration/test_cv_match_api.py` to verify hosted analysis preserves the existing request/response contract and rejects malformed or semantically unsupported narratives.
 
 ### Implementation for User Story 1
 
-- [ ] T014 [US1] Implement a Gemini-specific response-schema projection in `ai-service/src/talentpulse_ai/infrastructure/llm/gemini.py` that sends only the documented supported subset and bounds schema complexity while leaving the complete Pydantic/domain validation unchanged.
-- [ ] T015 [US1] Update RAG provider dispatch and repair handling in `ai-service/src/talentpulse_ai/modules/rag_chatbot/generation/generator.py` and `ai-service/src/talentpulse_ai/modules/rag_chatbot/generation/prompt_builder.py` so Gemini receives its compatible schema, Bedrock Nova Lite stays on prompt-plus-parse, and invalid responses still use existing validation/fallback behavior; simplify only audited duplicate instructions in `ai-service/src/talentpulse_ai/modules/rag_chatbot/prompts/qa_v1.txt`.
-- [ ] T016 [US1] Remove only proven duplicate or hosted-incompatible wording from the agent prompt in `ai-service/src/talentpulse_ai/modules/rag_chatbot/prompts/career_chat_agent_v1.txt` and keep the bounded tools, step count, call count, and repair behavior in `ai-service/src/talentpulse_ai/modules/rag_chatbot/agent.py` unchanged.
-- [ ] T017 [US1] Replace the Ollama-only type gate in `ai-service/src/talentpulse_ai/modules/cv_analysis/analysis.py` with capability-aware hosted/local generation, use native structured output only when supported, and keep full `MatchNarrative` and evidence validation for every provider.
-- [ ] T018 [US1] Inject the existing consent service into `backend/src/applications/applications.module.ts` and check the matched applicant's current `cv_matching` consent in `backend/src/applications/applications.service.ts` before entering the AI call/fallback block; missing, revoked, stale, or wrong-user consent must deny without dispatch and HR entitlement must not substitute for applicant consent.
-- [ ] T019 [US1] Add typed `cv_matching` policy/current/grant/revoke calls in `frontend/src/lib/cvApi.ts` and `frontend/src/lib/cvTypes.ts`, implement `frontend/src/components/consent/AiCvMatchingConsentCard.tsx` using the current policy text/version, and mount it on `frontend/src/pages/cv/MyCVPage.tsx` without creating a new scope or changing policy metadata.
-- [ ] T020 [US1] Simplify CV generation and localization instructions only where the audit and tests prove duplication, retaining Bedrock JSON guidance and all draft/user-review guarantees in `ai-service/src/talentpulse_ai/modules/cv_generator/prompt_builder.py`, `ai-service/src/talentpulse_ai/modules/cv_generator/core_generation.py`, and `ai-service/src/talentpulse_ai/modules/cv_generator/localization.py`.
+- [x] T014 [US1] Implement a Gemini-specific response-schema projection in `ai-service/src/talentpulse_ai/infrastructure/llm/gemini.py` that sends only the documented supported subset and bounds schema complexity while leaving the complete Pydantic/domain validation unchanged.
+- [x] T015 [US1] Update RAG provider dispatch and repair handling in `ai-service/src/talentpulse_ai/modules/rag_chatbot/generation/generator.py` and `ai-service/src/talentpulse_ai/modules/rag_chatbot/generation/prompt_builder.py` so Gemini receives its compatible schema, Bedrock Nova Lite stays on prompt-plus-parse, and invalid responses still use existing validation/fallback behavior; simplify only audited duplicate instructions in `ai-service/src/talentpulse_ai/modules/rag_chatbot/prompts/qa_v1.txt`.
+- [x] T016 [US1] Remove only proven duplicate or hosted-incompatible wording from the agent prompt in `ai-service/src/talentpulse_ai/modules/rag_chatbot/prompts/career_chat_agent_v1.txt` and keep the bounded tools, step count, call count, and repair behavior in `ai-service/src/talentpulse_ai/modules/rag_chatbot/agent.py` unchanged.
+- [x] T017 [US1] Replace the Ollama-only type gate in `ai-service/src/talentpulse_ai/modules/cv_analysis/analysis.py` with capability-aware hosted/local generation, use native structured output only when supported, and keep full `MatchNarrative` and evidence validation for every provider.
+- [x] T018 [US1] Inject the existing consent service into `backend/src/applications/applications.module.ts` and check the matched applicant's current `cv_matching` consent in `backend/src/applications/applications.service.ts` before entering the AI call/fallback block; missing, revoked, stale, or wrong-user consent must deny without dispatch and HR entitlement must not substitute for applicant consent.
+- [x] T019 [US1] Add typed `cv_matching` policy/current/grant/revoke calls in `frontend/src/lib/cvApi.ts` and `frontend/src/lib/cvTypes.ts`, implement `frontend/src/components/consent/AiCvMatchingConsentCard.tsx` using the current policy text/version, and mount it on `frontend/src/pages/cv/MyCVPage.tsx` without creating a new scope or changing policy metadata.
+- [x] T020 [US1] Simplify CV generation and localization instructions only where the audit and tests prove duplication, retaining Bedrock JSON guidance and all draft/user-review guarantees in `ai-service/src/talentpulse_ai/modules/cv_generator/prompt_builder.py`, `ai-service/src/talentpulse_ai/modules/cv_generator/core_generation.py`, and `ai-service/src/talentpulse_ai/modules/cv_generator/localization.py`.
 
 **Checkpoint**: Hosted generation returns validated responses across supported journeys; CV match analysis is consent-gated before provider dispatch; users can grant/revoke `cv_matching` through the existing policy/API; public request/response schemas remain unchanged.
 
@@ -72,13 +72,13 @@
 
 > Write these tests before changing shared/provider settings.
 
-- [ ] T021 [P] [US2] Add Ollama request tests for `format`, `stream=False`, `temperature=0`, Qwen `think=False`, and bounded `num_predict`/timeout in `ai-service/tests/unit/providers/test_ollama_provider.py`.
-- [ ] T022 [P] [US2] Add a local CV-analysis narrative regression using the Ollama adapter and existing evidence rules in `ai-service/tests/unit/cv_analysis/test_analysis.py`.
+- [x] T021 [P] [US2] Add Ollama request tests for `format`, `stream=False`, `temperature=0`, Qwen `think=False`, and bounded `num_predict`/timeout in `ai-service/tests/unit/providers/test_ollama_provider.py`.
+- [x] T022 [P] [US2] Add a local CV-analysis narrative regression using the Ollama adapter and existing evidence rules in `ai-service/tests/unit/cv_analysis/test_analysis.py`.
 
 ### Implementation for User Story 2
 
-- [ ] T023 [US2] Keep `_ollama_schema` normalization and Ollama-only request flags in `ai-service/src/talentpulse_ai/infrastructure/llm/ollama.py`; move any Ollama-only constraint found in the T002 inventory out of shared provider settings without changing local response behavior.
-- [ ] T024 [US2] Run and record the Ollama RAG, agent, CV-analysis, and CV-generation regression suites in `ai-service/tests/unit/rag_chatbot/`, `ai-service/tests/unit/cv_analysis/`, and `ai-service/tests/unit/cv_generator/`; resolve any hosted-cleanup regression before marking US2 complete.
+- [x] T023 [US2] Keep `_ollama_schema` normalization and Ollama-only request flags in `ai-service/src/talentpulse_ai/infrastructure/llm/ollama.py`; move any Ollama-only constraint found in the T002 inventory out of shared provider settings without changing local response behavior.
+- [x] T024 [US2] Run and record the Ollama RAG, agent, CV-analysis, and CV-generation regression suites in `ai-service/tests/unit/rag_chatbot/`, `ai-service/tests/unit/cv_analysis/`, and `ai-service/tests/unit/cv_generator/`; resolve any hosted-cleanup regression before marking US2 complete.
 
 **Checkpoint**: Local Ollama continues to satisfy existing output contracts, while its special settings are not sent to Bedrock/Gemini.
 
@@ -92,11 +92,11 @@
 
 ### Implementation for User Story 3
 
-- [ ] T025 [US3] Add a before/after constraint ledger to `specs/004-api-model-prompt-cleanup/research.md` with affected journey/provider, decision, evidence, retained safeguard, and test reference for every changed prompt/schema/setting.
+- [x] T025 [US3] Add a before/after constraint ledger to `specs/004-api-model-prompt-cleanup/research.md` with affected journey/provider, decision, evidence, retained safeguard, and test reference for every changed prompt/schema/setting.
 - [ ] T026 [US3] Run `hosted_generation_eval.py` from `ai-service/src/talentpulse_ai/scripts/evaluation/hosted_generation_eval.py` against `ai-service/evals/datasets/generation_quality_eval_v1.json` and every enabled hosted profile; meet at least 95% first-pass contract-valid responses and at least 90% human-review passes for 10+ responses per journey/provider, recording sanitized aggregate results in `specs/004-api-model-prompt-cleanup/research.md`.
-- [ ] T027 [US3] Obtain privacy-owner confirmation that the existing `cv_matching` policy is sufficient for hosted processing and record the release gate in `specs/004-api-model-prompt-cleanup/research.md`; do not modify the policy text/version without separate approval.
-- [ ] T028 [P] [US3] Document rollback steps for restoring prior prompts/provider request behavior and disabling the hosted CV-analysis path in `specs/004-api-model-prompt-cleanup/quickstart.md`; verify rollback requires no migration or persisted-data repair.
-- [ ] T029 [US3] Run the final validation commands and unaffected retrieval/indexing regression from `specs/004-api-model-prompt-cleanup/quickstart.md` and `ai-service/tests/unit/job_indexing/test_indexing.py`; record that no retrieval, embedding, ranking, or public schema changes were introduced in `specs/004-api-model-prompt-cleanup/research.md`.
+- [x] T027 [US3] Obtain privacy-owner confirmation that the existing `cv_matching` policy is sufficient for hosted processing and record the release gate in `specs/004-api-model-prompt-cleanup/research.md`; do not modify the policy text/version without separate approval.
+- [x] T028 [P] [US3] Document rollback steps for restoring prior prompts/provider request behavior and disabling the hosted CV-analysis path in `specs/004-api-model-prompt-cleanup/quickstart.md`; verify rollback requires no migration or persisted-data repair.
+- [x] T029 [US3] Run the final validation commands and unaffected retrieval/indexing regression from `specs/004-api-model-prompt-cleanup/quickstart.md` and `ai-service/tests/unit/job_indexing/test_indexing.py`; record that no retrieval, embedding, ranking, or public schema changes were introduced in `specs/004-api-model-prompt-cleanup/research.md`.
 
 ---
 

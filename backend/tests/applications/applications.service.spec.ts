@@ -1,4 +1,24 @@
 import { ApplicationsService } from 'src/applications/applications.service';
+import { ForbiddenException } from '@nestjs/common';
+import { Repository } from 'typeorm';
+import { AiCvConsentsService } from 'src/ai-consents/ai-cv-consents.service';
+import {
+  AiCvConsent,
+  AiCvConsentStatus,
+} from 'src/ai-consents/entities/ai-cv-consent.entity';
+import { AiCvConsentEvent } from 'src/ai-consents/entities/ai-cv-consent-event.entity';
+import {
+  AiCvConsentScope,
+  AI_CV_CONSENT_ERROR_MESSAGES,
+  getActiveAiCvConsentPolicy,
+} from 'src/ai-consents/ai-cv-consent.policy';
+import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
+import {
+  analysisVersionKey,
+  fallbackNarrative,
+  NarrativeRequest,
+} from 'src/ai-matching/match-narrative';
+import { Role } from 'src/decorator/customize';
 import {
   Application,
   ApplicationStatus,
@@ -17,6 +37,116 @@ const ids = {
   company: '00000000-0000-4000-8000-000000000004',
   user: '00000000-0000-4000-8000-000000000005',
 };
+
+describe('match analysis applicant cv_matching consent', () => {
+  function harness() {
+    const policy = getActiveAiCvConsentPolicy(
+      undefined,
+      AiCvConsentScope.CV_MATCHING,
+    );
+    const consent = {
+      userId: ids.user,
+      ...policy,
+      status: AiCvConsentStatus.GRANTED,
+      grantedAt: new Date(0),
+      revokedAt: null,
+    };
+    const findOne = jest.fn(async ({ where }) =>
+      Object.entries(where).every(([key, value]) => consent[key] === value)
+        ? consent
+        : null,
+    );
+    const aiCvConsentsService = new AiCvConsentsService(
+      { findOne } as unknown as Repository<AiCvConsent>,
+      {} as Repository<AiCvConsentEvent>,
+    );
+    const result = {
+      applicationId: ids.application,
+      userId: ids.user,
+      jobId: ids.job,
+      matchScore: 0.75,
+      components: {},
+      matchedSkills: [],
+      missingSkills: [],
+    } as CVMatchResult;
+    const analyzeMatch = jest.fn(async (request: NarrativeRequest) =>
+      fallbackNarrative(request),
+    );
+    const service = Object.assign(
+      Object.create(ApplicationsService.prototype),
+      {
+        aiCvConsentsService,
+        aiServiceClient: { analyzeMatch },
+        usersService: {
+          getUserEntitlements: jest.fn().mockResolvedValue({
+            role: Role.ADMIN,
+            limits: { canViewCandidateAiAnalysis: true },
+          }),
+        },
+        jobsService: {
+          findOneForInternal: jest.fn().mockResolvedValue(createJob()),
+        },
+        companyRepo: {
+          findOne: jest.fn().mockResolvedValue(createCanonicalCompany()),
+        },
+        cvProcessingService: {
+          getRankedCandidates: jest.fn().mockResolvedValue([result]),
+        },
+      },
+    ) as ApplicationsService;
+    const call = () =>
+      service.getMatchAnalysis(
+        ids.job,
+        ids.application,
+        {
+          locale: 'en',
+          analysisVersionKey: analysisVersionKey(result),
+        },
+        { ...user, _id: ids.company, role: Role.ADMIN },
+      );
+    return { consent, findOne, analyzeMatch, call, policy };
+  }
+
+  it('dispatches with current valid consent belonging to the matched applicant', async () => {
+    const h = harness();
+    await expect(h.call()).resolves.toMatchObject({ source: 'llm' });
+    expect(h.findOne).toHaveBeenCalledWith({
+      where: {
+        userId: ids.user,
+        scope: AiCvConsentScope.CV_MATCHING,
+        status: AiCvConsentStatus.GRANTED,
+      },
+    });
+    expect(h.analyzeMatch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'missing',
+    'revoked',
+    'revoked-at',
+    'stale-version',
+    'stale-hash',
+    'wrong-applicant',
+    'wrong-scope',
+  ])(
+    'denies %s consent without AI dispatch despite HR entitlement',
+    async (state) => {
+      const h = harness();
+      if (state === 'missing') h.findOne.mockResolvedValue(null);
+      if (state === 'revoked') h.consent.status = AiCvConsentStatus.REVOKED;
+      if (state === 'revoked-at') h.consent.revokedAt = new Date();
+      if (state === 'stale-version') h.consent.consentVersion = 'old';
+      if (state === 'stale-hash') h.consent.policyHash = '0'.repeat(64);
+      if (state === 'wrong-applicant') h.consent.userId = ids.company;
+      if (state === 'wrong-scope')
+        h.consent.scope = AiCvConsentScope.CV_GENERATION;
+      await expect(h.call()).rejects.toEqual(
+        new ForbiddenException(AI_CV_CONSENT_ERROR_MESSAGES.INVALID_CONSENT),
+      );
+      expect(h.analyzeMatch).not.toHaveBeenCalled();
+    },
+  );
+});
 
 const user = {
   _id: ids.user,
@@ -139,6 +269,7 @@ function createHarness({
     configService as any,
     { findOne: jest.fn().mockResolvedValue(job) } as any,
     {} as any,
+    {} as AiCvConsentsService,
   );
 
   return {

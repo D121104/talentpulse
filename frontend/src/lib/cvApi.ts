@@ -12,6 +12,8 @@ import type {
   CreateUserCVDto,
   AiCvGenerationConsent,
   AiCvGenerationConsentPolicy,
+  AiCvMatchingConsent,
+  AiCvMatchingConsentPolicy,
 } from "./cvTypes";
 
 import { API_URL } from "./api";
@@ -194,6 +196,25 @@ export const aiCvConsentApi = {
         source: "web",
         sourceMetadata: { locale: document.documentElement.lang || "vi" },
       },
+      accessToken,
+    }),
+};
+
+export const aiCvMatchingConsentApi = {
+  policy: (accessToken?: string | null) =>
+    apiRequest<AiCvMatchingConsentPolicy>("/ai/cv-consents/policy/cv_matching", { accessToken }),
+  current: (accessToken?: string | null) =>
+    apiRequest<AiCvMatchingConsent | null>("/ai/cv-consents/current/cv_matching", { accessToken }),
+  grant: (policy: AiCvMatchingConsentPolicy, accessToken?: string | null) =>
+    apiRequest<AiCvMatchingConsent>("/ai/cv-consents/grant", {
+      method: "POST",
+      body: { ...policy, source: "web", sourceMetadata: { locale: document.documentElement.lang || "vi" } },
+      accessToken,
+    }),
+  revoke: (policy: AiCvMatchingConsentPolicy, accessToken?: string | null) =>
+    apiRequest<AiCvMatchingConsent>("/ai/cv-consents/revoke", {
+      method: "POST",
+      body: { ...policy, source: "web", sourceMetadata: { locale: document.documentElement.lang || "vi" } },
       accessToken,
     }),
 };

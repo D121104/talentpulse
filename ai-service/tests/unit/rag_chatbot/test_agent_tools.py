@@ -21,7 +21,10 @@ from talentpulse_ai.agent_foundation.tools import (
 from talentpulse_ai.modules.cv_analysis.matching import MatchService
 from talentpulse_ai.modules.rag_chatbot import agent_tools
 from talentpulse_ai.modules.rag_chatbot.agent import build_agent_request
-from talentpulse_ai.modules.rag_chatbot.agent_tools import build_retrieval_context_tool
+from talentpulse_ai.modules.rag_chatbot.agent_tools import (
+    build_retrieval_context_tool,
+    build_skill_framework_tool,
+)
 from talentpulse_ai.modules.rag_chatbot.schemas import (
     AuthorizedCvSnapshot,
     CanonicalJobContext,
@@ -104,6 +107,25 @@ def dispatch(
     )
 
 
+def dispatch_skill_framework(request: RagGenerateRequest, occupation_query: str) -> ToolResult:
+    tool = build_skill_framework_tool()
+    return ToolDispatcher(ToolRegistry((tool,)), AllowAuthorizer()).dispatch(
+        ToolCallDecision(
+            tool_call_id="skill-framework-call",
+            tool_id=tool.tool_id,
+            input={"occupation_query": occupation_query},
+        ),
+        request=build_agent_request(request),
+        definition=AgentDefinition(
+            capability_id="rag.generate",
+            model_profile="synthetic",
+            output_model=ProviderGeneration,
+            tool_allowlist=frozenset({tool.tool_id}),
+        ),
+        remaining_tool_calls=1,
+    )
+
+
 def test_retrieval_context_tool_has_empty_closed_input_and_read_only_scope() -> None:
     tool = build_retrieval_context_tool()
 
@@ -115,6 +137,106 @@ def test_retrieval_context_tool_has_empty_closed_input_and_read_only_scope() -> 
     schema = tool.input_model.model_json_schema()
     assert schema.get("properties", {}) == {}
     assert schema["additionalProperties"] is False
+
+
+def test_skill_framework_tool_has_annotated_read_only_contract() -> None:
+    tool = build_skill_framework_tool()
+
+    assert tool.tool_id == "career.lookup_skill_framework"
+    assert tool.required_operation == "rag:generate"
+    assert tool.allowed_capabilities == frozenset({"rag.generate"})
+    assert tool.side_effect_class is ToolSideEffect.READ_ONLY
+    schema = tool.input_model.model_json_schema()
+    assert schema["additionalProperties"] is False
+    assert "standard occupation title" in schema["properties"]["occupation_query"]["description"]
+    assert "URL" in schema["properties"]["occupation_query"]["description"]
+
+
+def test_skill_framework_tool_returns_cited_occupation_skills_only_for_advice() -> None:
+    request = make_request().model_copy(
+        update={"intent": "ADVICE", "normalized_user_message": "Middle Developer skills"}
+    )
+    result = dispatch_skill_framework(request, "Middle Developer")
+
+    assert result.output["framework"] == "O*NET"
+    assert result.output["framework_version"] == "31.0"
+    assert result.output["occupation_code"] == "15-1252.00"
+    assert result.output["occupation_title"] == "Software Developers"
+    assert result.output["seniority_level_supported"] is False
+    assert result.output["match_basis"] == "project_alias"
+    assert len(result.output["skills"]) == 35
+    programming = next(
+        skill for skill in result.output["skills"] if skill["element_name"] == "Programming"
+    )
+    assert programming["importance"] == 4
+    assert programming["level"] is None
+    assert programming["level_suppression"] == "Y"
+    assert {scale["scale_id"] for scale in result.output["scale_definitions"]} == {"IM", "LV"}
+    assert "license_url" in result.output
+
+
+def test_skill_framework_does_not_guess_an_unsupported_occupation() -> None:
+    request = make_request().model_copy(update={"intent": "ADVICE"})
+
+    result = dispatch_skill_framework(request, "Quantum Software Ninja")
+
+    assert result.output["matched"] is False
+    assert result.output["occupation_code"] is None
+    assert result.output["skills"] == []
+
+
+def test_senior_developer_alias_uses_broad_occupation_without_claiming_seniority() -> None:
+    request = make_request().model_copy(update={"intent": "ADVICE"})
+
+    result = dispatch_skill_framework(request, "Senior Developer")
+
+    assert result.output["matched"] is True
+    assert result.output["occupation_code"] == "15-1252.00"
+    assert result.output["match_basis"] == "project_alias"
+    assert result.output["seniority_level_supported"] is False
+
+
+def test_skill_framework_tool_is_restricted_to_advice_mode() -> None:
+    request = make_request()
+
+    with pytest.raises(ToolDispatchError) as error:
+        dispatch_skill_framework(request, "Middle Developer")
+
+    assert error.value.code is AgentErrorCode.TOOL_ERROR
+
+
+@pytest.mark.parametrize(
+    "tool_input",
+    [
+        {"occupation_query": "Middle Developer", "url": "https://attacker.invalid"},
+        {"occupation_query": "Middle Developer", "user_id": str(uuid4())},
+    ],
+    ids=["arbitrary-url", "principal-selector"],
+)
+def test_skill_framework_tool_rejects_untrusted_selectors(tool_input: dict[str, object]) -> None:
+    tool = build_skill_framework_tool()
+    dispatcher = ToolDispatcher(ToolRegistry((tool,)), AllowAuthorizer())
+    request = make_request().model_copy(update={"intent": "ADVICE"})
+    definition = AgentDefinition(
+        capability_id="rag.generate",
+        model_profile="synthetic",
+        output_model=ProviderGeneration,
+        tool_allowlist=frozenset({tool.tool_id}),
+    )
+
+    with pytest.raises(ToolDispatchError) as error:
+        dispatcher.dispatch(
+            ToolCallDecision(
+                tool_call_id="skill-framework-call",
+                tool_id=tool.tool_id,
+                input=tool_input,
+            ),
+            request=build_agent_request(request),
+            definition=definition,
+            remaining_tool_calls=1,
+        )
+
+    assert error.value.code is AgentErrorCode.INVALID_INPUT
 
 
 @pytest.mark.parametrize(

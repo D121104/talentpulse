@@ -66,6 +66,7 @@ graphify-out/
 *PLAN*.md
 *plan*.md
 plans/
+!specs/002-career-chat-agent/plan.md
 
 # TypeScript and lint caches
 *.tsbuildinfo
@@ -153,4 +154,7 @@ secrets/
 *.p12
 *.pfx
 
-/docs
+/docs/*
+!/docs/architecture/
+/docs/architecture/*
+!/docs/architecture/agent-foundation-integration.md

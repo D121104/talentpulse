@@ -120,6 +120,24 @@ def test_dispatcher_validates_and_returns_typed_tool_output() -> None:
     assert seen_contexts[0].timeout_seconds == 2.0
 
 
+def test_dispatcher_describes_only_allowlisted_tools_with_input_annotations() -> None:
+    dispatcher = make_dispatcher(lambda value, context: {"value": "found"})
+
+    tools = dispatcher.describe_tools(make_definition())
+
+    assert len(tools) == 1
+    assert tools[0]["tool_id"] == "synthetic.lookup"
+    assert tools[0]["description"] == "Lookup synthetic data by query."
+    assert tools[0]["input_schema"]["properties"]["query"]["type"] == "string"
+    assert "output_schema" in tools[0]
+
+
+def test_dispatcher_does_not_describe_tools_outside_capability_allowlist() -> None:
+    dispatcher = make_dispatcher(lambda value, context: {"value": "found"})
+
+    assert dispatcher.describe_tools(make_definition(allowlist=frozenset())) == []
+
+
 def test_tool_timeout_is_capped_by_remaining_execution_time() -> None:
     seen_contexts: list[ToolExecutionContext] = []
 

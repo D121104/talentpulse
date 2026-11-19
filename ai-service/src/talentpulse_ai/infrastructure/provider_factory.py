@@ -14,6 +14,7 @@ from talentpulse_ai.infrastructure.embeddings.model import (
     OllamaEmbeddingAdapter,
 )
 from talentpulse_ai.infrastructure.llm.bedrock import BedrockNovaGenerationAdapter
+from talentpulse_ai.infrastructure.llm.gemini import GeminiGenerationAdapter
 from talentpulse_ai.infrastructure.llm.ollama import OllamaGenerationAdapter
 from talentpulse_ai.infrastructure.vectorstore.qdrant import QdrantVectorRetriever
 from talentpulse_ai.modules.rag_chatbot.schemas import (
@@ -79,10 +80,24 @@ def create_provider_bundle(
             "Ollama providers are only allowed in local/development/test environments."
         )
 
-    if providers == ("ollama", "qdrant", "ollama"):
+    if providers in {
+        ("ollama", "qdrant", "ollama"),
+        ("ollama", "qdrant", "gemini"),
+        ("ollama", "qdrant", "bedrock"),
+    }:
         ollama_url = _required(settings, "ollama_url", "Ollama URL")
         embedding_model = _required(settings, "ollama_embedding_model", "Ollama embedding model")
         generation_model = _required(settings, "ollama_generation_model", "Ollama generation model")
+        gemini_api_key = ""
+        bedrock_region = ""
+        bedrock_model = ""
+        if settings.generation_provider == "gemini":
+            if settings.gemini_api_key is None:
+                raise RuntimeError("Gemini API key is required.")
+            gemini_api_key = settings.gemini_api_key.get_secret_value()
+        elif settings.generation_provider == "bedrock":
+            bedrock_region = _required(settings, "bedrock_region", "Bedrock region")
+            bedrock_model = _required(settings, "bedrock_model", "Bedrock model")
         qdrant_url = _required(settings, "qdrant_url", "Qdrant URL")
         collection = _required(settings, "qdrant_collection", "Qdrant collection")
         alias = _required(settings, "qdrant_alias", "Qdrant alias")
@@ -113,17 +128,45 @@ def create_provider_bundle(
                 index_version=index_version,
                 dimensions=settings.ollama_embedding_dimensions,
             ),
-            generation=OllamaGenerationAdapter(
-                ollama_url, generation_model, settings.ollama_timeout_seconds
+            generation=(
+                OllamaGenerationAdapter(
+                    ollama_url, generation_model, settings.ollama_timeout_seconds
+                )
+                if settings.generation_provider == "ollama"
+                else GeminiGenerationAdapter(
+                    gemini_api_key,
+                    settings.gemini_model,
+                    settings.gemini_timeout_seconds,
+                )
+                if settings.generation_provider == "gemini"
+                else BedrockNovaGenerationAdapter(
+                    bedrock_client
+                    if bedrock_client is not None
+                    else boto3.client("bedrock-runtime", region_name=bedrock_region),
+                    bedrock_model,
+                    agent_client_factory=lambda timeout: _create_bedrock_agent_client(
+                        bedrock_region, timeout
+                    ),
+                )
             ),
         )
 
-    if providers != ("cohere", "qdrant", "bedrock"):
+    if providers not in {
+        ("cohere", "qdrant", "bedrock"),
+        ("cohere", "qdrant", "gemini"),
+    }:
         raise RuntimeError("Provider factory requires an explicit supported provider tuple.")
 
     model = _required(settings, "cohere_model", "Cohere embedding model")
     region = _required(settings, "bedrock_region", "Bedrock region")
-    bedrock_model = _required(settings, "bedrock_model", "Bedrock model")
+    generation = settings.generation_provider
+    gemini_api_key = ""
+    if generation == "bedrock":
+        bedrock_model = _required(settings, "bedrock_model", "Bedrock model")
+    else:
+        if settings.gemini_api_key is None:
+            raise RuntimeError("Gemini API key is required.")
+        gemini_api_key = settings.gemini_api_key.get_secret_value()
     qdrant_url = _required(settings, "qdrant_url", "Qdrant URL")
     collection = _required(settings, "qdrant_collection", "Qdrant collection")
     alias = _required(settings, "qdrant_alias", "Qdrant alias")
@@ -155,9 +198,17 @@ def create_provider_bundle(
             index_version=index_version,
             dimensions=settings.cohere_dimensions,
         ),
-        generation=BedrockNovaGenerationAdapter(
-            active_bedrock,
-            bedrock_model,
-            agent_client_factory=lambda timeout: _create_bedrock_agent_client(region, timeout),
+        generation=(
+            BedrockNovaGenerationAdapter(
+                active_bedrock,
+                bedrock_model,
+                agent_client_factory=lambda timeout: _create_bedrock_agent_client(region, timeout),
+            )
+            if generation == "bedrock"
+            else GeminiGenerationAdapter(
+                gemini_api_key,
+                settings.gemini_model,
+                settings.gemini_timeout_seconds,
+            )
         ),
     )

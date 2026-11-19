@@ -53,7 +53,8 @@ class SequenceModel:
         self.calls = 0
         self.timeouts: list[float | None] = []
 
-    def decide(self, prompt: str, *, timeout: float | None = None) -> ModelDecision:
+    def decide(self, prompt: str, *, timeout: float | None = None, **kwargs: object) -> ModelDecision:
+        del kwargs
         self.timeouts.append(timeout)
         decision = self.decisions[self.calls]
         self.calls += 1

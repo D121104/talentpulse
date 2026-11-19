@@ -274,6 +274,7 @@ def generate_core(
                 validation_failed = False
             if validation_failed:
                 mark("schema_validation")
+                runtime.log_invalid_output(type(exc).__name__)
             elif _is_timeout_exception(exc):
                 mark("provider_timeout")
             else:
@@ -406,6 +407,8 @@ def generate_core(
                 project_indices=set(project_indices),
             )
         except Exception as exc:
+            if callable(getattr(exc, "errors", None)):
+                runtime.log_invalid_output(type(exc).__name__)
             mark("provider_timeout" if _is_timeout_exception(exc) else "core_repair_failure")
             warnings.append(_PROVIDER_WARNING)
             if _is_timeout_exception(exc):

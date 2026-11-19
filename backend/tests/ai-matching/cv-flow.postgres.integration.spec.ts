@@ -515,6 +515,7 @@ integrationDescribe(
         new ConfigService(),
         { findOne: jest.fn().mockResolvedValue(fixture.job) } as any,
         {} as any,
+        {} as any,
       );
       return {
         applicationRepo,

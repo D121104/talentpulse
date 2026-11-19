@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import cast
 
 from fastapi import APIRouter, Depends, Request
@@ -17,6 +18,7 @@ from talentpulse_ai.modules.rag_chatbot.schemas import (
 from talentpulse_ai.modules.rag_chatbot.service import RetrievalService
 
 router = APIRouter(prefix="/internal/v1/rag", tags=["rag"])
+logger = logging.getLogger("uvicorn.error")
 
 
 @router.post(
@@ -44,4 +46,16 @@ def generate(payload: RagGenerateRequest, request: Request) -> RagGenerateRespon
             agent=cast(CareerChatAgent, request.app.state.agent_generation_service),
         ),
     )
-    return service.generate(payload)
+    response = service.generate(payload)
+    logger.info(
+        "rag_generation_completed request_id=%s trace_id=%s intent=%s source=%s "
+        "answer_status=%s degraded=%s fallback_reason=%s",
+        response.request_id,
+        response.trace_id,
+        payload.intent,
+        response.source,
+        response.answer_status,
+        response.degraded,
+        response.fallbackReason or "none",
+    )
+    return response

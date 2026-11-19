@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from talentpulse_ai.core.exceptions import ServiceError
+from talentpulse_ai.core.exceptions import ProviderFailure, ServiceError
+from talentpulse_ai.core.logging import log_ai_provider_failure
 from talentpulse_ai.modules.rag_chatbot.retrieval.filters import (
     MAX_CANDIDATES,
     _utc_now_ms,
@@ -40,7 +41,39 @@ class RetrievalService:
         )
         try:
             vector = self._embedding.embed_query(request.normalized_user_message)
+        except ProviderFailure as exc:
+            if exc.details is not None:
+                log_ai_provider_failure(
+                    details=exc.details,
+                    capability="rag_chat",
+                    operation="embed_query",
+                    attempt="single",
+                    request_id=request.identity.request_id,
+                    trace_id=request.identity.trace_id,
+                )
+            raise ServiceError(
+                "retrieval_unavailable", "Job retrieval is temporarily unavailable.", 503
+            ) from exc
+        except Exception as exc:
+            raise ServiceError(
+                "retrieval_unavailable", "Job retrieval is temporarily unavailable.", 503
+            ) from exc
+
+        try:
             chunks = self._vector_store.search(vector, query_filter, MAX_CANDIDATES)
+        except ProviderFailure as exc:
+            if exc.details is not None:
+                log_ai_provider_failure(
+                    details=exc.details,
+                    capability="rag_chat",
+                    operation="retrieve",
+                    attempt="single",
+                    request_id=request.identity.request_id,
+                    trace_id=request.identity.trace_id,
+                )
+            raise ServiceError(
+                "retrieval_unavailable", "Job retrieval is temporarily unavailable.", 503
+            ) from exc
         except Exception as exc:
             raise ServiceError(
                 "retrieval_unavailable", "Job retrieval is temporarily unavailable.", 503

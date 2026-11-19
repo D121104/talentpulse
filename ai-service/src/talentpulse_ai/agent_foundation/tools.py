@@ -97,6 +97,23 @@ class ToolDispatcher:
         self._registry = registry
         self._authorizer = authorizer
 
+    def describe_tools(self, definition: AgentDefinition) -> list[dict[str, object]]:
+        descriptions: list[dict[str, object]] = []
+        for tool_id in sorted(definition.tool_allowlist):
+            tool = self._registry.get(tool_id)
+            if tool is None or definition.capability_id not in tool.allowed_capabilities:
+                continue
+            descriptions.append(
+                {
+                    "tool_id": tool.tool_id,
+                    "description": tool.description,
+                    "side_effect": tool.side_effect_class.value,
+                    "input_schema": tool.input_model.model_json_schema(),
+                    "output_schema": tool.output_model.model_json_schema(),
+                }
+            )
+        return descriptions
+
     def dispatch(
         self,
         decision: ToolCallDecision,

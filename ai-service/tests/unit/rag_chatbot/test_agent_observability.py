@@ -122,6 +122,10 @@ def test_adapter_records_correlated_redacted_terminal_observation(
     with caplog.at_level(logging.INFO):
         if status is AgentStatus.COMPLETE:
             assert agent_module.CareerChatAgent(model=model).generate(request) is finalized_response
+        elif error_code is AgentErrorCode.PROVIDER_ERROR:
+            response = agent_module.CareerChatAgent(model=model).generate(request)
+            assert response.source == "deterministic_fallback"
+            assert response.fallbackReason == "provider_error"
         else:
             with pytest.raises(ServiceError):
                 agent_module.CareerChatAgent(model=model).generate(request)
@@ -155,3 +159,4 @@ def test_adapter_records_correlated_redacted_terminal_observation(
         record for record in caplog.records if record.message.startswith("agent_execution ")
     ]
     assert len(telemetry) == 1
+    assert telemetry[0].name == "uvicorn.error"

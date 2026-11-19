@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from talentpulse_ai.agent_foundation.contracts import AgentResult, AgentStatus
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger("uvicorn.error")
 
 
 class AgentExecutionObservation(BaseModel):

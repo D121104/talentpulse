@@ -1,20 +1,26 @@
 """T012: job-output safety contracts for T014/T031 (intentionally RED)."""
 
+import json
 from copy import deepcopy
 from importlib import import_module
+from uuid import uuid4
 
 import pytest
+from pydantic import TypeAdapter
 from tests.unit.rag_chatbot.test_rag import generate_request, job
 
 from talentpulse_ai.agent_foundation.contracts import (
     ExecutionPolicy,
     FinalDecision,
     ModelDecision,
+    UnstructuredTextResponse,
 )
+from talentpulse_ai.agent_foundation.model import AgentModelAdapter
 from talentpulse_ai.core.exceptions import ProviderFailure, ServiceError
 from talentpulse_ai.modules.rag_chatbot.generation.citations import parse_and_validate
 from talentpulse_ai.modules.rag_chatbot.generation.generator import GenerationService
 from talentpulse_ai.modules.rag_chatbot.schemas import (
+    AuthorizedCvSnapshot,
     ProviderGeneration,
     StructuredFilterState,
 )
@@ -27,7 +33,10 @@ class ScriptedModel:
         self.outputs = list(outputs)
         self.prompts: list[str] = []
 
-    def decide(self, prompt: str, *, timeout: float | None = None) -> ModelDecision:
+    def decide(
+        self, prompt: str, *, timeout: float | None = None, **kwargs: object
+    ) -> ModelDecision:
+        del kwargs
         self.prompts.append(prompt)
         assert timeout is not None and timeout > 0
         assert self.outputs, "generation exceeded the scripted single-repair allowance"
@@ -148,6 +157,164 @@ def test_supported_claims_and_filter_state_survive_finalization(agent_module, gr
     assert len(model.prompts) == 1
 
 
+class ScriptedStructuredProvider:
+    """Replace provider I/O while retaining decision parsing and grounding validation."""
+
+    def __init__(self, *outputs):
+        self.outputs = list(outputs)
+        self.calls = []
+        self.unstructured_calls = []
+
+    def generate_structured(self, prompt, schema, timeout=None):
+        self.calls.append((prompt, deepcopy(schema), timeout))
+        assert self.outputs, "provider exceeded the single-repair allowance"
+        output = self.outputs.pop(0)
+        if isinstance(output, Exception):
+            raise output
+        return deepcopy(output)
+
+    def generate(self, prompt):
+        self.unstructured_calls.append(prompt)
+        raise AssertionError("structured output must not use plain generation")
+
+    def generate_with_timeout(self, prompt, *, timeout):
+        self.unstructured_calls.append(prompt)
+        raise AssertionError("structured output must not use bounded plain generation")
+
+
+def assert_structured_calls(provider, count):
+    assert len(provider.calls) == count
+    assert provider.unstructured_calls == []
+    expected_schema = TypeAdapter(ModelDecision).json_schema()
+    for prompt, schema, timeout in provider.calls:
+        assert prompt
+        assert schema == expected_schema
+        assert timeout is not None and timeout > 0
+    if count == 2:
+        assert provider.calls[1][0] != provider.calls[0][0]
+        assert provider.calls[1][2] <= provider.calls[0][2]
+
+
+@pytest.mark.parametrize("representation", ["mapping", "json", "model"])
+def test_generation_provider_uses_structured_decision_schema(
+    agent_module, grounded, representation
+):
+    request, output = grounded
+    decision = FinalDecision(output=output)
+    raw = {
+        "mapping": decision.model_dump(mode="json"),
+        "json": decision.model_dump_json(),
+        "model": decision,
+    }[representation]
+    provider = ScriptedStructuredProvider(raw)
+
+    response = agent_module.CareerChatAgent(model=AgentModelAdapter(provider)).generate(request)
+
+    assert response.answer_status == "COMPLETE"
+    assert response.claims == parse_and_validate(output, request).claims
+    assert response.citation_keys == ["job:1"]
+    assert response.filters == request.filter_state
+    assert response.state_delta == {}
+    assert_structured_calls(provider, 1)
+
+
+def test_bedrock_cv_plain_text_is_recovered_only_after_authorized_retrieval(agent_module):
+    class BedrockProvider:
+        provider_name = "bedrock"
+        supports_structured_outputs = True
+
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+            self.responses = [
+                {
+                    "kind": "tool_call",
+                    "output": None,
+                    "tool_id": "rag.retrieve_context",
+                },
+                UnstructuredTextResponse(
+                    "The CV demonstrates backend experience and should quantify project impact."
+                ),
+            ]
+
+        def generate_structured(self, prompt, schema, timeout=None):
+            self.prompts.append(prompt)
+            return self.responses.pop(0)
+
+    cv_text = "SYNTHETIC_AUTHORIZED_CV_CONTEXT"
+    request = generate_request().model_copy(
+        update={
+            "intent": "CV_ANALYSIS",
+            "authorized_cv_snapshot": AuthorizedCvSnapshot(
+                cv_id=uuid4(),
+                content_hash="a" * 64,
+                sanitized_text=cv_text,
+                consent_version="synthetic-v1",
+            ),
+            "consent_version": "synthetic-v1",
+        }
+    )
+    provider = BedrockProvider()
+
+    response = agent_module.CareerChatAgent(model=AgentModelAdapter(provider)).generate(request)
+
+    assert response.source == "llm"
+    assert response.degraded is False
+    assert "backend experience" in response.answer_blocks[0].text
+    assert len(provider.prompts) == 2
+    assert cv_text not in provider.prompts[0]
+    assert cv_text in provider.prompts[1]
+    assert provider.responses == []
+
+
+@pytest.mark.parametrize("invalid_kind", ["json", "decision-schema"])
+def test_structured_provider_invalid_output_is_repaired_exactly_once(
+    agent_module, grounded, invalid_kind
+):
+    request, output = grounded
+    invalid = {
+        "json": "not JSON",
+        "decision-schema": {"kind": "final", "output": []},
+    }[invalid_kind]
+    provider = ScriptedStructuredProvider(invalid, {"kind": "final", "output": output})
+
+    response = agent_module.CareerChatAgent(model=AgentModelAdapter(provider)).generate(request)
+
+    assert response.answer_status == "COMPLETE"
+    assert response.claims == parse_and_validate(output, request).claims
+    assert response.citation_keys == ["job:1"]
+    assert_structured_calls(provider, 2)
+
+
+@pytest.mark.parametrize("repair_kind", ["json", "provider-failure"])
+def test_structured_provider_failed_repair_never_makes_a_third_call(
+    agent_module, grounded, repair_kind
+):
+    request, output = grounded
+    repair = {
+        "json": "still not JSON",
+        "provider-failure": ProviderFailure("synthetic repair failure"),
+    }[repair_kind]
+    # A valid third result makes an accidental extra attempt observable even if caught.
+    provider = ScriptedStructuredProvider(
+        json.dumps({"kind": "final", "output": {"answer_blocks": []}}),
+        repair,
+        {"kind": "final", "output": output},
+    )
+
+    agent = agent_module.CareerChatAgent(model=AgentModelAdapter(provider))
+    if repair_kind == "provider-failure":
+        response = agent.generate(request)
+        assert response.answer_status == "DEGRADED"
+        assert response.fallbackReason == "provider_error"
+    else:
+        with pytest.raises(ServiceError) as error:
+            agent.generate(request)
+        assert error.value.code == "generation_unavailable"
+        assert error.value.status_code == 503
+    assert_structured_calls(provider, 2)
+    assert len(provider.outputs) == 1
+
+
 def test_exact_duplicate_citations_are_deduplicated_everywhere(agent_module, grounded):
     request, output = grounded
     output["citation_keys"] *= 2
@@ -186,45 +353,14 @@ def corrupt(output, kind):
     return value
 
 
-@pytest.mark.parametrize(
-    "kind",
-    [
-        "malformed",
-        "unknown",
-        "unpaired",
-        "undeclared-claim",
-        "cross-job",
-    ],
-)
-def test_invalid_citation_requires_one_repair_before_acceptance(agent_module, grounded, kind):
+def test_model_cannot_override_application_owned_grounding_metadata(agent_module, grounded):
     request, output = grounded
-    if kind == "cross-job":
-        second = job()
-        request = generate_request(
-            jobs=[item.model_dump() for item in request.canonical_active_job_context] + [second],
-            evidence=[item.model_dump() for item in request.retrieval_evidence]
-            + [
-                {
-                    "job_id": second["job_id"],
-                    "rank": 2,
-                    "score": 0.7,
-                    "citation_key": "job:2",
-                }
-            ],
-        )
-    invalid = corrupt(output, kind)
-    if kind == "cross-job":
-        # Both keys/jobs are legitimate and declared; only the claim pairing is wrong.
-        invalid["citation_keys"].append("job:2")
-        invalid["referenced_job_ids"].append(str(second["job_id"]))
-    # Verify the fixture actually violates the existing deterministic contract.
-    with pytest.raises(ValueError):
-        parse_and_validate(invalid, request)
-    model = ScriptedModel(invalid, output)
+    supplied_by_model = corrupt(output, "unknown")
+    model = ScriptedModel(supplied_by_model)
 
     response = agent_module.CareerChatAgent(model=model).generate(request)
 
-    assert len(model.prompts) == 2
+    assert len(model.prompts) == 1
     assert response.claims == parse_and_validate(output, request).claims
     assert response.citation_keys == ["job:1"]
     assert response.referenced_job_ids == [request.retrieval_evidence[0].job_id]
@@ -237,7 +373,7 @@ def test_failed_single_repair_returns_safe_fallback_or_controlled_error(
     repair_error,
 ):
     request, output = grounded
-    invalid = corrupt(output, "unknown")
+    invalid = {"answer_blocks": []}
     model = ScriptedModel(
         invalid, ProviderFailure("repair unavailable") if repair_error else invalid
     )
@@ -262,7 +398,7 @@ def test_no_remaining_model_budget_does_not_attempt_repair(agent_module, monkeyp
             timeout_seconds=24,
         ),
     )
-    model = ScriptedModel(corrupt(output, "unknown"))
+    model = ScriptedModel({"answer_blocks": []})
     try:
         response = agent_module.CareerChatAgent(model=model).generate(request)
     except (ServiceError, ProviderFailure):

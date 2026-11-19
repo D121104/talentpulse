@@ -10,7 +10,8 @@ class InjectionAttemptModel:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    def decide(self, prompt: str, *, timeout: float | None = None):
+    def decide(self, prompt: str, *, timeout: float | None = None, **kwargs: object):
+        del kwargs
         self.prompts.append(prompt)
         if len(self.prompts) == 1:
             return ToolCallDecision(

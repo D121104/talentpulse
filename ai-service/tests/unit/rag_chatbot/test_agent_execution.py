@@ -39,7 +39,10 @@ class FixedModel:
         )
         self.prompts: list[str] = []
 
-    def decide(self, prompt: str, *, timeout: float | None = None) -> ModelDecision:
+    def decide(
+        self, prompt: str, *, timeout: float | None = None, **kwargs: object
+    ) -> ModelDecision:
+        del kwargs
         self.prompts.append(prompt)
         assert timeout is not None and 0 < timeout <= 24
         return self.decision
@@ -125,6 +128,7 @@ def test_subagent_delegation_never_starts_another_execution(
         assert definition.tool_allowlist <= {
             "rag.retrieve_context",
             "career.read_matching_evidence",
+            "career.lookup_skill_framework",
         }
         assert tool_id not in definition.tool_allowlist
         assert len(model.prompts) == 1

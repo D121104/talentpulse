@@ -19,11 +19,45 @@ from talentpulse_ai.modules.rag_chatbot.schemas import (
 )
 
 
+def test_agent_provider_failure_returns_degraded_api_fallback(client, monkeypatch) -> None:
+    from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails
+
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise ProviderFailure(
+            "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+            details=ProviderFailureDetails(
+                provider="gemini",
+                model="synthetic-model",
+                category="rate_limited",
+                provider_status=429,
+                provider_code="SyntheticQuotaExceeded",
+            ),
+        )
+
+    agent = CareerChatAgent(model=FixedProvider())
+    monkeypatch.setattr(agent._model, "decide", fail)
+    monkeypatch.setattr(client.app.state, "generation_service", agent)
+    request = make_request(session_id=uuid4(), history=[], message="Interview advice")
+    response = client.post("/internal/v1/rag/generate", json=request.model_dump(mode="json"))
+
+    assert calls
+    assert response.status_code == 200
+    assert response.json()["answer_status"] == "DEGRADED"
+    assert response.json()["source"] == "deterministic_fallback"
+    assert response.json()["fallbackReason"] == "provider_error"
+
+
 class FixedProvider:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    def decide(self, prompt: str, *, timeout: float | None = None) -> FinalDecision:
+    def decide(
+        self, prompt: str, *, timeout: float | None = None, **kwargs: object
+    ) -> FinalDecision:
+        del kwargs
         self.prompts.append(prompt)
         assert timeout is not None and 0 < timeout <= 24
         return FinalDecision(
@@ -41,7 +75,8 @@ class SequenceProvider:
         self.decisions = list(decisions)
         self.prompts: list[str] = []
 
-    def decide(self, prompt: str, *, timeout: float | None = None):
+    def decide(self, prompt: str, *, timeout: float | None = None, **kwargs: object):
+        del kwargs
         self.prompts.append(prompt)
         assert timeout is not None and timeout > 0
         decision = self.decisions.pop(0)
@@ -158,6 +193,52 @@ def test_empty_job_search_returns_no_evidence_fallback() -> None:
     assert response.citation_keys == []
     assert response.referenced_job_ids == []
     assert response.filters == request.filter_state
+
+
+def test_advice_uses_licensed_skill_framework_for_mid_level_developer_question() -> None:
+    request = make_request(
+        session_id=uuid4(),
+        history=[],
+        message="What skills should a middle developer have?",
+    )
+    provider = SequenceProvider(
+        ToolCallDecision(
+            tool_call_id="lookup-software-developer-skills",
+            tool_id="career.lookup_skill_framework",
+            input={"occupation_query": "Middle Developer"},
+        ),
+        {
+            "answer_blocks": [
+                {
+                    "kind": "ADVICE",
+                    "text": (
+                        "As a general occupation-wide reference, O*NET lists programming "
+                        "and systems analysis. It does not define a middle-level benchmark. "
+                        "Source: O*NET 31.0, CC BY 4.0."
+                    ),
+                }
+            ],
+            "claims": [],
+            "citation_keys": [],
+            "referenced_job_ids": [],
+        },
+    )
+
+    response = CareerChatAgent(model=provider).generate(request)
+
+    assert response.answer_status == "COMPLETE"
+    assert len(provider.prompts) == 2
+    assert "APPLICATION-DEFINED TOOL CATALOG" in provider.prompts[0]
+    assert "career.lookup_skill_framework" in provider.prompts[0]
+    assert "standard occupation title" in provider.prompts[0]
+    assert "15-1252.00" in provider.prompts[1]
+    assert "Programming" in provider.prompts[1]
+    assert "level_suppression" in provider.prompts[1]
+    assert "CC BY 4.0" in provider.prompts[1]
+    assert response.answer_blocks[0].text.startswith("As a general occupation-wide reference")
+    assert len(response.answer_blocks) == 1
+    assert "O*NET 31.0 Database" not in response.answer_blocks[0].text
+    assert "Database terms:" not in response.answer_blocks[0].text
 
 
 def test_missing_canonical_context_is_a_controlled_error_not_empty_search() -> None:

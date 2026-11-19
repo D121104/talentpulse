@@ -20,7 +20,25 @@ def make_selector(
     return CapabilityImplementationSelector(settings, registered)
 
 
-def test_agent_capabilities_default_to_disabled() -> None:
+def test_rag_generate_agent_is_enabled_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("AI_AGENT_ENABLED_CAPABILITIES", raising=False)
+    settings = Settings(_env_file=None)
+
+    assert settings.agent_enabled_capabilities == frozenset({"rag.generate"})
+
+    selector = CapabilityImplementationSelector(
+        settings,
+        frozenset({"rag.generate"}),
+    )
+    agent = object()
+    legacy = object()
+
+    assert selector.select("rag.generate", legacy=legacy, agent=agent) is agent
+
+
+def test_empty_server_flag_keeps_legacy_as_rollback(monkeypatch) -> None:
+    monkeypatch.setenv("AI_AGENT_ENABLED_CAPABILITIES", "[]")
+
     settings = Settings(_env_file=None)
 
     assert settings.agent_enabled_capabilities == frozenset()

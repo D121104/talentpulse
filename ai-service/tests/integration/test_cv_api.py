@@ -13,6 +13,46 @@ from talentpulse_ai.infrastructure.vectorstore.memory import InMemoryVectorRetri
 from talentpulse_ai.main import create_app
 
 
+def test_draft_provider_failure_preserves_editable_fallback(client, monkeypatch) -> None:
+    from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails
+
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise ProviderFailure(
+            "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+            details=ProviderFailureDetails(
+                provider="gemini",
+                model="synthetic-model",
+                category="rate_limited",
+                provider_status=429,
+                provider_code="SyntheticQuotaExceeded",
+            ),
+        )
+
+    monkeypatch.setattr(client.app.state.cv_draft_service._provider, "generate", fail)
+    payload = draft_payload()
+    response = client.post("/internal/v1/cv/draft", json=payload)
+
+    assert calls
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation_mode"] == "EDITOR_ONLY"
+    assert body["work_experience"][0]["company_name"] == "Acme"
+    for internal in (
+        "ai_provider_failure",
+        "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+        "category",
+        "provider_status",
+        "provider_code",
+        "provider_message",
+        "SyntheticQuotaExceeded",
+        "synthetic-model",
+    ):
+        assert internal not in response.text
+
+
 def test_openapi_preserves_public_job_profile_components_and_refs(client) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200
