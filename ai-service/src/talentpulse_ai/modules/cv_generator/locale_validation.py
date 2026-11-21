@@ -309,6 +309,8 @@ def _short_scalar_locale_matches(text: str, locale: str) -> bool:
 
 def _ordinary_title_case_scalar(value: str) -> bool:
     """Allow short translated labels such as ``Backend Engineer`` or ``Data Platform``."""
+    if re.search(r"[.!?]\s*$", value):
+        return False
     tokens = _TOKEN_RE.findall(value)
     if not tokens or len(tokens) > 8:
         return False

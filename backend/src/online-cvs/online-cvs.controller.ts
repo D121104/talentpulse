@@ -25,6 +25,42 @@ import { IUser } from 'src/users/users.interface';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 
+function stripGenerationSnapshot<T>(value: T): T {
+  if (value instanceof Date) return value;
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripGenerationSnapshot(entry)) as T;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const response: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(record)) {
+      if (key !== 'generationSnapshot') {
+        response[key] = stripGenerationSnapshot(nested);
+      }
+    }
+    const snapshot = record.generationSnapshot;
+    const pending =
+      snapshot && typeof snapshot === 'object'
+        ? (snapshot as Record<string, unknown>).pendingDraft
+        : undefined;
+    if (
+      pending &&
+      typeof pending === 'object' &&
+      (pending as Record<string, unknown>).reviewStatus === 'PENDING'
+    ) {
+      const pendingRecord = pending as Record<string, unknown>;
+      response.pendingGeneration = {
+        operationId: pendingRecord.operationId,
+        reviewStatus: pendingRecord.reviewStatus,
+        draftHash: pendingRecord.draftHash,
+        expiresAt: pendingRecord.expiresAt,
+      };
+    }
+    return response as T;
+  }
+  return value;
+}
+
 @Controller('online-cvs')
 @ApiTags('Online CVs Controller')
 export class OnlineCVsController {
@@ -35,8 +71,13 @@ export class OnlineCVsController {
   @ApiOperation({ summary: 'Create a new online CV' })
   @ApiBearerAuth()
   @ResponseMessage('Tạo CV online thành công')
-  create(@Body() createOnlineCVDto: CreateOnlineCVDto, @User() user: IUser) {
-    return this.onlineCVsService.create(createOnlineCVDto, user);
+  async create(
+    @Body() createOnlineCVDto: CreateOnlineCVDto,
+    @User() user: IUser,
+  ) {
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.create(createOnlineCVDto, user),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -47,11 +88,13 @@ export class OnlineCVsController {
   })
   @ApiBearerAuth()
   @ResponseMessage('Tạo bản nháp CV mới từ hồ sơ nghề nghiệp thành công')
-  generateFromProfile(
+  async generateFromProfile(
     @Body() dto: GenerateFromCareerProfileDto,
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.generateFromCareerProfile(dto, user);
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.generateFromCareerProfile(dto, user),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -59,17 +102,19 @@ export class OnlineCVsController {
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({ summary: 'Queue editable AI CV generation' })
   @ApiBearerAuth()
-  enqueueGeneration(
+  async enqueueGeneration(
     @Param('id') id: string,
     @Body() dto: EnqueueOnlineCvGenerationDto,
     @Headers('idempotency-key') idempotencyKey: string,
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.enqueueGeneration(
-      id,
-      dto,
-      user,
-      idempotencyKey,
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.enqueueGeneration(
+        id,
+        dto,
+        user,
+        idempotencyKey,
+      ),
     );
   }
 
@@ -80,15 +125,17 @@ export class OnlineCVsController {
     summary: 'Queue editable AI CV generation from career profile',
   })
   @ApiBearerAuth()
-  enqueueGenerationFromCareerProfile(
+  async enqueueGenerationFromCareerProfile(
     @Body() dto: GenerateFromCareerProfileDto,
     @Headers('idempotency-key') idempotencyKey: string,
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.enqueueGenerationFromCareerProfile(
-      dto,
-      user,
-      idempotencyKey,
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.enqueueGenerationFromCareerProfile(
+        dto,
+        user,
+        idempotencyKey,
+      ),
     );
   }
 
@@ -96,12 +143,14 @@ export class OnlineCVsController {
   @Get(':id/generation-jobs/:operationId')
   @ApiOperation({ summary: 'Get asynchronous CV generation status' })
   @ApiBearerAuth()
-  getGenerationJob(
+  async getGenerationJob(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('operationId', new ParseUUIDPipe()) operationId: string,
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.getGenerationJob(id, operationId, user);
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.getGenerationJob(id, operationId, user),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -109,12 +158,27 @@ export class OnlineCVsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel asynchronous CV generation' })
   @ApiBearerAuth()
-  cancelGeneration(
+  async cancelGeneration(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('operationId', new ParseUUIDPipe()) operationId: string,
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.cancelGeneration(id, operationId, user);
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.cancelGeneration(id, operationId, user),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/generation-jobs/:operationId/draft')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Discard an owner-reviewed CV draft' })
+  @ApiBearerAuth()
+  async discardGenerationDraft(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('operationId', new ParseUUIDPipe()) operationId: string,
+    @User() user: IUser,
+  ): Promise<void> {
+    await this.onlineCVsService.discardGenerationDraft(id, operationId, user);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -122,12 +186,14 @@ export class OnlineCVsController {
   @ApiOperation({ summary: 'Generate an editable AI CV draft' })
   @ApiBearerAuth()
   @ResponseMessage('Tạo bản nháp CV bằng AI thành công')
-  generate(
+  async generate(
     @Param('id') id: string,
     @Body() dto: GenerateOnlineCvDto,
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.generate(id, dto, user);
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.generate(id, dto, user),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -135,8 +201,10 @@ export class OnlineCVsController {
   @ApiOperation({ summary: 'Get all online CVs of current user' })
   @ApiBearerAuth()
   @ResponseMessage('Lấy danh sách CV online')
-  findAll(@User() user: IUser) {
-    return this.onlineCVsService.findByUser(user);
+  async findAll(@User() user: IUser) {
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.findByUser(user),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -144,8 +212,10 @@ export class OnlineCVsController {
   @ApiOperation({ summary: 'Get online CV by ID' })
   @ApiBearerAuth()
   @ResponseMessage('Lấy chi tiết CV online')
-  findOne(@Param('id') id: string, @User() user: IUser) {
-    return this.onlineCVsService.findOne(id, user);
+  async findOne(@Param('id') id: string, @User() user: IUser) {
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.findOne(id, user),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -184,12 +254,14 @@ export class OnlineCVsController {
   @ApiOperation({ summary: 'Update online CV' })
   @ApiBearerAuth()
   @ResponseMessage('Cập nhật CV online thành công')
-  update(
+  async update(
     @Param('id') id: string,
     @Body() updateOnlineCVDto: UpdateOnlineCVDto,
     @User() user: IUser,
   ) {
-    return this.onlineCVsService.update(id, updateOnlineCVDto, user);
+    return stripGenerationSnapshot(
+      await this.onlineCVsService.update(id, updateOnlineCVDto, user),
+    );
   }
 
   @UseGuards(JwtAuthGuard)

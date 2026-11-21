@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import partial
 from time import monotonic
 
@@ -14,7 +15,12 @@ from talentpulse_ai.modules.cv_generator.core_generation import generate_core
 from talentpulse_ai.modules.cv_generator.draft_builder import build_draft
 from talentpulse_ai.modules.cv_generator.localization import LocalizationPolicy, localize_fields
 from talentpulse_ai.modules.cv_generator.provider_runtime import ProviderLimits, ProviderRuntime
-from talentpulse_ai.modules.cv_generator.schemas import CvDraft, CvDraftRequest, ShortText
+from talentpulse_ai.modules.cv_generator.schemas import (
+    CvDraft,
+    CvDraftRequest,
+    CvDraftReviewMetadata,
+    ShortText,
+)
 from talentpulse_ai.modules.cv_generator.validators import (
     _application_role,
     _target_skill_literal,
@@ -92,6 +98,27 @@ class CvDraftGenerationService:
         self.last_metrics = metrics
 
     def generate(self, request: CvDraftRequest) -> CvDraft:
+        draft, _ = self._generate(request, include_review=False)
+        return draft
+
+    def generate_with_review(
+        self, request: CvDraftRequest, *, timeout_seconds: float | None = None
+    ) -> CvDraftReviewResult:
+        draft, metadata = self._generate(
+            request,
+            include_review=True,
+            timeout_seconds=timeout_seconds,
+        )
+        assert metadata is not None
+        return CvDraftReviewResult(draft=draft, review_metadata=metadata)
+
+    def _generate(
+        self,
+        request: CvDraftRequest,
+        *,
+        include_review: bool,
+        timeout_seconds: float | None = None,
+    ) -> tuple[CvDraft, CvDraftReviewMetadata | None]:
         clock = monotonic
         started_at = clock()
         selected_experience, selected_projects = _selected_entry_indices(request)
@@ -117,6 +144,15 @@ class CvDraftGenerationService:
             chunk_timeout_seconds,
             repair_timeout_seconds,
         ) = self._budget_seconds()
+        if timeout_seconds is not None:
+            if timeout_seconds <= 0:
+                raise ServiceError(
+                    "cv_generation_timeout", "CV generation exceeded its time limit.", 504
+                )
+            total_timeout_seconds = min(total_timeout_seconds, timeout_seconds)
+            core_timeout_seconds = min(core_timeout_seconds, total_timeout_seconds)
+            chunk_timeout_seconds = min(chunk_timeout_seconds, total_timeout_seconds)
+            repair_timeout_seconds = min(repair_timeout_seconds, total_timeout_seconds)
         runtime = ProviderRuntime(
             provider=self._provider,
             limits=ProviderLimits(
@@ -162,7 +198,8 @@ class CvDraftGenerationService:
             provider_warnings,
         )
         localization = localize_fields(request, runtime, localization_policy, warnings)
-        return build_draft(
+        review_metadata: dict[str, object] | None = {} if include_review else None
+        draft = build_draft(
             request,
             selected_experience,
             selected_projects,
@@ -176,4 +213,17 @@ class CvDraftGenerationService:
             provider_warnings,
             localization_policy.chunk_size,
             self._record_metrics,
+            review_metadata=review_metadata,
         )
+        metadata = (
+            CvDraftReviewMetadata.model_validate(review_metadata)
+            if review_metadata is not None
+            else None
+        )
+        return draft, metadata
+
+
+@dataclass(frozen=True, slots=True)
+class CvDraftReviewResult:
+    draft: CvDraft
+    review_metadata: CvDraftReviewMetadata

@@ -37,7 +37,7 @@ def test_synthetic_run_set_meets_sc005_metadata_coverage(caplog) -> None:
         for index in range(20)
     ]
 
-    with caplog.at_level(logging.INFO, logger="talentpulse_ai.agent_foundation.observability"):
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         observations = [record_execution_observation(result) for result in results]
 
     complete = sum(

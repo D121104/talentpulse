@@ -168,27 +168,49 @@ export class AiServiceTransport {
     scope: string,
     timeoutMs = this.timeoutMs,
     signal?: AbortSignal,
+    reviewMetadataOptIn = false,
   ): Promise<unknown> {
     if (!this.baseUrl)
       throw new AiServiceError(
         'AI_SERVICE_NOT_CONFIGURED',
         'AI service is not configured',
       );
+    const cvTimeout =
+      path === '/internal/v1/cv/draft'
+        ? Math.min(
+            Number.isInteger(timeoutMs) && timeoutMs > 0
+              ? timeoutMs
+              : this.timeoutMs,
+            300_000,
+          )
+        : undefined;
+    const controller = cvTimeout ? new AbortController() : undefined;
+    const abort = () => controller?.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const cancellationTimer = cvTimeout
+      ? setTimeout(abort, cvTimeout)
+      : undefined;
     const request: AxiosRequestConfig = {
       method: 'POST',
       url: `${this.baseUrl}${path}`,
       data,
-      signal,
+      signal: controller?.signal || signal,
       timeout:
-        Number.isInteger(timeoutMs) && timeoutMs >= 100
+        cvTimeout ??
+        (Number.isInteger(timeoutMs) && timeoutMs >= 100
           ? timeoutMs
-          : this.timeoutMs,
+          : this.timeoutMs),
       maxContentLength: 2 * 1024 * 1024,
       maxBodyLength: 8 * 1024 * 1024,
       validateStatus: () => true,
       headers: {
         Authorization: `Bearer ${this.createServiceToken(scope)}`,
         'Content-Type': 'application/json',
+        ...(reviewMetadataOptIn ? { 'X-Cv-Review-Metadata': 'true' } : {}),
+        ...(cvTimeout
+          ? { 'X-Cv-Generation-Timeout-Ms': String(cvTimeout) }
+          : {}),
       },
     };
     let response: AxiosResponse<unknown>;
@@ -197,7 +219,9 @@ export class AiServiceTransport {
     } catch (error) {
       if (
         (axios.isAxiosError(error) || isRecord(error)) &&
-        (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT')
+        (error.code === 'ECONNABORTED' ||
+          error.code === 'ETIMEDOUT' ||
+          (cvTimeout && error.code === 'ERR_CANCELED'))
       ) {
         throw new AiServiceError(
           'AI_SERVICE_TIMEOUT',
@@ -210,6 +234,9 @@ export class AiServiceTransport {
         'AI service is unavailable',
         true,
       );
+    } finally {
+      clearTimeout(cancellationTimer);
+      signal?.removeEventListener('abort', abort);
     }
     if (response.status === 401 || response.status === 403) {
       throw new AiServiceError(

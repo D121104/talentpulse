@@ -9,7 +9,10 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
-import type { CvGenerationMetadata } from '../async-cv-generation.types';
+import type {
+  CvGenerationMetadata,
+  OnlineCvGenerationSnapshot,
+} from '../async-cv-generation.types';
 
 export type OnlineCvLocale = 'vi-VN' | 'en-US';
 
@@ -105,7 +108,7 @@ export class OnlineCV {
   sourceProfileVersion: number;
 
   @Column({ type: 'jsonb', nullable: true })
-  generationSnapshot: Record<string, unknown>;
+  generationSnapshot: OnlineCvGenerationSnapshot | null;
 
   @Column({ type: 'jsonb', nullable: true })
   revision: {

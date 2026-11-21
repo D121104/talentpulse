@@ -4,9 +4,14 @@ import re
 import unicodedata
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from talentpulse_ai.modules.cv_analysis.schemas import MatchIdentity, UuidValue, VersionValue
+from talentpulse_ai.modules.cv_analysis.schemas import (
+    MatchIdentity,
+    Sha256Value,
+    UuidValue,
+    VersionValue,
+)
 
 
 class StrictModel(BaseModel):
@@ -280,6 +285,93 @@ class CvDraft(StrictModel):
     generated_by: Annotated[str, Field(min_length=1, max_length=64)] = "ai-service"
     source_version: VersionValue
     content_version: int = Field(ge=1, le=2_147_483_647)
+
+
+SafeGenerationWarning = Literal[
+    "FALLBACK_USED",
+    "INSUFFICIENT_EVIDENCE",
+    "SOURCE_UNAVAILABLE",
+    "STRUCTURE_INVALID",
+    "LOCALIZATION_FAILED",
+]
+
+
+class GenerateDraftToolInput(StrictModel):
+    """The model cannot select sources, owners, locales, or permissions."""
+
+
+class CvGenerationReceipt(StrictModel):
+    status: Literal["GENERATED"]
+    operation_attempt_id: UuidValue
+    source_version: VersionValue
+    content_version: int = Field(ge=1, le=2_147_483_647)
+    receipt_id: UuidValue
+    draft_hash: Sha256Value
+    warnings: list[SafeGenerationWarning] = Field(default_factory=list, max_length=20)
+
+
+ReviewFieldPath = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=160,
+        pattern=(
+            r"^/(?:position|career_objective|"
+            r"education/\d+/(?:school_name|degree|major|start_date|end_date|description)|"
+            r"projects/\d+/(?:project_name|role|start_date|end_date|description|"
+            r"technologies/\d+|bullets(?:/\d+)?)|"
+            r"work_experience/\d+/(?:company_name|position|start_date|end_date|"
+            r"description|bullets(?:/\d+)?)|skills/\d+/(?:name|description)|"
+            r"activities/\d+|certificates/\d+|awards/\d+)$"
+        ),
+    ),
+]
+SourceReferencePath = Annotated[
+    str,
+    Field(min_length=1, max_length=192, pattern=r"^/(?:candidate|job)/[A-Za-z0-9_/-]+$"),
+]
+ReviewFieldOrigin = Literal["SOURCE", "LOCALIZED", "AI_SUGGESTED", "FALLBACK"]
+ReviewOmissionReason = Literal[
+    "INSUFFICIENT_EVIDENCE",
+    "LOCALIZATION_FAILED",
+    "SOURCE_UNAVAILABLE",
+    "STRUCTURE_INVALID",
+]
+
+
+class CvDraftReviewOmission(StrictModel):
+    path: ReviewFieldPath
+    reason_code: ReviewOmissionReason
+
+
+class CvDraftReviewMetadata(StrictModel):
+    source_refs_by_path: dict[ReviewFieldPath, list[SourceReferencePath]] = Field(
+        default_factory=dict, max_length=1_000
+    )
+    field_origins_by_path: dict[ReviewFieldPath, ReviewFieldOrigin] = Field(
+        default_factory=dict, max_length=1_000
+    )
+    omissions_by_path: list[CvDraftReviewOmission] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_path_metadata(self) -> CvDraftReviewMetadata:
+        output_paths = set(self.field_origins_by_path)
+        omission_paths = [omission.path for omission in self.omissions_by_path]
+        if len(omission_paths) != len(set(omission_paths)):
+            raise ValueError("Omission paths must be unique.")
+        if output_paths.intersection(omission_paths):
+            raise ValueError("A field cannot be both present and omitted.")
+        if not output_paths.union(omission_paths).issubset(self.source_refs_by_path):
+            raise ValueError("Every reviewed path must map to an authorized source reference.")
+        if any(not references for references in self.source_refs_by_path.values()):
+            raise ValueError("Source references must not be empty.")
+        return self
+
+
+class CvDraftReviewEnvelope(StrictModel):
+    implementation: Literal["legacy", "agent"]
+    draft: CvDraft
+    review_metadata: CvDraftReviewMetadata
 
 
 # Keep the common acronym spelling available to callers without duplicating contracts.

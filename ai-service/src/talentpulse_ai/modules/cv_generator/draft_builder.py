@@ -85,6 +85,346 @@ def _missing_indices(
     )
 
 
+def _add_review_path(
+    origins: dict[str, str],
+    source_refs: dict[str, list[str]],
+    path: str,
+    origin: str,
+    references: Sequence[str],
+) -> None:
+    unique_references = list(dict.fromkeys(references))
+    if unique_references:
+        origins[path] = origin
+        source_refs[path] = unique_references
+
+
+def _omit_review_path(
+    origins: dict[str, str],
+    source_refs: dict[str, list[str]],
+    omissions: list[dict[str, str]],
+    path: str,
+    reason: str,
+    references: Sequence[str],
+) -> None:
+    if path in origins or any(item["path"] == path for item in omissions):
+        return
+    unique_references = list(dict.fromkeys(references))
+    if unique_references:
+        source_refs[path] = unique_references
+        omissions.append({"path": path, "reason_code": reason})
+
+
+def _review_origin_for(
+    localization: LocalizationResult, section: str, index: int, field: str
+) -> str:
+    return "LOCALIZED" if (section, index, field) in localization.fields else "SOURCE"
+
+
+def _review_metadata_for_draft(
+    request: CvDraftRequest,
+    draft: CvDraft,
+    core: CoreGenerationResult,
+    localization: LocalizationResult,
+    *,
+    application_role: str | None,
+    fallback_bullets_by_experience: dict[int, set[str]],
+    fallback_bullets_by_project: dict[int, set[str]],
+    localized_bullets_by_experience: dict[int, set[str]],
+    localized_bullets_by_project: dict[int, set[str]],
+    objective_omitted: bool,
+    remaining_experience: Sequence[int],
+    remaining_projects: Sequence[int],
+) -> dict[str, object]:
+    origins: dict[str, str] = {}
+    source_refs: dict[str, list[str]] = {}
+    omissions: list[dict[str, str]] = []
+
+    if draft.position is not None:
+        source_path = "/job/title" if application_role else "/candidate/headline"
+        _add_review_path(
+            origins,
+            source_refs,
+            "/position",
+            "LOCALIZED"
+            if not application_role and ("headline", 0, "headline") in localization.fields
+            else "SOURCE",
+            [source_path],
+        )
+
+    if draft.career_objective is not None:
+        objective_refs = (
+            ["/candidate/career_objective"]
+            if request.candidate.career_objective
+            else [f"/candidate/skills/{index}" for index in range(len(request.candidate.skills))]
+        )
+        if (
+            request.candidate.career_objective
+            and (
+                "objective",
+                0,
+                "career_objective",
+            )
+            in localization.fields
+        ):
+            objective_origin = "LOCALIZED"
+        elif not request.candidate.career_objective:
+            objective_origin = "FALLBACK"
+        else:
+            objective_origin = "SOURCE"
+        if application_role:
+            objective_refs.extend(["/job/title"])
+        _add_review_path(
+            origins, source_refs, "/career_objective", objective_origin, objective_refs
+        )
+    elif objective_omitted and request.candidate.career_objective:
+        _omit_review_path(
+            origins,
+            source_refs,
+            omissions,
+            "/career_objective",
+            "LOCALIZATION_FAILED",
+            ["/candidate/career_objective"],
+        )
+
+    education_fields = ("school_name", "degree", "major", "start_date", "end_date", "description")
+    for index, education_entry in enumerate(draft.education):
+        for field_name in education_fields:
+            value = getattr(education_entry, field_name)
+            if value is None:
+                continue
+            education_path = f"/education/{index}/{field_name}"
+            _add_review_path(
+                origins,
+                source_refs,
+                education_path,
+                _review_origin_for(localization, "education", index, field_name),
+                [f"/candidate/education/{index}/{field_name}"],
+            )
+
+    experience_fields = ("company_name", "position", "start_date", "end_date", "description")
+    for output_index, experience_entry in enumerate(draft.work_experience):
+        source_index = experience_entry.source_index
+        for field_name in experience_fields:
+            if getattr(experience_entry, field_name) is None:
+                continue
+            experience_path = f"/work_experience/{output_index}/{field_name}"
+            _add_review_path(
+                origins,
+                source_refs,
+                experience_path,
+                _review_origin_for(localization, "experience", source_index, field_name),
+                [f"/candidate/experience/{source_index}/{field_name}"],
+            )
+        for bullet_index, bullet in enumerate(experience_entry.bullets):
+            if bullet in core.provider_bullets_by_experience.get(source_index, set()):
+                origin = "AI_SUGGESTED"
+            elif bullet in localized_bullets_by_experience.get(source_index, set()):
+                origin = "LOCALIZED"
+            elif bullet in fallback_bullets_by_experience.get(source_index, set()):
+                origin = "FALLBACK"
+            else:
+                origin = "SOURCE"
+            _add_review_path(
+                origins,
+                source_refs,
+                f"/work_experience/{output_index}/bullets/{bullet_index}",
+                origin,
+                [f"/candidate/experience/{source_index}"],
+            )
+
+    project_fields = (
+        "project_name",
+        "role",
+        "start_date",
+        "end_date",
+        "description",
+    )
+    for output_index, project_entry in enumerate(draft.projects):
+        source_index = project_entry.source_index
+        for field_name in project_fields:
+            if getattr(project_entry, field_name) is None:
+                continue
+            project_path = f"/projects/{output_index}/{field_name}"
+            _add_review_path(
+                origins,
+                source_refs,
+                project_path,
+                _review_origin_for(localization, "projects", source_index, field_name),
+                [f"/candidate/projects/{source_index}/{field_name}"],
+            )
+        for technology_index, _technology in enumerate(project_entry.technologies):
+            _add_review_path(
+                origins,
+                source_refs,
+                f"/projects/{output_index}/technologies/{technology_index}",
+                "SOURCE",
+                [f"/candidate/projects/{source_index}/technologies"],
+            )
+        for bullet_index, bullet in enumerate(project_entry.bullets):
+            if bullet in core.provider_bullets_by_project.get(source_index, set()):
+                origin = "AI_SUGGESTED"
+            elif bullet in localized_bullets_by_project.get(source_index, set()):
+                origin = "LOCALIZED"
+            elif bullet in fallback_bullets_by_project.get(source_index, set()):
+                origin = "FALLBACK"
+            else:
+                origin = "SOURCE"
+            _add_review_path(
+                origins,
+                source_refs,
+                f"/projects/{output_index}/bullets/{bullet_index}",
+                origin,
+                [f"/candidate/projects/{source_index}"],
+            )
+
+    for output_index, skill in enumerate(draft.skills):
+        matched_skill_indices = [
+            index
+            for index, source in enumerate(request.candidate.skills)
+            if (display := _skill_member_display(request, source)) is not None
+            and skill.description is not None
+            and display in skill.description.split("; ")
+        ]
+        skill_references = [f"/candidate/skills/{index}" for index in matched_skill_indices]
+        for index, certificate in enumerate(request.candidate.certificates):
+            if skill.description and certificate in skill.description.split("; "):
+                skill_references.append(f"/candidate/certificates/{index}")
+        _add_review_path(
+            origins, source_refs, f"/skills/{output_index}/name", "LOCALIZED", skill_references
+        )
+        if skill.description is not None:
+            localized = any(
+                _skill_member_display(request, request.candidate.skills[index])
+                != request.candidate.skills[index]
+                for index in matched_skill_indices
+            )
+            _add_review_path(
+                origins,
+                source_refs,
+                f"/skills/{output_index}/description",
+                "LOCALIZED" if localized else "SOURCE",
+                skill_references,
+            )
+
+    for output_section, source_section, output_values, source_values in (
+        ("activities", "activities", draft.activities, request.candidate.activities),
+        ("certificates", "certificates", draft.certificates, request.candidate.certificates),
+        ("awards", "awards", draft.awards, request.candidate.awards),
+    ):
+        for output_index, value in enumerate(output_values):
+            matching_indices = [
+                index
+                for index, source in enumerate(source_values)
+                if value == source
+                or localization.fields.get((source_section, index, "text")) == value
+            ]
+            localized = any(
+                localization.fields.get((source_section, index, "text")) == value
+                and source_values[index] != value
+                for index in matching_indices
+            )
+            _add_review_path(
+                origins,
+                source_refs,
+                f"/{output_section}/{output_index}",
+                "LOCALIZED" if localized else "SOURCE",
+                [f"/candidate/{source_section}/{index}" for index in matching_indices],
+            )
+
+    experience_output_indices = {
+        entry.source_index: index for index, entry in enumerate(draft.work_experience)
+    }
+    for source_index in remaining_experience:
+        omitted_output_index = experience_output_indices.get(source_index)
+        if omitted_output_index is not None:
+            _omit_review_path(
+                origins,
+                source_refs,
+                omissions,
+                f"/work_experience/{omitted_output_index}/bullets",
+                "INSUFFICIENT_EVIDENCE",
+                [f"/candidate/experience/{source_index}"],
+            )
+    project_output_indices = {
+        entry.source_index: index for index, entry in enumerate(draft.projects)
+    }
+    for source_index in remaining_projects:
+        omitted_project_index = project_output_indices.get(source_index)
+        if omitted_project_index is not None:
+            _omit_review_path(
+                origins,
+                source_refs,
+                omissions,
+                f"/projects/{omitted_project_index}/bullets",
+                "INSUFFICIENT_EVIDENCE",
+                [f"/candidate/projects/{source_index}"],
+            )
+
+    for target in localization.unresolved_targets:
+        unresolved_section = target.get("section")
+        unresolved_source_index = target.get("source_index")
+        unresolved_field = target.get("field")
+        if (
+            not isinstance(unresolved_section, str)
+            or type(unresolved_source_index) is not int
+            or not isinstance(unresolved_field, str)
+        ):
+            continue
+        omission_path: str | None = None
+        omission_source_path: str | None = None
+        if unresolved_section == "objective":
+            omission_path, omission_source_path = (
+                "/career_objective",
+                "/candidate/career_objective",
+            )
+        elif unresolved_section == "headline":
+            omission_path, omission_source_path = "/position", "/candidate/headline"
+        elif unresolved_section == "education":
+            omission_path = f"/education/{unresolved_source_index}/{unresolved_field}"
+            omission_source_path = (
+                f"/candidate/education/{unresolved_source_index}/{unresolved_field}"
+            )
+        elif unresolved_section == "experience":
+            unresolved_experience_index = experience_output_indices.get(unresolved_source_index)
+            if unresolved_experience_index is not None:
+                omission_path = f"/work_experience/{unresolved_experience_index}/{unresolved_field}"
+                omission_source_path = (
+                    f"/candidate/experience/{unresolved_source_index}/{unresolved_field}"
+                )
+        elif unresolved_section == "projects":
+            unresolved_project_index = project_output_indices.get(unresolved_source_index)
+            if unresolved_project_index is not None:
+                omission_path = f"/projects/{unresolved_project_index}/{unresolved_field}"
+                omission_source_path = (
+                    f"/candidate/projects/{unresolved_source_index}/{unresolved_field}"
+                )
+        elif unresolved_section in {"activities", "certificates", "awards"}:
+            output_section = unresolved_section
+            output_values = getattr(draft, output_section)
+            omission_path = (
+                f"/{output_section}/{min(unresolved_source_index, max(0, len(output_values)))}"
+            )
+            omission_source_path = f"/candidate/{unresolved_section}/{unresolved_source_index}"
+        elif unresolved_section == "skills":
+            omission_path = f"/skills/{unresolved_source_index}/description"
+            omission_source_path = f"/candidate/skills/{unresolved_source_index}"
+        if omission_path is not None and omission_source_path is not None:
+            _omit_review_path(
+                origins,
+                source_refs,
+                omissions,
+                omission_path,
+                "LOCALIZATION_FAILED",
+                [omission_source_path],
+            )
+
+    return {
+        "source_refs_by_path": source_refs,
+        "field_origins_by_path": origins,
+        "omissions_by_path": omissions,
+    }
+
+
 def build_draft(
     request: CvDraftRequest,
     selected_experience: Sequence[int],
@@ -99,6 +439,7 @@ def build_draft(
     provider_warnings: list[str],
     localization_chunk_size: int,
     record_metrics: Callable[[dict[str, object]], None],
+    review_metadata: dict[str, object] | None = None,
 ) -> CvDraft:
     mark = runtime.mark
     diagnostics = runtime.diagnostics
@@ -107,6 +448,10 @@ def build_draft(
     provider_used = core.provider_used
     fallback_used = False
     localized_fields = localization.fields
+    fallback_bullets_by_experience: dict[int, set[str]] = {}
+    fallback_bullets_by_project: dict[int, set[str]] = {}
+    localized_bullets_by_experience: dict[int, set[str]] = {}
+    localized_bullets_by_project: dict[int, set[str]] = {}
 
     action_groups: tuple[
         tuple[str, Sequence[CandidateExperience | CandidateProject], dict[int, list[str]]], ...
@@ -158,9 +503,21 @@ def build_draft(
                     mapped[index] = [*selected, *accepted]
                     if provider_action:
                         provider_used = True
+                        provider_bullets = (
+                            core.provider_bullets_by_experience
+                            if section == "experience"
+                            else core.provider_bullets_by_project
+                        )
+                        provider_bullets.setdefault(index, set()).update(selected)
                         mark("target_focus_localized_action", len(selected))
                     else:
                         fallback_used = True
+                        fallback_bullets = (
+                            fallback_bullets_by_experience
+                            if section == "experience"
+                            else fallback_bullets_by_project
+                        )
+                        fallback_bullets.setdefault(index, set()).update(selected)
                         mark("target_focus_source_fallback", len(selected))
                     break
 
@@ -194,6 +551,12 @@ def build_draft(
                     mapped[index] = (
                         enriched if section == "projects" else [*mapped.get(index, []), *enriched]
                     )
+                    localized_bullets = (
+                        localized_bullets_by_experience
+                        if section == "experience"
+                        else localized_bullets_by_project
+                    )
+                    localized_bullets.setdefault(index, set()).update(enriched)
                     provider_used = True
 
     for index, experience_source in enumerate(request.candidate.experience):
@@ -210,6 +573,7 @@ def build_draft(
                 warnings.append(_INSUFFICIENT_EVIDENCE_WARNING)
             if rewrites:
                 bullets_by_experience[index] = rewrites[:4]
+                fallback_bullets_by_experience.setdefault(index, set()).update(rewrites[:4])
                 fallback_used = True
     for index, project_source in enumerate(request.candidate.projects):
         if index not in selected_projects:
@@ -225,6 +589,7 @@ def build_draft(
                 warnings.append(_INSUFFICIENT_EVIDENCE_WARNING)
             if rewrites:
                 bullets_by_project[index] = rewrites[:4]
+                fallback_bullets_by_project.setdefault(index, set()).update(rewrites[:4])
                 fallback_used = True
 
     for descriptions, mapped_bullets in (
@@ -259,6 +624,12 @@ def build_draft(
             if source_bullets:
                 # Keep salient source facts before the existing ten-bullet cap.
                 mapped_bullets[index] = [*source_bullets, *mapped_bullets.get(index, [])]
+                fallback_bullets = (
+                    fallback_bullets_by_experience
+                    if mapped_bullets is bullets_by_experience
+                    else fallback_bullets_by_project
+                )
+                fallback_bullets.setdefault(index, set()).update(source_bullets)
                 fallback_used = True
                 mark("salient_anchor_fallback", len(source_bullets))
 
@@ -509,7 +880,7 @@ def build_draft(
     # ordering and useful provider notes within the existing response limit.
     prioritized = sorted(warnings, key=lambda value: not value.startswith(priority_prefixes))
     unique_warnings = list(dict.fromkeys([*prioritized, *provider_warnings]))[:20]
-    return CvDraft(
+    draft = CvDraft(
         request_id=request.identity.request_id,
         trace_id=request.identity.trace_id,
         operation_attempt_id=request.identity.operation_attempt_id,
@@ -543,3 +914,21 @@ def build_draft(
         source_version=request.source_version,
         content_version=request.content_version,
     )
+    if review_metadata is not None:
+        review_metadata.update(
+            _review_metadata_for_draft(
+                request,
+                draft,
+                core,
+                localization,
+                application_role=application_role,
+                fallback_bullets_by_experience=fallback_bullets_by_experience,
+                fallback_bullets_by_project=fallback_bullets_by_project,
+                localized_bullets_by_experience=localized_bullets_by_experience,
+                localized_bullets_by_project=localized_bullets_by_project,
+                objective_omitted=objective_omitted,
+                remaining_experience=remaining_experience,
+                remaining_projects=remaining_projects,
+            )
+        )
+    return draft

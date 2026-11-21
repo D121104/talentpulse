@@ -20,8 +20,10 @@ import {
 } from './ai-service.match-parse';
 import {
   CvDraftRequest,
+  CvDraftReviewResponse,
   CvDraftResponse,
   validateCvDraftRequest,
+  validateCvDraftReviewResponse,
   validateCvDraftResponse,
 } from './ai-service.cv-draft';
 import {
@@ -60,6 +62,7 @@ export {
   CvDraftCandidate,
   CvDraftJob,
   CvDraftRequest,
+  CvDraftReviewResponse,
   CvDraftResponse,
   matchOwnedSkillMembers,
   ownedSkillLiterals,
@@ -152,6 +155,24 @@ export class AiServiceClient implements JobIndexingClient {
     );
   }
 
+  async generateCvDraftReview(
+    request: CvDraftRequest,
+    options?: { timeoutMs?: number },
+  ): Promise<CvDraftReviewResponse> {
+    validateCvDraftRequest(request);
+    return validateCvDraftReviewResponse(
+      await this.post(
+        '/internal/v1/cv/draft',
+        request,
+        this.scopes.generateCv,
+        options?.timeoutMs,
+        undefined,
+        true,
+      ),
+      request,
+    );
+  }
+
   /**
    * The candidate assistant owns the RAG request/response schema. Keeping the
    * transport here reuses the existing signed, timed and sanitized AI boundary
@@ -222,7 +243,15 @@ export class AiServiceClient implements JobIndexingClient {
     scope: string,
     timeoutMs?: number,
     signal?: AbortSignal,
+    reviewMetadataOptIn = false,
   ): Promise<unknown> {
-    return this.transport.post(path, data, scope, timeoutMs, signal);
+    return this.transport.post(
+      path,
+      data,
+      scope,
+      timeoutMs,
+      signal,
+      reviewMetadataOptIn,
+    );
   }
 }

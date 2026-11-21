@@ -47,6 +47,7 @@ class LocalizationResult:
     repair_calls: int
     unresolved_count: int
     failure_details: list[str]
+    unresolved_targets: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -412,4 +413,12 @@ def localize_fields(
         repair_calls=repair_calls,
         unresolved_count=len(final_unresolved_localization),
         failure_details=localization_failure_details,
+        unresolved_targets=[
+            {
+                "section": target.get("section"),
+                "source_index": target.get("source_index"),
+                "field": target.get("field"),
+            }
+            for target in final_unresolved_localization
+        ],
     )

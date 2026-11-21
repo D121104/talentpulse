@@ -19,7 +19,7 @@ from talentpulse_ai.modules.cv_generator.context_builder import (
     _selected_entry_indices,
 )
 from talentpulse_ai.modules.cv_generator.prompt_builder import render_cv_draft_prompt
-from talentpulse_ai.modules.cv_generator.schemas import CvDraftRequest
+from talentpulse_ai.modules.cv_generator.schemas import CvDraft, CvDraftRequest
 from talentpulse_ai.modules.cv_generator.service import CvDraftGenerationService
 from talentpulse_ai.modules.cv_generator.validators import (
     _RESPONSIBILITY_ACTION_RE,
@@ -1682,6 +1682,115 @@ class FakeProvider:
     def generate(self, prompt: str) -> object:
         self.prompts.append(prompt)
         return self.value
+
+
+@pytest.mark.parametrize("template_type", ["template1", "template2"])
+@pytest.mark.parametrize("locale", ["en-US", "vi-VN", "en", "vi"])
+def test_existing_cv_contract_accepts_templates_locales_and_provider_doubles(
+    template_type: str, locale: str
+) -> None:
+    payload = draft_payload(locale=locale)
+    payload["template_type"] = template_type
+    request = CvDraftRequest.model_validate(payload)
+    request_before = request.model_dump(mode="json")
+    provider = FakeProvider({"warnings": []})
+
+    draft = CvDraftGenerationService(provider).generate(request)
+
+    assert isinstance(draft, CvDraft)
+    assert set(request.model_dump(mode="json")) == {
+        "identity",
+        "candidate",
+        "job",
+        "template_type",
+        "locale",
+        "source_version",
+        "content_version",
+        "consent_version",
+    }
+    assert set(request.model_dump(mode="json")["candidate"]) == {
+        "candidate_id",
+        "full_name",
+        "email",
+        "phone",
+        "link",
+        "address",
+        "headline",
+        "career_objective",
+        "skills",
+        "experience",
+        "education",
+        "projects",
+        "certificates",
+        "activities",
+        "awards",
+    }
+    assert set(request.model_dump(mode="json")["job"]) == {
+        "job_id",
+        "title",
+        "company_name",
+        "description",
+        "location",
+        "work_mode",
+        "level",
+        "required_skills",
+        "preferred_skills",
+    }
+    assert set(draft.model_dump(mode="json")) == {
+        "request_id",
+        "trace_id",
+        "operation_attempt_id",
+        "candidate_id",
+        "target_job_id",
+        "template_type",
+        "generation_mode",
+        "full_name",
+        "title",
+        "position",
+        "email",
+        "phone",
+        "link",
+        "address",
+        "career_objective",
+        "education",
+        "projects",
+        "work_experience",
+        "skills",
+        "activities",
+        "certificates",
+        "awards",
+        "section_order",
+        "warnings",
+        "generated_by",
+        "source_version",
+        "content_version",
+    }
+    assert draft.template_type == template_type
+    assert draft.source_version == request.source_version
+    assert draft.content_version == request.content_version
+    assert draft.work_experience[0].source_index == 0
+    assert draft.projects[0].source_index == 0
+    assert provider.prompts
+    assert request.model_dump(mode="json") == request_before
+
+
+def test_review_generation_preserves_cv_schema_and_maps_fallback_sources() -> None:
+    payload = draft_payload(locale="en-US")
+    request = CvDraftRequest.model_validate(payload)
+    service = CvDraftGenerationService(FakeProvider({"warnings": []}))
+
+    ordinary_draft = service.generate(request)
+    review_result = service.generate_with_review(request)
+
+    assert review_result.draft == ordinary_draft
+    metadata = review_result.review_metadata
+    assert metadata.field_origins_by_path
+    assert set(metadata.field_origins_by_path) == set(metadata.source_refs_by_path)
+    assert all(metadata.source_refs_by_path.values())
+    assert "FALLBACK" in metadata.field_origins_by_path.values()
+    assert all(
+        "full_name" not in path and "email" not in path for path in metadata.field_origins_by_path
+    )
 
 
 def test_request_rejects_unknown_fields() -> None:
@@ -3863,9 +3972,19 @@ def test_provider_contract_preserves_localized_editable_draft(provider_kind, loc
 
     class ConverseClient:
         def converse(self, **kwargs):
-            assert set(kwargs) == {"modelId", "messages", "inferenceConfig"}
-            assert kwargs["modelId"] == "amazon.nova-lite-v1:0"
-            assert kwargs["inferenceConfig"] == {"temperature": 0.0}
+            assert set(kwargs) == {
+                "modelId",
+                "messages",
+                "inferenceConfig",
+                "outputConfig",
+            }
+            assert kwargs["modelId"] == "global.moonshotai.kimi-k3.1"
+            inference_config = kwargs["inferenceConfig"]
+            assert set(inference_config) == {"maxTokens"}
+            assert 0 < inference_config["maxTokens"] <= 4096
+            json_schema = kwargs["outputConfig"]["textFormat"]["structure"]["jsonSchema"]
+            assert json_schema["name"] == "agent_decision"
+            assert json.loads(json_schema["schema"])["type"] == "object"
             message = kwargs["messages"][0]
             assert message["role"] == "user"
             value = response_for(message["content"][0]["text"])
@@ -3884,7 +4003,11 @@ def test_provider_contract_preserves_localized_editable_draft(provider_kind, loc
             return response_for(prompt)
 
     provider = (
-        BedrockNovaGenerationAdapter(ConverseClient(), "amazon.nova-lite-v1:0")
+        BedrockNovaGenerationAdapter(
+            ConverseClient(),
+            "global.moonshotai.kimi-k3.1",
+            agent_client_factory=lambda _timeout: ConverseClient(),
+        )
         if provider_kind == "bedrock"
         else StructuredProvider()
     )

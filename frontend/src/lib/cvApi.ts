@@ -49,7 +49,7 @@ export const onlineCvApi = {
     accessToken?: string | null,
   ) =>
     apiRequest<GenerateOnlineCVDraftResponse>(`/online-cvs/${id}/generate`, {
-      method: 'POST',
+      method: "POST",
       body: request,
       accessToken,
     }),
@@ -107,6 +107,18 @@ export const onlineCvApi = {
       { method: "DELETE", accessToken, signal },
     ),
 
+  discardGenerationDraft: (
+    id: string,
+    operationId: string,
+    accessToken?: string | null,
+    signal?: AbortSignal,
+  ) =>
+    apiRequest<void>(`/online-cvs/${id}/generation-jobs/${operationId}/draft`, {
+      method: "DELETE",
+      accessToken,
+      signal,
+    }),
+
   remove: (id: string, accessToken?: string | null) =>
     apiRequest<{ message: string }>(`/online-cvs/${id}`, {
       method: "DELETE",
@@ -151,7 +163,7 @@ export const onlineCvApi = {
         body: { isSearchable },
         accessToken,
       },
-  ),
+    ),
 };
 
 export const aiCvConsentApi = {
@@ -167,10 +179,7 @@ export const aiCvConsentApi = {
       { accessToken },
     ),
 
-  grant: (
-    policy: AiCvGenerationConsentPolicy,
-    accessToken?: string | null,
-  ) =>
+  grant: (policy: AiCvGenerationConsentPolicy, accessToken?: string | null) =>
     apiRequest<AiCvGenerationConsent>("/ai/cv-consents/grant", {
       method: "POST",
       body: {
@@ -183,10 +192,7 @@ export const aiCvConsentApi = {
       accessToken,
     }),
 
-  revoke: (
-    policy: AiCvGenerationConsentPolicy,
-    accessToken?: string | null,
-  ) =>
+  revoke: (policy: AiCvGenerationConsentPolicy, accessToken?: string | null) =>
     apiRequest<AiCvGenerationConsent>("/ai/cv-consents/revoke", {
       method: "POST",
       body: {
@@ -202,19 +208,33 @@ export const aiCvConsentApi = {
 
 export const aiCvMatchingConsentApi = {
   policy: (accessToken?: string | null) =>
-    apiRequest<AiCvMatchingConsentPolicy>("/ai/cv-consents/policy/cv_matching", { accessToken }),
+    apiRequest<AiCvMatchingConsentPolicy>(
+      "/ai/cv-consents/policy/cv_matching",
+      { accessToken },
+    ),
   current: (accessToken?: string | null) =>
-    apiRequest<AiCvMatchingConsent | null>("/ai/cv-consents/current/cv_matching", { accessToken }),
+    apiRequest<AiCvMatchingConsent | null>(
+      "/ai/cv-consents/current/cv_matching",
+      { accessToken },
+    ),
   grant: (policy: AiCvMatchingConsentPolicy, accessToken?: string | null) =>
     apiRequest<AiCvMatchingConsent>("/ai/cv-consents/grant", {
       method: "POST",
-      body: { ...policy, source: "web", sourceMetadata: { locale: document.documentElement.lang || "vi" } },
+      body: {
+        ...policy,
+        source: "web",
+        sourceMetadata: { locale: document.documentElement.lang || "vi" },
+      },
       accessToken,
     }),
   revoke: (policy: AiCvMatchingConsentPolicy, accessToken?: string | null) =>
     apiRequest<AiCvMatchingConsent>("/ai/cv-consents/revoke", {
       method: "POST",
-      body: { ...policy, source: "web", sourceMetadata: { locale: document.documentElement.lang || "vi" } },
+      body: {
+        ...policy,
+        source: "web",
+        sourceMetadata: { locale: document.documentElement.lang || "vi" },
+      },
       accessToken,
     }),
 };

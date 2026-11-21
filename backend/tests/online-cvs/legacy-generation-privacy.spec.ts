@@ -1,6 +1,10 @@
 import { Role } from 'src/decorator/customize';
+import { Logger } from '@nestjs/common';
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
-import { OnlineCvGenerationMode } from 'src/online-cvs/entities/online-cv.entity';
+import {
+  OnlineCV,
+  OnlineCvGenerationMode,
+} from 'src/online-cvs/entities/online-cv.entity';
 
 const user = {
   _id: '11111111-1111-4111-8111-111111111111',
@@ -9,6 +13,8 @@ const user = {
 } as any;
 
 describe('OnlineCVsService.generate legacy privacy boundary', () => {
+  afterEach(() => jest.restoreAllMocks());
+
   it.each([
     {
       target: false,
@@ -71,11 +77,16 @@ describe('OnlineCVsService.generate legacy privacy boundary', () => {
       skillEdit,
     })),
   ])('$locale/$title', async (scenario) => {
+    const logs = ['log', 'warn', 'error', 'debug', 'verbose'].map((level) =>
+      jest.spyOn(Logger, level as 'log').mockImplementation(() => undefined),
+    );
     const { target, locale, title, jobName, generatedPosition } = scenario;
     const canonicalCv = {
       _id: '21111111-1111-4111-8111-111111111111',
       userId: user._id,
       isDeleted: false,
+      isPrimary: true,
+      isSearchable: true,
       templateType: 'template1',
       contentVersion: 3,
       fullName: 'Nguyen Van A',
@@ -232,7 +243,7 @@ describe('OnlineCVsService.generate legacy privacy boundary', () => {
         ),
       },
     });
-    const aiServiceClient = {
+    const aiServiceClient: any = {
       generateCvDraft: jest.fn(async (request: any) => ({
         request_id: request.identity.request_id,
         trace_id: request.identity.trace_id,
@@ -285,9 +296,23 @@ describe('OnlineCVsService.generate legacy privacy boundary', () => {
         content_version: 4,
       })),
     };
-    const service = Object.create(
-      OnlineCVsService.prototype,
-    ) as OnlineCVsService;
+    aiServiceClient.generateCvDraftReview = jest.fn(async (...args: any[]) => ({
+      implementation: 'legacy',
+      draft: await aiServiceClient.generateCvDraft(...args),
+      review_metadata: {
+        source_refs_by_path: {},
+        field_origins_by_path: {},
+        omissions_by_path: [],
+      },
+    }));
+    const service = Object.create(OnlineCVsService.prototype) as Omit<
+      OnlineCVsService,
+      'generate'
+    > & {
+      generate: (
+        ...args: Parameters<OnlineCVsService['generate']>
+      ) => Promise<{ draft: OnlineCV; [key: string]: unknown }>;
+    };
     Object.assign(service as any, {
       onlineCVRepo,
       userRepo: {
@@ -316,7 +341,95 @@ describe('OnlineCVsService.generate legacy privacy boundary', () => {
       user,
     );
 
+    expect(result.status).toBe('COMPLETE');
+    expect(result.draft._id).toBe(canonicalCv._id);
+    expect(result).toHaveProperty('generationMode');
+    expect(result).toHaveProperty('contentVersion');
+    expect(result).toHaveProperty('sourceVersion');
+    expect(result).toHaveProperty('targetJobId');
+    expect(result).toHaveProperty('locale', locale);
+    // The provider explicitly selected the flag-off implementation.
+    expect(aiServiceClient.generateCvDraftReview).toHaveBeenCalledTimes(1);
+    for (const field of [
+      'reviewStatus',
+      'draftHash',
+      'reviewMetadata',
+      'pendingGeneration',
+    ]) {
+      expect(result).not.toHaveProperty(field);
+      expect(result.draft).not.toHaveProperty(field);
+    }
+
     const request = aiServiceClient.generateCvDraft.mock.calls[0][0];
+    const captured = logs.flatMap((spy) => spy.mock.calls);
+    const serialized = JSON.stringify(captured);
+    for (const forbidden of [
+      user._id,
+      user.email,
+      canonicalCv._id,
+      canonicalCv.fullName,
+      canonicalCv.email,
+      canonicalCv.phone,
+      canonicalCv.link,
+      canonicalCv.address,
+      canonicalCv.careerObjective,
+      'Provider Name',
+      'provider@example.com',
+      '+84000000000',
+      'https://provider.example.com',
+      'Provider Address',
+      'Provider objective',
+      'access_token',
+      'prompt',
+      'candidate_id',
+      'work_experience',
+      'generationSnapshot',
+    ])
+      expect(serialized).not.toContain(forbidden);
+    expect(captured.length).toBeGreaterThan(0);
+    const allowed = new Set([
+      'operation_attempt_id',
+      'request_id',
+      'trace_id',
+      'correlation_id',
+      'capability_id',
+      'implementation',
+      'status',
+      'review_status',
+      'duration_ms',
+      'steps',
+      'model_calls',
+      'tool_calls',
+      'error_type',
+    ]);
+    for (const call of captured) {
+      expect(call).toHaveLength(1);
+      const observation =
+        typeof call[0] === 'string' ? JSON.parse(call[0]) : call[0];
+      expect(Object.keys(observation).every((key) => allowed.has(key))).toBe(
+        true,
+      );
+      expect(observation).toMatchObject({
+        operation_attempt_id: request.identity.operation_attempt_id,
+        correlation_id: request.identity.trace_id,
+        capability_id: 'cv_generation',
+        implementation: 'legacy',
+        status: 'COMPLETE',
+        review_status: 'NOT_REQUIRED',
+        error_type: null,
+      });
+      expect(Number.isFinite(observation.duration_ms)).toBe(true);
+      expect(observation.duration_ms).toBeGreaterThanOrEqual(0);
+      for (const [key, bound] of [
+        ['steps', 4],
+        ['model_calls', 2],
+        ['tool_calls', 1],
+      ] as const) {
+        expect(Number.isInteger(observation[key])).toBe(true);
+        expect(observation[key]).toBeGreaterThanOrEqual(0);
+        expect(observation[key]).toBeLessThanOrEqual(bound);
+      }
+    }
     expect(request.locale).toBe(locale);
     expect(request.candidate).toMatchObject({
       full_name: 'Candidate',
@@ -357,6 +470,21 @@ describe('OnlineCVsService.generate legacy privacy boundary', () => {
       }),
     );
     const updatePayload = onlineCVRepo.update.mock.calls[0][1];
+    expect(onlineCVRepo.update).toHaveBeenCalledTimes(1);
+    expect(updatePayload.generationSnapshot?.pendingDraft).toBeUndefined();
+    expect(
+      updatePayload.revision?.sourceTrace?.generation?.reviewStatus,
+    ).toBeUndefined();
+    expect(updatePayload).toMatchObject({
+      generationMode: OnlineCvGenerationMode.EDITOR_ONLY,
+      contentVersion: 4,
+      sourceVersion: request.source_version,
+      generatedBy: 'ai-service',
+      htmlContent: null,
+      pdfUrl: null,
+    });
+    expect(updatePayload).not.toHaveProperty('isPrimary');
+    expect(updatePayload).not.toHaveProperty('isSearchable');
     if (skillEdit) {
       expect(
         updatePayload.workExperience.map((entry) => entry.position),
@@ -431,5 +559,21 @@ describe('OnlineCVsService.generate legacy privacy boundary', () => {
         sourceTrace: expect.objectContaining({ locale }),
       }),
     );
+    if (!target && !skillEdit) {
+      onlineCVRepo.update.mockClear();
+      aiServiceClient.generateCvDraftReview.mockClear();
+      (service as any).aiCvConsentsService.hasValidConsent.mockResolvedValue(
+        false,
+      );
+      await expect(
+        service.generate(canonicalCv._id, {}, user),
+      ).rejects.toMatchObject({
+        status: 403,
+        message:
+          'Cần cấp quyền xử lý AI cho mục đích tạo CV trước khi sử dụng tính năng này',
+      });
+      expect(aiServiceClient.generateCvDraftReview).not.toHaveBeenCalled();
+      expect(onlineCVRepo.update).not.toHaveBeenCalled();
+    }
   });
 });

@@ -25,6 +25,7 @@ from talentpulse_ai.modules.agent_foundation.router import router as agent_found
 from talentpulse_ai.modules.cv_analysis.analysis import MatchAnalysisService
 from talentpulse_ai.modules.cv_analysis.matching import EmbeddingSemanticScorer, MatchService
 from talentpulse_ai.modules.cv_analysis.router import router
+from talentpulse_ai.modules.cv_generator.agent import CvGenerationAgent
 from talentpulse_ai.modules.cv_generator.router import router as cv_generation_router
 from talentpulse_ai.modules.cv_generator.service import CvDraftGenerationService
 from talentpulse_ai.modules.job_indexing.router import router as indexing_router
@@ -204,7 +205,7 @@ def create_app(
     ) or _provider_has_methods(generation_service.provider, "generate_with_timeout")
     application.state.capability_selector = _build_capability_selector(
         active_settings,
-        frozenset({"rag.generate"}) if agent_registered else frozenset(),
+        frozenset({"rag.generate", "cv_generation"}) if agent_registered else frozenset(),
     )
     application.state.agent_generation_service = agent_generation_service
     application.state.retrieval_service = retrieval_service
@@ -215,6 +216,10 @@ def create_app(
     application.state.match_analysis_service = MatchAnalysisService(generation_service.provider)
     application.state.cv_draft_service = CvDraftGenerationService(
         generation_service.provider, active_settings
+    )
+    application.state.cv_generation_agent = CvGenerationAgent(
+        application.state.cv_draft_service,
+        AgentModelAdapter(generation_service.provider),
     )
     application.state.matching_service = matching_service or MatchService(
         EmbeddingSemanticScorer(

@@ -52,7 +52,7 @@ def make_request(*, now: datetime | None = None):
         resource_ref="cv-ref-9",
         expected_version="cv-version-3",
         action_code="PUBLISH_CV",
-        now=now or datetime(2026, 11, 17, 10, 0, tzinfo=UTC),
+        now=now or datetime.now(UTC),
     )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
@@ -44,6 +44,8 @@ class CoreGenerationResult:
     bullets_by_experience: dict[int, list[str]]
     bullets_by_project: dict[int, list[str]]
     provider_used: bool
+    provider_bullets_by_experience: dict[int, set[str]] = field(default_factory=dict)
+    provider_bullets_by_project: dict[int, set[str]] = field(default_factory=dict)
 
 
 def _validate_provider_model[ModelT: BaseModel](raw: object, model: type[ModelT]) -> ModelT:
@@ -80,6 +82,8 @@ class _CoreAcceptance:
         warnings = self.warnings
         bullets_by_experience = self.result.bullets_by_experience
         bullets_by_project = self.result.bullets_by_project
+        provider_bullets_by_experience = self.result.provider_bullets_by_experience
+        provider_bullets_by_project = self.result.provider_bullets_by_project
         for bullet in core.bullets:
             if experience_indices is not None and bullet.source_index not in experience_indices:
                 continue
@@ -125,6 +129,9 @@ class _CoreAcceptance:
             )
             if accepted:
                 bullets_by_experience.setdefault(bullet.source_index, []).extend(accepted)
+                provider_bullets_by_experience.setdefault(bullet.source_index, set()).update(
+                    accepted
+                )
                 self.result.provider_used = True
 
         for project_bullet in core.project_bullets:
@@ -175,6 +182,9 @@ class _CoreAcceptance:
             )
             if accepted:
                 bullets_by_project.setdefault(project_bullet.source_index, []).extend(accepted)
+                provider_bullets_by_project.setdefault(project_bullet.source_index, set()).update(
+                    accepted
+                )
                 self.result.provider_used = True
 
 

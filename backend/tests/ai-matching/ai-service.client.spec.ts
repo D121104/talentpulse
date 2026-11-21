@@ -434,6 +434,34 @@ describe('AiServiceClient', () => {
     expect(request.mock.calls[0][0].data).toEqual(cvDraftRequest);
   });
 
+  it('forwards the remaining CV deadline to the trusted review endpoint', async () => {
+    const client = new AiServiceClient(config(auth));
+    request.mockResolvedValue({
+      status: 200,
+      data: {
+        implementation: 'agent',
+        draft: cvDraftResponse,
+        review_metadata: {
+          source_refs_by_path: {},
+          field_origins_by_path: {},
+          omissions_by_path: [],
+        },
+      },
+    });
+
+    await expect(
+      client.generateCvDraftReview(cvDraftRequest, { timeoutMs: 45_000 }),
+    ).resolves.toMatchObject({ implementation: 'agent' });
+
+    expect(request.mock.calls[0][0]).toMatchObject({
+      timeout: 45_000,
+      headers: {
+        'X-Cv-Review-Metadata': 'true',
+        'X-Cv-Generation-Timeout-Ms': '45000',
+      },
+    });
+  });
+
   it('preserves commas and semicolons inside whole owned skill members', async () => {
     const client = new AiServiceClient(config(auth));
     const members = [

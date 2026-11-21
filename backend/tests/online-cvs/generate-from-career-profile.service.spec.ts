@@ -1,6 +1,6 @@
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
 import { OnlineCvGenerationMode } from 'src/online-cvs/entities/online-cv.entity';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Role } from 'src/decorator/customize';
 import { OnlineCV } from 'src/online-cvs/entities/online-cv.entity';
 import { User } from 'src/users/entities/user.entity';
@@ -14,6 +14,12 @@ const user = {
   role: Role.USER,
 } as any;
 
+type LegacyProfileGenerationResponse = {
+  draft: OnlineCV;
+  status: string;
+  warnings: string[];
+};
+
 function createService() {
   const onlineCVRepo = {
     count: jest.fn().mockResolvedValue(0),
@@ -21,8 +27,24 @@ function createService() {
     create: jest.fn((value) => value),
     save: jest.fn((value) => Promise.resolve({ ...value, _id: 'cv-1' })),
   };
-  const aiServiceClient = { generateCvDraft: jest.fn() };
-  const service = Object.create(OnlineCVsService.prototype) as OnlineCVsService;
+  const aiServiceClient: any = { generateCvDraft: jest.fn() };
+  aiServiceClient.generateCvDraftReview = jest.fn(async (...args: any[]) => ({
+    implementation: 'legacy',
+    draft: await aiServiceClient.generateCvDraft(...args),
+    review_metadata: {
+      source_refs_by_path: {},
+      field_origins_by_path: {},
+      omissions_by_path: [],
+    },
+  }));
+  const service = Object.create(OnlineCVsService.prototype) as Omit<
+    OnlineCVsService,
+    'generateFromCareerProfile'
+  > & {
+    generateFromCareerProfile: (
+      ...args: Parameters<OnlineCVsService['generateFromCareerProfile']>
+    ) => Promise<LegacyProfileGenerationResponse>;
+  };
   Object.assign(service as any, {
     onlineCVRepo,
     userRepo: {
@@ -86,17 +108,18 @@ function createService() {
       }),
     },
   });
+  const profileRepository = {
+    findOne: jest.fn(() =>
+      (service as any).careerProfileService.requireMine(user),
+    ),
+  };
   const manager = {
     getRepository: jest.fn((entity) => {
       if (entity === OnlineCV) return onlineCVRepo;
       if (entity === User) return (service as any).userRepo;
       if (entity === Job) return (service as any).jobsService;
       if (entity === Company) return (service as any).companyRepository;
-      return {
-        findOne: jest.fn(() =>
-          (service as any).careerProfileService.requireMine(user),
-        ),
-      };
+      return profileRepository;
     }),
   };
   Object.assign(onlineCVRepo, {
@@ -106,6 +129,7 @@ function createService() {
     service,
     onlineCVRepo,
     aiServiceClient,
+    profileRepository,
     careerProfileService: (service as any).careerProfileService,
   };
 }
@@ -169,6 +193,230 @@ function canonicalJob() {
     endDate: new Date('2099-01-01T00:00:00Z'),
   };
 }
+
+describe('T014 profile-source authorization and context', () => {
+  const previousRedis = process.env.REDIS_ENABLED;
+
+  beforeEach(() => {
+    process.env.REDIS_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    if (previousRedis === undefined) delete process.env.REDIS_ENABLED;
+    else process.env.REDIS_ENABLED = previousRedis;
+  });
+
+  function queuedService() {
+    const fixture = createService();
+    const rows: OnlineCV[] = [];
+    const queue = { add: jest.fn().mockResolvedValue({}) };
+    Object.assign(fixture.onlineCVRepo, {
+      find: jest.fn().mockResolvedValue(rows),
+      findOne: jest.fn(async () => rows[0] || null),
+      save: jest.fn(async (value) => {
+        rows.push(value);
+        return value;
+      }),
+    });
+    Object.assign(fixture.service, { generationQueue: queue });
+    fixture.aiServiceClient.generateCvDraft.mockImplementation(
+      async (request) => ({
+        ...generatedDraft(),
+        target_job_id: request.job.job_id,
+        source_version: request.source_version,
+        content_version: request.content_version,
+      }),
+    );
+    return { ...fixture, rows, queue };
+  }
+
+  it('looks up only the authenticated owner profile before enqueue', async () => {
+    const {
+      service,
+      queue,
+      onlineCVRepo,
+      careerProfileService,
+      profileRepository,
+    } = queuedService();
+    careerProfileService.requireMine.mockRejectedValue(new NotFoundException());
+    await expect(
+      service.enqueueGenerationFromCareerProfile({}, user, 'owner-only'),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(onlineCVRepo.save).not.toHaveBeenCalled();
+    expect(profileRepository.findOne).toHaveBeenCalledWith({
+      where: { userId: user._id },
+      lock: { mode: 'pessimistic_write' },
+    });
+  });
+
+  it.each(['absent', 'revoked'])(
+    'rejects %s consent before enqueue',
+    async () => {
+      const { service, queue, onlineCVRepo, aiServiceClient } = queuedService();
+      (service as any).aiCvConsentsService.hasValidConsent.mockResolvedValue(
+        false,
+      );
+      await expect(
+        service.enqueueGenerationFromCareerProfile({}, user, 'no-consent'),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(queue.add).not.toHaveBeenCalled();
+      expect(onlineCVRepo.save).not.toHaveBeenCalled();
+      expect(aiServiceClient.generateCvDraftReview).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects an outdated expected profile version before enqueue', async () => {
+    const { service, queue, onlineCVRepo } = queuedService();
+    await expect(
+      service.enqueueGenerationFromCareerProfile(
+        { expectedProfileVersion: 6 },
+        user,
+        'old-profile',
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(onlineCVRepo.save).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'queues only reference metadata (selected job=%s)',
+    async (selected) => {
+      const { service, queue, rows, careerProfileService } = queuedService();
+      const job = {
+        ...canonicalJob(),
+        description: 'Synthetic private job narrative',
+      };
+      (service as any).jobsService.findOne.mockResolvedValue(job);
+      const profile = await careerProfileService.requireMine(user);
+      const before = JSON.stringify(profile);
+      const result = await service.enqueueGenerationFromCareerProfile(
+        { expectedProfileVersion: 7, ...(selected ? { jobId: job._id } : {}) },
+        user,
+        'safe-queue',
+      );
+      const payload = queue.add.mock.calls[0][1];
+      expect(Object.keys(payload).sort()).toEqual(
+        [
+          'operationId',
+          'idempotencyKeyHash',
+          'userId',
+          'cvId',
+          'kind',
+          'sourceProfileId',
+          'sourceProfileVersion',
+          'expectedContentVersion',
+          'sourceVersion',
+          'consentVersion',
+          'consentPolicyHash',
+          'templateType',
+          'locale',
+          'targetJobId',
+        ].sort(),
+      );
+      expect(payload).toMatchObject({
+        operationId: result.operationId,
+        cvId: rows[0]._id,
+        userId: user._id,
+        kind: 'CAREER_PROFILE',
+        sourceProfileId: profile._id,
+        sourceProfileVersion: 7,
+        expectedContentVersion: 1,
+        targetJobId: selected ? job._id : null,
+        sourceVersion: expect.stringMatching(/^[a-f0-9]{64}$/),
+        idempotencyKeyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        consentPolicyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        consentVersion: expect.any(String),
+      });
+      for (const text of [
+        profile.contact.email,
+        profile.objective,
+        profile.projects[0].description,
+        job.description,
+      ]) {
+        expect(JSON.stringify(payload)).not.toContain(text);
+      }
+      expect(JSON.stringify(profile)).toBe(before);
+    },
+  );
+
+  it('supplies neutral no-job context without looking up a job', async () => {
+    const { service, aiServiceClient, careerProfileService } = queuedService();
+    const profile = await careerProfileService.requireMine(user);
+    await service.generateFromCareerProfile({}, user);
+    expect((service as any).jobsService.findOne).not.toHaveBeenCalled();
+    expect(aiServiceClient.generateCvDraftReview.mock.calls[0][0].job).toEqual({
+      job_id: profile._id,
+      title: 'Candidate CV',
+      company_name: null,
+      description: null,
+      location: null,
+      work_mode: null,
+      level: null,
+      required_skills: [],
+      preferred_skills: [],
+    });
+  });
+
+  it.each(['missing', 'revoked'])(
+    'rejects %s consent at completion without saving content',
+    async () => {
+      const { service, onlineCVRepo, aiServiceClient } = queuedService();
+      aiServiceClient.generateCvDraft.mockImplementation(async (request) => {
+        (service as any).aiCvConsentsService.hasValidConsent.mockResolvedValue(
+          false,
+        );
+        return {
+          ...generatedDraft(),
+          target_job_id: request.job.job_id,
+          source_version: request.source_version,
+        };
+      });
+      await expect(
+        service.generateFromCareerProfile({}, user),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(onlineCVRepo.save).not.toHaveBeenCalled();
+      expect(onlineCVRepo.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a profile version changed during inference before saving content', async () => {
+    const { service, careerProfileService, aiServiceClient, onlineCVRepo } =
+      queuedService();
+    const profile = await careerProfileService.requireMine(user);
+    aiServiceClient.generateCvDraft.mockImplementation(async (request) => {
+      careerProfileService.requireMine.mockResolvedValue({
+        ...profile,
+        contentVersion: 8,
+      });
+      return {
+        ...generatedDraft(),
+        target_job_id: request.job.job_id,
+        source_version: request.source_version,
+      };
+    });
+    await expect(
+      service.generateFromCareerProfile({ expectedProfileVersion: 7 }, user),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(onlineCVRepo.save).not.toHaveBeenCalled();
+    expect(onlineCVRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a selected job removed during inference instead of falling back to no-job context', async () => {
+    const { service, aiServiceClient, onlineCVRepo } = queuedService();
+    const job = canonicalJob();
+    (service as any).jobsService.findOne
+      .mockResolvedValueOnce(job)
+      .mockResolvedValue(null);
+    await expect(
+      service.generateFromCareerProfile({ jobId: job._id }, user),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(
+      aiServiceClient.generateCvDraftReview.mock.calls[0][0].job.job_id,
+    ).toBe(job._id);
+    expect(onlineCVRepo.save).not.toHaveBeenCalled();
+  });
+});
 
 describe('OnlineCVsService.generateFromCareerProfile', () => {
   it.each([
@@ -500,7 +748,10 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
         ],
         warnings: ['generation_fallback'],
       }));
-      const result = await service.generateFromCareerProfile({ locale }, user);
+      const result = (await service.generateFromCareerProfile(
+        { locale },
+        user,
+      )) as LegacyProfileGenerationResponse;
       expect(
         aiServiceClient.generateCvDraft.mock.calls[0][0].candidate.certificates,
       ).toEqual(['Cloud 2024 - Professional']);
@@ -596,10 +847,10 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
       projects: [],
       career_objective: null,
     }));
-    const result = await service.generateFromCareerProfile(
+    const result = (await service.generateFromCareerProfile(
       { locale: 'en-US' },
       user,
-    );
+    )) as LegacyProfileGenerationResponse;
     expect(result.status).toBe('COMPLETE');
     expect(result.draft.careerObjective).toBeNull();
     expect(result.warnings).toEqual([]);
@@ -641,10 +892,10 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
         source_version: request.source_version,
         skills,
       }));
-      const { draft } = await service.generateFromCareerProfile(
+      const { draft } = (await service.generateFromCareerProfile(
         { jobId: job._id },
         user,
-      );
+      )) as LegacyProfileGenerationResponse;
       const request = aiServiceClient.generateCvDraft.mock.calls[0][0];
       expect(request.job.required_skills).toEqual(job.skills);
       expect(request.job.preferred_skills).toEqual([]);
@@ -677,10 +928,10 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
       source_version: request.source_version,
       skills: [{ name: 'Skills', description: display }],
     }));
-    const { draft } = await service.generateFromCareerProfile(
+    const { draft } = (await service.generateFromCareerProfile(
       { locale: locale as 'en-US' | 'vi-VN' },
       user,
-    );
+    )) as LegacyProfileGenerationResponse;
     expect(draft.skills[0].description).toBe(display);
     expect(draft.revision.sourceTrace.skillGroups[0].members).toEqual([source]);
     expect(draft.generationSnapshot.skills[0].name).toBe(source);
@@ -711,7 +962,10 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
         },
       ],
     }));
-    const { draft } = await service.generateFromCareerProfile({}, user);
+    const { draft } = (await service.generateFromCareerProfile(
+      {},
+      user,
+    )) as LegacyProfileGenerationResponse;
     expect(
       aiServiceClient.generateCvDraft.mock.calls[0][0].candidate.skills,
     ).toEqual(literals);
@@ -796,7 +1050,10 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
       })),
       skills: [{ name: 'Programming', description: 'Python; SQL' }],
     }));
-    const { draft } = await service.generateFromCareerProfile({}, user);
+    const { draft } = (await service.generateFromCareerProfile(
+      {},
+      user,
+    )) as LegacyProfileGenerationResponse;
     expect(draft.workExperience.map((entry) => entry.companyName)).toEqual(
       selected.map((index) => `Company ${index}`),
     );
@@ -863,10 +1120,10 @@ describe('OnlineCVsService.generateFromCareerProfile', () => {
       source_version: request.source_version,
       position,
     }));
-    const { draft } = await service.generateFromCareerProfile(
+    const { draft } = (await service.generateFromCareerProfile(
       { jobId: job._id, locale: locale as 'vi-VN' | 'en-US' },
       user,
-    );
+    )) as LegacyProfileGenerationResponse;
     const prefix = locale === 'en-US' ? 'Applying for' : 'Ứng tuyển';
     const heading = `${prefix}: ${expectedRole}`;
     expect(draft.position).toBe(heading);

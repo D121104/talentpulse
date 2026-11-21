@@ -129,6 +129,7 @@ class ProviderRuntime:
         if self.provider_call_count >= self.limits.max_provider_calls:
             self.mark("provider_call_cap")
             raise TimeoutError("CV provider call cap reached")
+        deadline = min(deadline, self.total_deadline)
         remaining = deadline - self.clock()
         if remaining <= 0:
             self.mark("provider_deadline")
@@ -139,13 +140,17 @@ class ProviderRuntime:
         self.last_provider_call_kind = call_kind
         call_started = self.clock()
         try:
-            return _provider_call(
+            output = _provider_call(
                 self.provider,
                 prompt,
                 schema,
                 timeout=min(timeout, remaining),
                 num_predict=num_predict,
             )
+            if self.clock() >= deadline:
+                self.mark("provider_deadline")
+                raise TimeoutError("CV provider total deadline reached")
+            return output
         except Exception as exc:
             if _is_timeout_exception(exc):
                 self.provider_timeout_kinds.append(call_kind)

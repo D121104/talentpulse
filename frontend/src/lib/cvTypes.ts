@@ -215,6 +215,38 @@ export interface AiCvMatchingConsent extends AiCvMatchingConsentPolicy {
 
 export type CVGenerationResultStatus = "COMPLETE" | "DEGRADED" | "NO_EVIDENCE";
 
+export type CVGenerationReviewStatus =
+  "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
+
+export type CVGenerationFieldOrigin =
+  "SOURCE" | "LOCALIZED" | "AI_SUGGESTED" | "FALLBACK";
+
+export type CVGenerationOmissionReason =
+  | "SOURCE_UNAVAILABLE"
+  | "INSUFFICIENT_EVIDENCE"
+  | "STRUCTURE_INVALID"
+  | "LOCALIZATION_FAILED";
+
+export interface CVGenerationReviewMetadata {
+  fieldOriginsByPath: Record<string, CVGenerationFieldOrigin>;
+  omissionsByPath: Array<{
+    path: string;
+    reasonCode: CVGenerationOmissionReason;
+  }>;
+}
+
+export interface CVPendingGenerationSummary {
+  operationId: string;
+  reviewStatus: CVGenerationReviewStatus;
+  draftHash?: string;
+  expiresAt?: string;
+}
+
+export interface GenerationApproval {
+  operationId: string;
+  draftHash: string;
+}
+
 export type CVGenerationJobStatus =
   | "QUEUED"
   | "PROCESSING"
@@ -371,6 +403,7 @@ export interface OnlineCV {
   generatedBy?: string | null;
   targetJobId?: string | null;
   revision?: OnlineCVRevision | null;
+  pendingGeneration?: CVPendingGenerationSummary | null;
   title?: string;
   fullName: string;
   position?: string;
@@ -453,6 +486,7 @@ export interface CreateOnlineCVDto {
 
 export interface UpdateOnlineCVDto extends Partial<CreateOnlineCVDto> {
   expectedContentVersion: number;
+  generationApproval?: GenerationApproval;
 }
 
 export type CVGenerationDraft = Partial<
@@ -493,6 +527,11 @@ export interface GenerateOnlineCVJobRequest extends GenerateOnlineCVDraftRequest
   expectedProfileVersion?: number;
   expectedContentVersion?: number;
   sourceVersion?: string;
+  regenerationTarget?: {
+    reviewOperationId: string;
+    expectedDraftHash: string;
+    targetPath: string;
+  };
 }
 
 export interface GenerateOnlineCVJobAcceptedResponse {
@@ -507,6 +546,7 @@ export interface GenerateOnlineCVJobStatusResponse {
   operationId: string;
   onlineCvId: string;
   status: CVGenerationJobStatus;
+  kind?: "EXISTING_CV" | "CAREER_PROFILE";
   pollAfterSeconds?: number;
   acceptedAt?: string;
   updatedAt?: string;
@@ -521,10 +561,19 @@ export interface GenerateOnlineCVJobStatusResponse {
   targetJobId?: string | null;
   revision?: OnlineCVRevision | null;
   locale?: CVLocale;
+  reviewStatus?: CVGenerationReviewStatus;
+  draftHash?: string;
+  reviewMetadata?: CVGenerationReviewMetadata;
+  regenerationTarget?: {
+    reviewOperationId: string;
+    expectedDraftHash: string;
+    targetPath: string;
+  };
 }
 
 export interface GenerateOnlineCVDraftResponse {
   status: CVGenerationResultStatus;
+  operationId?: string;
   draft: CVGenerationDraft;
   warnings: string[];
   generationMode?: CVGenerationMode;
@@ -533,6 +582,9 @@ export interface GenerateOnlineCVDraftResponse {
   generatedBy?: string | null;
   targetJobId?: string | null;
   revision?: OnlineCVRevision | null;
+  reviewStatus?: CVGenerationReviewStatus;
+  draftHash?: string;
+  reviewMetadata?: CVGenerationReviewMetadata;
 }
 
 export type UserCvParseStatus = "PENDING" | "PROCESSING" | "READY" | "FAILED";

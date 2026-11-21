@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { DeepPartial, EntityManager, Not, Raw, Repository } from 'typeorm';
 import { Job } from 'src/jobs/entities/job.entity';
 import { Company } from 'src/companies/entities/company.entity';
@@ -34,6 +35,7 @@ import { RedisService } from 'src/redis/redis.service';
 import { AiCvConsentsService } from 'src/ai-consents/ai-cv-consents.service';
 import {
   AiCvConsentScope,
+  ActiveAiCvConsentPolicy,
   getActiveAiCvConsentPolicy,
 } from 'src/ai-consents/ai-cv-consent.policy';
 import {
@@ -41,6 +43,7 @@ import {
   AiServiceError,
   CvDraftRequest,
   CvDraftResponse,
+  CvDraftReviewResponse,
   matchOwnedSkillMembers,
   ownedSkillLiterals,
 } from 'src/ai-matching/ai-service.client';
@@ -54,6 +57,8 @@ import {
   CvGenerationJobData,
   CvGenerationMetadata,
   CvGenerationOperationStatus,
+  CvGenerationPendingDraft,
+  CvRegenerationTarget,
   ONLINE_CV_GENERATION_QUEUE,
   ONLINE_CV_GENERATION_PROCESS,
 } from './async-cv-generation.types';
@@ -68,7 +73,94 @@ import {
 let puppeteer: any;
 
 const DEFAULT_CV_LOCALE: OnlineCvLocale = 'vi-VN';
-const ASYNC_CV_TIMEOUT_MS = 660_000;
+const CV_GENERATION_TIMEOUT_MS = 300_000;
+
+interface StageAgentDraftInput {
+  deadline: number;
+  cv: OnlineCV;
+  user: IUser;
+  job: Job | null;
+  targetJobId: string | null;
+  policy: ActiveAiCvConsentPolicy;
+  request: CvDraftRequest;
+  reviewResponse: CvDraftReviewResponse;
+  expectedContentVersion: number;
+  operationId?: string;
+  kind: CvGenerationMetadata['kind'];
+}
+
+interface StageCareerProfileDraftInput {
+  deadline: number;
+  targetCvId?: string;
+  sourcePlaceholderData: DeepPartial<OnlineCV>;
+  user: IUser;
+  profile: CandidateCareerProfile;
+  normalizedProfile: Record<string, unknown>;
+  job: Job | null;
+  targetJobId: string | null;
+  policy: ActiveAiCvConsentPolicy;
+  request: CvDraftRequest;
+  reviewResponse: CvDraftReviewResponse;
+  operationId?: string;
+}
+
+interface StageCareerProfileDraftInput {
+  targetCvId?: string;
+  sourcePlaceholderData: DeepPartial<OnlineCV>;
+  user: IUser;
+  profile: CandidateCareerProfile;
+  normalizedProfile: Record<string, unknown>;
+  job: Job | null;
+  targetJobId: string | null;
+  policy: ActiveAiCvConsentPolicy;
+  request: CvDraftRequest;
+  reviewResponse: CvDraftReviewResponse;
+  operationId?: string;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(',')}}`;
+  }
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new Error('Value is not JSON serializable');
+  return encoded;
+}
+
+function cvDraftHash(draft: CvDraftResponse): string {
+  return createHash('sha256').update(stableJson(draft), 'utf8').digest('hex');
+}
+
+function safeReviewWarnings(review: CvDraftReviewResponse): string[] {
+  const warnings = new Set<string>();
+  if (
+    Object.values(review.review_metadata.field_origins_by_path).includes(
+      'FALLBACK',
+    )
+  ) {
+    warnings.add('FALLBACK_USED');
+  }
+  for (const omission of review.review_metadata.omissions_by_path) {
+    warnings.add(omission.reason_code);
+  }
+  return [...warnings].slice(0, 20);
+}
+
+function publicReviewMetadata(review: CvDraftReviewResponse) {
+  return {
+    fieldOriginsByPath: review.review_metadata.field_origins_by_path,
+    omissionsByPath: review.review_metadata.omissions_by_path.map(
+      ({ path, reason_code }) => ({ path, reasonCode: reason_code }),
+    ),
+  };
+}
 
 function normalizeCvLocale(value: unknown): OnlineCvLocale {
   return value === 'en-US' ? 'en-US' : DEFAULT_CV_LOCALE;
@@ -683,6 +775,60 @@ export class OnlineCVsService {
     operationId?: string,
     aiTimeoutMs?: number,
   ) {
+    const deadline =
+      Date.now() +
+      Math.min(
+        aiTimeoutMs ?? CV_GENERATION_TIMEOUT_MS,
+        CV_GENERATION_TIMEOUT_MS,
+      );
+    return this.withGenerationDeadline(deadline, () =>
+      this.generateWithinDeadline(id, dto, user, operationId, deadline),
+    );
+  }
+
+  private async withGenerationDeadline<T>(
+    deadline: number,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const remaining = this.generationRemaining(deadline);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new GatewayTimeoutException(
+                  'Dịch vụ AI tạo CV phản hồi quá thời gian',
+                ),
+              ),
+            remaining,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private generationRemaining(deadline: number): number {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+      throw new GatewayTimeoutException(
+        'Dịch vụ AI tạo CV phản hồi quá thời gian',
+      );
+    return remaining;
+  }
+
+  private async generateWithinDeadline(
+    id: string,
+    dto: GenerateOnlineCvDto,
+    user: IUser,
+    operationId: string | undefined,
+    deadline: number,
+  ) {
+    const startedAt = Date.now();
     if (user.role !== Role.USER) {
       throw new ForbiddenException('Chỉ ứng viên mới được tạo CV bằng AI');
     }
@@ -748,7 +894,8 @@ export class OnlineCVsService {
         }),
       )
       .digest('hex');
-    const nextContentVersion = Math.max(1, Number(cv.contentVersion || 1) + 1);
+    const expectedContentVersion = Math.max(1, Number(cv.contentVersion || 1));
+    const nextContentVersion = expectedContentVersion + 1;
     const identity = {
       request_id: randomUUID(),
       trace_id: randomUUID(),
@@ -832,16 +979,16 @@ export class OnlineCVsService {
       consent_version: policy.consentVersion,
     };
 
-    let generated: CvDraftResponse;
+    let reviewResponse: CvDraftReviewResponse;
     try {
-      generated = await this.aiServiceClient.generateCvDraft(
+      reviewResponse = await this.aiServiceClient.generateCvDraftReview(
         request,
-        aiTimeoutMs ? { timeoutMs: aiTimeoutMs } : undefined,
+        { timeoutMs: this.generationRemaining(deadline) },
       );
     } catch (error) {
       if (
-        error instanceof AiServiceError &&
-        error.code === 'AI_SERVICE_TIMEOUT'
+        error instanceof GatewayTimeoutException ||
+        (error instanceof AiServiceError && error.code === 'AI_SERVICE_TIMEOUT')
       ) {
         throw new GatewayTimeoutException(
           'Dịch vụ AI tạo CV phản hồi quá thời gian',
@@ -849,6 +996,8 @@ export class OnlineCVsService {
       }
       throw new BadGatewayException('Dịch vụ AI tạo CV hiện không khả dụng');
     }
+    const generated = reviewResponse.draft;
+    this.generationRemaining(deadline);
 
     if (
       generated.target_job_id !== jobIdForContract ||
@@ -857,6 +1006,32 @@ export class OnlineCVsService {
       throw new BadGatewayException(
         'Dữ liệu trả về từ dịch vụ AI không hợp lệ',
       );
+    }
+    if (reviewResponse.implementation === 'agent') {
+      const result = await this.stageAgentDraft({
+        deadline,
+        cv,
+        user,
+        job,
+        targetJobId,
+        policy,
+        request,
+        reviewResponse,
+        expectedContentVersion,
+        operationId,
+        kind: 'EXISTING_CV',
+      });
+      this.logCvGenerationObservation({
+        request,
+        implementation: reviewResponse.implementation,
+        status: result.status,
+        reviewStatus: 'PENDING_REVIEW',
+        durationMs: Date.now() - startedAt,
+        modelCalls: 1,
+        toolCalls: 1,
+        errorType: null,
+      });
+      return result;
     }
     const warnings = [...(generated.warnings || [])];
     const text = (
@@ -990,6 +1165,7 @@ export class OnlineCVsService {
           );
         }
       }
+      this.generationRemaining(deadline);
       const updateResult = await repository.update(
         this.generationWriteCriteria(cv),
         {
@@ -1116,7 +1292,7 @@ export class OnlineCVsService {
     });
     await this.invalidateUserCvSkillsCache(user._id);
     const saved = await this.findOne(id, user);
-    return {
+    const result = {
       status: warnings.length > 0 ? 'DEGRADED' : 'COMPLETE',
       draft: saved,
       warnings,
@@ -1128,6 +1304,73 @@ export class OnlineCVsService {
       revision: saved.revision,
       locale: saved.revision?.locale || locale,
     };
+    this.logCvGenerationObservation({
+      request,
+      implementation: reviewResponse.implementation,
+      status: result.status,
+      reviewStatus: 'NOT_REQUIRED',
+      durationMs: Date.now() - startedAt,
+      modelCalls: 1,
+      toolCalls: 0,
+      errorType: null,
+    });
+    return result;
+  }
+
+  private logCvGenerationObservation(input: {
+    request: CvDraftRequest;
+    implementation: 'legacy' | 'agent';
+    status: string;
+    reviewStatus: string;
+    durationMs: number;
+    modelCalls: number;
+    toolCalls: number;
+    errorType: string | null;
+  }): void {
+    const { request } = input;
+    Logger.log(
+      JSON.stringify({
+        operation_attempt_id: request.identity.operation_attempt_id,
+        request_id: request.identity.request_id,
+        trace_id: request.identity.trace_id,
+        correlation_id: request.identity.trace_id,
+        capability_id: 'cv_generation',
+        implementation: input.implementation,
+        status: input.status,
+        review_status: input.reviewStatus,
+        duration_ms: Math.max(0, input.durationMs),
+        steps: input.implementation === 'agent' ? 1 : 0,
+        model_calls: input.modelCalls,
+        tool_calls: input.toolCalls,
+        error_type: input.errorType,
+      }),
+    );
+  }
+
+  private normalizedCareerProfileSnapshot(
+    profile: CandidateCareerProfile,
+    user: User,
+  ) {
+    return {
+      contact: {
+        fullName: profile.contact?.fullName || user.name || user.email,
+        email: profile.contact?.email || user.email,
+        phone: profile.contact?.phone || null,
+        link: profile.contact?.link || null,
+        address: profile.contact?.address || user.address || null,
+        avatar: profile.contact?.avatar || user.avatar || null,
+      },
+      headline: profile.headline || null,
+      objective: profile.objective || null,
+      experience: filterMeaningfulCvEntries(profile.experience || []),
+      education: filterMeaningfulCvEntries(profile.education || []),
+      projects: filterMeaningfulCvEntries(profile.projects || []),
+      certificates: filterMeaningfulCvEntries(profile.certificates || []),
+      skills: filterMeaningfulCvEntries(profile.skills || []),
+      activities: filterMeaningfulCvEntries(profile.activities || []),
+      awards: filterMeaningfulCvEntries(profile.awards || []),
+      contentVersion: profile.contentVersion,
+    };
   }
 
   async generateFromCareerProfile(
@@ -1137,6 +1380,32 @@ export class OnlineCVsService {
     operationId?: string,
     expectedSourceVersion?: string,
     aiTimeoutMs?: number,
+  ) {
+    const deadline =
+      Date.now() +
+      Math.min(
+        aiTimeoutMs ?? CV_GENERATION_TIMEOUT_MS,
+        CV_GENERATION_TIMEOUT_MS,
+      );
+    return this.withGenerationDeadline(deadline, () =>
+      this.generateProfileWithinDeadline(
+        dto,
+        user,
+        targetCvId,
+        operationId,
+        expectedSourceVersion,
+        deadline,
+      ),
+    );
+  }
+
+  private async generateProfileWithinDeadline(
+    dto: GenerateFromCareerProfileDto,
+    user: IUser,
+    targetCvId: string | undefined,
+    operationId: string | undefined,
+    expectedSourceVersion: string | undefined,
+    deadline: number,
   ) {
     if (user.role !== Role.USER) {
       throw new ForbiddenException('Chỉ ứng viên mới được tạo CV bằng AI');
@@ -1211,26 +1480,10 @@ export class OnlineCVsService {
       required_skills: job?.skills || [],
       preferred_skills: [],
     };
-    const normalizedProfile = {
-      contact: {
-        fullName: profile.contact?.fullName || userInDb.name || userInDb.email,
-        email: profile.contact?.email || userInDb.email,
-        phone: profile.contact?.phone || null,
-        link: profile.contact?.link || null,
-        address: profile.contact?.address || userInDb.address || null,
-        avatar: profile.contact?.avatar || userInDb.avatar || null,
-      },
-      headline: profile.headline || null,
-      objective: profile.objective || null,
-      experience: filterMeaningfulCvEntries(profile.experience || []),
-      education: filterMeaningfulCvEntries(profile.education || []),
-      projects: filterMeaningfulCvEntries(profile.projects || []),
-      certificates: filterMeaningfulCvEntries(profile.certificates || []),
-      skills: filterMeaningfulCvEntries(profile.skills || []),
-      activities: filterMeaningfulCvEntries(profile.activities || []),
-      awards: filterMeaningfulCvEntries(profile.awards || []),
-      contentVersion: profile.contentVersion,
-    };
+    const normalizedProfile = this.normalizedCareerProfileSnapshot(
+      profile,
+      userInDb,
+    );
     const candidate = {
       candidate_id: user._id,
       // Contact PII is retained in the canonical profile/snapshot and restored below;
@@ -1314,16 +1567,16 @@ export class OnlineCVsService {
       consent_version: policy.consentVersion,
     };
 
-    let generated: CvDraftResponse;
+    let reviewResponse: CvDraftReviewResponse;
     try {
-      generated = await this.aiServiceClient.generateCvDraft(
+      reviewResponse = await this.aiServiceClient.generateCvDraftReview(
         request,
-        aiTimeoutMs ? { timeoutMs: aiTimeoutMs } : undefined,
+        { timeoutMs: this.generationRemaining(deadline) },
       );
     } catch (error) {
       if (
-        error instanceof AiServiceError &&
-        error.code === 'AI_SERVICE_TIMEOUT'
+        error instanceof GatewayTimeoutException ||
+        (error instanceof AiServiceError && error.code === 'AI_SERVICE_TIMEOUT')
       ) {
         throw new GatewayTimeoutException(
           'Dịch vụ AI tạo CV phản hồi quá thời gian',
@@ -1331,6 +1584,7 @@ export class OnlineCVsService {
       }
       throw new BadGatewayException('Dịch vụ AI tạo CV hiện không khả dụng');
     }
+    const generated = reviewResponse.draft;
     if (
       generated.candidate_id !== user._id ||
       generated.target_job_id !== jobIdForContract ||
@@ -1624,6 +1878,90 @@ export class OnlineCVsService {
       };
     }
 
+    if (reviewResponse.implementation === 'agent') {
+      const sourceOnlyPlaceholder: DeepPartial<OnlineCV> = {
+        ...newCvData,
+        title: job ? `CV - ${applicationPosition || job.name}` : 'Candidate CV',
+        generationMode: OnlineCvGenerationMode.EDITOR_ONLY,
+        contentVersion: 1,
+        sourceVersion,
+        generatedBy: null,
+        targetJobId,
+        sourceProfileId: profile._id,
+        sourceProfileVersion: profile.contentVersion,
+        fullName: normalizedProfile.contact.fullName,
+        email: normalizedProfile.contact.email,
+        phone: normalizedProfile.contact.phone,
+        link: normalizedProfile.contact.link,
+        address: normalizedProfile.contact.address,
+        avatar: normalizedProfile.contact.avatar,
+        position: applicationPosition || normalizedProfile.headline,
+        careerObjective: normalizedProfile.objective,
+        education: normalizedProfile.education.map((entry: any) => ({
+          schoolName: entry.schoolName || entry.school || null,
+          degree: entry.degree || null,
+          major: entry.major || null,
+          startDate: entry.startDate || null,
+          endDate: entry.endDate || null,
+          description: entry.description || null,
+        })),
+        workExperience: normalizedProfile.experience.map((entry: any) => ({
+          companyName: entry.companyName || null,
+          position: entry.position || null,
+          startDate: entry.startDate || null,
+          endDate: entry.endDate || null,
+          description: entry.description || null,
+        })),
+        skills: normalizedProfile.skills
+          .map((entry: any) => ({
+            name: skillLiteral(entry),
+            description: entry?.description || null,
+          }))
+          .filter((entry: any) => Boolean(entry.name)),
+        projects: normalizedProfile.projects.map((entry: any) => ({
+          projectName: entry.projectName || entry.name || null,
+          role: entry.role || null,
+          startDate: entry.startDate || null,
+          endDate: entry.endDate || null,
+          description: entry.description || null,
+          technologies: entry.technologies || [],
+        })),
+        certificates: normalizedProfile.certificates.map((entry: any) =>
+          typeof entry === 'string' ? { name: entry } : entry,
+        ),
+        activities: normalizedProfile.activities,
+        awards: normalizedProfile.awards,
+        generationSnapshot: normalizedProfile,
+        revision: {
+          contentVersion: 1,
+          locale,
+          sourceTrace: {
+            locale,
+            sourceProfileId: profile._id,
+            sourceProfileVersion: profile.contentVersion,
+          },
+        },
+        htmlContent: null,
+        pdfUrl: null,
+        isPrimary: false,
+        isSearchable: false,
+      };
+      return this.stageCareerProfileAgentDraft({
+        deadline,
+        targetCvId,
+        sourcePlaceholderData: sourceOnlyPlaceholder,
+        user,
+        profile,
+        normalizedProfile,
+        job,
+        targetJobId,
+        policy,
+        request,
+        reviewResponse,
+        operationId,
+      });
+    }
+
     const persist = async (manager: EntityManager): Promise<OnlineCV> => {
       const persistPrerequisites = await this.assertGenerationPrerequisites(
         user,
@@ -1653,6 +1991,7 @@ export class OnlineCVsService {
       }
       await this.assertTargetJobUnchanged(manager, job);
       const cvRepository = manager.getRepository(OnlineCV);
+      this.generationRemaining(deadline);
       if (newCvData.isPrimary) {
         await cvRepository.update(
           { userId: user._id, isPrimary: true },
@@ -1690,6 +2029,7 @@ export class OnlineCVsService {
           },
         };
         newCvData.contentVersion = current.contentVersion + 1;
+        this.generationRemaining(deadline);
         const updated = await cvRepository.update(
           this.generationWriteCriteria(current),
           newCvData,
@@ -1702,6 +2042,7 @@ export class OnlineCVsService {
           where: { _id: targetCvId, userId: user._id },
         });
       }
+      this.generationRemaining(deadline);
       return cvRepository.save(cvRepository.create(newCvData));
     };
     const saved = await this.onlineCVRepo.manager.transaction(persist);
@@ -1731,12 +2072,410 @@ export class OnlineCVsService {
     return createHash('sha256').update(normalized, 'utf8').digest('hex');
   }
 
+  private async stageAgentDraft(input: StageAgentDraftInput) {
+    const {
+      cv,
+      user,
+      job,
+      targetJobId,
+      policy,
+      request,
+      reviewResponse,
+      operationId,
+      kind,
+    } = input;
+    const generated = reviewResponse.draft;
+    const draftHash = cvDraftHash(generated);
+    const warnings = safeReviewWarnings(reviewResponse);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const reviewOperationId = operationId || generated.operation_attempt_id;
+    const expiresAt = new Date(
+      now.getTime() + 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const pendingDraft: CvGenerationPendingDraft = {
+      operationId: reviewOperationId,
+      draftHash,
+      draft: generated,
+      sourceRefsByPath: reviewResponse.review_metadata.source_refs_by_path,
+      fieldOriginsByPath: reviewResponse.review_metadata.field_origins_by_path,
+      omissionsByPath: reviewResponse.review_metadata.omissions_by_path.map(
+        ({ path, reason_code }) => ({ path, reasonCode: reason_code }),
+      ),
+      sourceVersion: generated.source_version,
+      expectedContentVersion: input.expectedContentVersion,
+      consentVersion: policy.consentVersion,
+      consentPolicyHash: policy.policyHash,
+      createdAt: nowIso,
+      expiresAt,
+      reviewStatus: 'PENDING',
+    };
+
+    const staged = await this.onlineCVRepo.manager.transaction(
+      async (manager) => {
+        const prerequisites = await this.assertGenerationPrerequisites(
+          user,
+          cv.templateType as 'template1' | 'template2',
+          manager,
+        );
+        if (
+          prerequisites.policy.consentVersion !== policy.consentVersion ||
+          prerequisites.policy.policyHash !== policy.policyHash ||
+          request.consent_version !== prerequisites.policy.consentVersion
+        ) {
+          throw new ForbiddenException('Quyền xử lý AI đã thay đổi');
+        }
+        await this.assertTargetJobUnchanged(manager, job);
+
+        const repository = manager.getRepository(OnlineCV);
+        const current = await repository.findOne({
+          where: { _id: cv._id, userId: user._id, isDeleted: false },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!current) throw new NotFoundException('Không tìm thấy CV');
+        if (current.contentVersion !== input.expectedContentVersion) {
+          throw new ConflictException(
+            'CV đã thay đổi trong khi AI đang tạo bản nháp',
+          );
+        }
+        if (
+          current.generationSnapshot?.pendingDraft?.reviewStatus === 'PENDING'
+        ) {
+          throw new ConflictException('CV đã có bản nháp đang chờ xem xét');
+        }
+        const currentGeneration = this.generationTrace(current);
+        if (
+          operationId &&
+          (currentGeneration?.operationId !== operationId ||
+            currentGeneration.status !== 'RUNNING')
+        ) {
+          throw new ConflictException(
+            'Yêu cầu tạo CV đã bị hủy hoặc trở nên cũ',
+          );
+        }
+        if (
+          !operationId &&
+          currentGeneration &&
+          ['QUEUED', 'RUNNING'].includes(currentGeneration.status)
+        ) {
+          throw new ConflictException('CV đang được tạo; vui lòng chờ');
+        }
+        const jobSnapshot = this.jobSnapshot(
+          job,
+          targetJobId || current._id,
+          current.position || current.title || 'Candidate CV',
+        );
+        const currentSourceVersion = createHash('sha256')
+          .update(
+            JSON.stringify({
+              job: jobSnapshot,
+              updatedAt: job?.updatedAt?.toISOString() || null,
+              profileVersion: input.expectedContentVersion || 1,
+            }),
+          )
+          .digest('hex');
+        if (
+          currentSourceVersion !== request.source_version ||
+          generated.source_version !== request.source_version ||
+          generated.content_version !== input.expectedContentVersion + 1
+        ) {
+          throw new ConflictException(
+            'Nguồn CV đã thay đổi trong khi AI đang tạo bản nháp',
+          );
+        }
+
+        const status = pendingDraft.omissionsByPath.length
+          ? 'DEGRADED'
+          : 'COMPLETE';
+        const generationMetadata: CvGenerationMetadata = {
+          ...(currentGeneration || {}),
+          operationId: reviewOperationId,
+          idempotencyKeyHash:
+            currentGeneration?.idempotencyKeyHash ||
+            createHash('sha256')
+              .update(reviewOperationId, 'utf8')
+              .digest('hex'),
+          status,
+          kind,
+          userId: user._id,
+          cvId: current._id,
+          expectedContentVersion: input.expectedContentVersion,
+          sourceVersion: generated.source_version,
+          consentVersion: prerequisites.policy.consentVersion,
+          consentPolicyHash: prerequisites.policy.policyHash,
+          templateType: current.templateType as 'template1' | 'template2',
+          locale: request.locale as OnlineCvLocale,
+          targetJobId,
+          attempts: currentGeneration?.attempts || 1,
+          createdAt: currentGeneration?.createdAt || nowIso,
+          startedAt: currentGeneration?.startedAt || nowIso,
+          finishedAt: nowIso,
+          warnings,
+          implementation: reviewResponse.implementation,
+          reviewStatus: 'PENDING',
+          draftHash,
+        };
+        const snapshot = {
+          ...(current.generationSnapshot || {}),
+          pendingDraft,
+        };
+        const revision = {
+          ...(current.revision || {}),
+          contentVersion: current.contentVersion,
+          locale: request.locale as OnlineCvLocale,
+          sourceTrace: {
+            ...(current.revision?.sourceTrace || {}),
+            generation: generationMetadata,
+          },
+        };
+        this.generationRemaining(input.deadline);
+        const updateResult = await repository.update(
+          this.generationWriteCriteria(current, true),
+          { generationSnapshot: snapshot, revision },
+        );
+        if (!updateResult.affected) {
+          throw new ConflictException(
+            'CV hoặc bản nháp đã thay đổi trong khi AI đang xử lý',
+          );
+        }
+        return repository.findOneOrFail({
+          where: { _id: current._id, userId: user._id, isDeleted: false },
+        });
+      },
+    );
+    const metadata = this.generationTrace(staged);
+    if (!metadata)
+      throw new ConflictException('Không thể lưu trạng thái bản nháp');
+    return this.operationResponse(metadata, staged._id, staged);
+  }
+
+  private async stageCareerProfileAgentDraft(
+    input: StageCareerProfileDraftInput,
+  ) {
+    const {
+      targetCvId,
+      sourcePlaceholderData,
+      user,
+      profile,
+      job,
+      targetJobId,
+      policy,
+      request,
+      reviewResponse,
+      operationId,
+    } = input;
+    const generated = reviewResponse.draft;
+    const draftHash = cvDraftHash(generated);
+    const warnings = safeReviewWarnings(reviewResponse);
+    const nowIso = new Date().toISOString();
+    const reviewOperationId = operationId || generated.operation_attempt_id;
+    const expiresAt = new Date(
+      Date.now() + 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const staged = await this.onlineCVRepo.manager.transaction(
+      async (manager) => {
+        const { policy: activePolicy, userInDb } =
+          await this.assertGenerationPrerequisites(
+            user,
+            request.template_type,
+            manager,
+          );
+        if (
+          activePolicy.consentVersion !== policy.consentVersion ||
+          activePolicy.policyHash !== policy.policyHash ||
+          request.consent_version !== activePolicy.consentVersion
+        ) {
+          throw new ForbiddenException('Quyền xử lý AI đã thay đổi');
+        }
+        const profileRepository = manager.getRepository(CandidateCareerProfile);
+        const currentProfile = await profileRepository.findOne({
+          where: { _id: profile._id, userId: user._id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (
+          !currentProfile ||
+          currentProfile.contentVersion !== profile.contentVersion
+        ) {
+          throw new ConflictException(
+            'Hồ sơ nghề nghiệp đã thay đổi trong khi AI đang tạo CV',
+          );
+        }
+        await this.assertTargetJobUnchanged(manager, job);
+        const jobSnapshot = this.jobSnapshot(
+          job,
+          targetJobId || currentProfile._id,
+        );
+        const sourceVersion = createHash('sha256')
+          .update(
+            JSON.stringify({
+              profile: this.normalizedCareerProfileSnapshot(
+                currentProfile,
+                userInDb,
+              ),
+              job: jobSnapshot,
+            }),
+          )
+          .digest('hex');
+        if (
+          sourceVersion !== request.source_version ||
+          generated.source_version !== sourceVersion ||
+          generated.content_version !== request.content_version
+        ) {
+          throw new ConflictException(
+            'Nguồn hồ sơ đã thay đổi trong khi AI đang tạo CV',
+          );
+        }
+
+        const repository = manager.getRepository(OnlineCV);
+        let current = targetCvId
+          ? await repository.findOne({
+              where: { _id: targetCvId, userId: user._id, isDeleted: false },
+              lock: { mode: 'pessimistic_write' },
+            })
+          : null;
+        if (targetCvId && !current)
+          throw new NotFoundException('Không tìm thấy CV');
+        if (!current) {
+          this.generationRemaining(input.deadline);
+          current = await repository.save(
+            repository.create(sourcePlaceholderData),
+          );
+        }
+        const expectedContentVersion = Number(current.contentVersion || 1);
+        const currentGeneration = this.generationTrace(current);
+        if (
+          operationId &&
+          (currentGeneration?.operationId !== operationId ||
+            currentGeneration.status !== 'RUNNING')
+        ) {
+          throw new ConflictException(
+            'Yêu cầu tạo CV đã bị hủy hoặc trở nên cũ',
+          );
+        }
+        if (
+          !operationId &&
+          currentGeneration &&
+          ['QUEUED', 'RUNNING'].includes(currentGeneration.status)
+        ) {
+          throw new ConflictException('CV đang được tạo; vui lòng chờ');
+        }
+        const pendingDraft: CvGenerationPendingDraft = {
+          operationId: reviewOperationId,
+          draftHash,
+          draft: generated,
+          sourceRefsByPath: reviewResponse.review_metadata.source_refs_by_path,
+          fieldOriginsByPath:
+            reviewResponse.review_metadata.field_origins_by_path,
+          omissionsByPath: reviewResponse.review_metadata.omissions_by_path.map(
+            ({ path, reason_code }) => ({ path, reasonCode: reason_code }),
+          ),
+          sourceVersion,
+          expectedContentVersion,
+          consentVersion: activePolicy.consentVersion,
+          consentPolicyHash: activePolicy.policyHash,
+          createdAt: nowIso,
+          expiresAt,
+          reviewStatus: 'PENDING',
+        };
+        const status = pendingDraft.omissionsByPath.length
+          ? 'DEGRADED'
+          : 'COMPLETE';
+        const generationMetadata: CvGenerationMetadata = {
+          ...(currentGeneration || {}),
+          operationId: reviewOperationId,
+          idempotencyKeyHash:
+            currentGeneration?.idempotencyKeyHash ||
+            createHash('sha256')
+              .update(reviewOperationId, 'utf8')
+              .digest('hex'),
+          status,
+          kind: 'CAREER_PROFILE',
+          userId: user._id,
+          cvId: current._id,
+          sourceProfileId: currentProfile._id,
+          sourceProfileVersion: currentProfile.contentVersion,
+          expectedContentVersion,
+          sourceVersion,
+          consentVersion: activePolicy.consentVersion,
+          consentPolicyHash: activePolicy.policyHash,
+          templateType: current.templateType as 'template1' | 'template2',
+          locale: request.locale as OnlineCvLocale,
+          targetJobId,
+          attempts: currentGeneration?.attempts || 1,
+          createdAt: currentGeneration?.createdAt || nowIso,
+          startedAt: currentGeneration?.startedAt || nowIso,
+          finishedAt: nowIso,
+          warnings,
+          implementation: reviewResponse.implementation,
+          reviewStatus: 'PENDING',
+          draftHash,
+        };
+        const snapshot = {
+          ...(current.generationSnapshot || {}),
+          pendingDraft,
+        };
+        const revision = {
+          ...(current.revision || {}),
+          contentVersion: current.contentVersion,
+          locale: request.locale as OnlineCvLocale,
+          sourceTrace: {
+            ...(current.revision?.sourceTrace || {}),
+            generation: generationMetadata,
+          },
+        };
+        this.generationRemaining(input.deadline);
+        const updateResult = await repository.update(
+          this.generationWriteCriteria(current, true),
+          {
+            generationSnapshot: snapshot,
+            revision,
+            ...(targetCvId ? {} : { isPrimary: false, isSearchable: false }),
+          },
+        );
+        if (!updateResult.affected) {
+          throw new ConflictException(
+            'CV hoặc hồ sơ đã thay đổi trong khi AI đang tạo bản nháp',
+          );
+        }
+        return repository.findOneOrFail({
+          where: { _id: current._id, userId: user._id, isDeleted: false },
+        });
+      },
+    );
+    const metadata = this.generationTrace(staged);
+    if (!metadata)
+      throw new ConflictException('Không thể lưu trạng thái bản nháp');
+    return this.operationResponse(metadata, staged._id, staged);
+  }
+
   private generationTrace(cv: OnlineCV): CvGenerationMetadata | undefined {
     const value = cv.revision?.sourceTrace?.generation;
     return value && typeof value === 'object' ? value : undefined;
   }
 
-  private generationWriteCriteria(cv: OnlineCV) {
+  private publicOnlineCv(cv: OnlineCV): Record<string, unknown> {
+    const { generationSnapshot, ...publicCv } = cv;
+    const pending = generationSnapshot?.pendingDraft;
+    return {
+      ...publicCv,
+      ...(pending?.reviewStatus === 'PENDING'
+        ? {
+            pendingGeneration: {
+              operationId: pending.operationId,
+              reviewStatus: pending.reviewStatus,
+              draftHash: pending.draftHash,
+              expiresAt: pending.expiresAt,
+            },
+          }
+        : {}),
+    };
+  }
+
+  private generationWriteCriteria(
+    cv: OnlineCV,
+    compareGenerationSnapshot = false,
+  ) {
     return {
       _id: cv._id,
       userId: cv.userId,
@@ -1747,6 +2486,19 @@ export class OnlineCVsService {
           `${alias} IS NOT DISTINCT FROM CAST(:expectedRevision AS jsonb)`,
         { expectedRevision: cv.revision ? JSON.stringify(cv.revision) : null },
       ),
+      ...(compareGenerationSnapshot
+        ? {
+            generationSnapshot: Raw(
+              (alias) =>
+                `${alias} IS NOT DISTINCT FROM CAST(:expectedGenerationSnapshot AS jsonb)`,
+              {
+                expectedGenerationSnapshot: cv.generationSnapshot
+                  ? JSON.stringify(cv.generationSnapshot)
+                  : null,
+              },
+            ),
+          }
+        : {}),
     };
   }
 
@@ -1756,6 +2508,17 @@ export class OnlineCVsService {
     cv?: OnlineCV,
   ) {
     const active = ['QUEUED', 'RUNNING'].includes(metadata.status);
+    const current = cv ? this.publicOnlineCv(cv) : undefined;
+    const pending = cv?.generationSnapshot?.pendingDraft;
+    const discardedReview = ['REJECTED', 'EXPIRED'].includes(
+      metadata.reviewStatus || '',
+    );
+    const reviewMetadata = pending
+      ? {
+          fieldOriginsByPath: pending.fieldOriginsByPath,
+          omissionsByPath: pending.omissionsByPath,
+        }
+      : undefined;
     return {
       status: metadata.status === 'RUNNING' ? 'PROCESSING' : metadata.status,
       operationId: metadata.operationId,
@@ -1775,15 +2538,34 @@ export class OnlineCVsService {
       attempts: 1,
       errorCode: metadata.errorCode || null,
       warnings: metadata.warnings || [],
-      ...(!active && cv ? { current: cv } : {}),
+      ...(metadata.regeneration &&
+      metadata.operationId === metadata.regeneration.operationId
+        ? {
+            regenerationTarget: {
+              reviewOperationId: metadata.regeneration.reviewOperationId,
+              expectedDraftHash: metadata.regeneration.expectedDraftHash,
+              targetPath: metadata.regeneration.targetPath,
+            },
+          }
+        : {}),
+      ...(!active && current ? { current } : {}),
       ...(cv && ['COMPLETE', 'DEGRADED'].includes(metadata.status)
         ? {
-            draft: cv,
+            ...(!discardedReview ? { draft: pending?.draft || current } : {}),
             generationMode: cv.generationMode,
             contentVersion: cv.contentVersion,
             sourceVersion: cv.sourceVersion,
             generatedBy: cv.generatedBy,
             revision: cv.revision,
+            ...(pending || metadata.reviewStatus
+              ? {
+                  reviewStatus: pending?.reviewStatus || metadata.reviewStatus,
+                }
+              : {}),
+            ...(pending?.draftHash || metadata.draftHash
+              ? { draftHash: pending?.draftHash || metadata.draftHash }
+              : {}),
+            ...(reviewMetadata ? { reviewMetadata } : {}),
           }
         : {}),
     };
@@ -1919,9 +2701,17 @@ export class OnlineCVsService {
     user: IUser,
     idempotencyKey: string,
   ) {
+    const acceptedAt = new Date().toISOString();
     const idempotencyKeyHash = this.assertGenerationKey(idempotencyKey);
     const cv = await this.findOne(id, user);
     const existingOperation = this.generationTrace(cv);
+    if (dto.regenerationTarget)
+      return this.enqueueSelectedRegeneration(
+        cv,
+        dto,
+        user,
+        idempotencyKeyHash,
+      );
     if (existingOperation) {
       if (
         existingOperation.idempotencyKeyHash === idempotencyKeyHash &&
@@ -1977,7 +2767,7 @@ export class OnlineCVsService {
       locale,
       targetJobId,
       attempts: 1,
-      createdAt: new Date().toISOString(),
+      createdAt: acceptedAt,
     };
     const revision = {
       ...(cv.revision || { contentVersion: cv.contentVersion }),
@@ -2032,11 +2822,310 @@ export class OnlineCVsService {
     return this.operationResponse(metadata, cv._id);
   }
 
+  private async enqueueSelectedRegeneration(
+    cv: OnlineCV,
+    dto: EnqueueOnlineCvGenerationDto,
+    user: IUser,
+    idempotencyKeyHash: string,
+  ) {
+    if (!isRedisEnabled())
+      throw new ServiceUnavailableException('Hàng đợi tạo CV chưa được bật');
+    const metadata = this.generationTrace(cv);
+    const pending = cv.generationSnapshot?.pendingDraft;
+    const target = dto.regenerationTarget as CvRegenerationTarget;
+    if (!metadata || !pending || pending.reviewStatus !== 'PENDING')
+      throw new ConflictException(
+        'Bản nháp đã thay đổi; hãy tải lại trước khi tạo lại mục',
+      );
+    if (metadata.regeneration?.idempotencyKeyHash === idempotencyKeyHash) {
+      if (
+        metadata.regeneration.reviewOperationId !== target.reviewOperationId ||
+        metadata.regeneration.expectedDraftHash !== target.expectedDraftHash ||
+        metadata.regeneration.targetPath !== target.targetPath ||
+        (dto.jobId !== undefined && dto.jobId !== metadata.targetJobId) ||
+        dto.expectedContentVersion !== metadata.expectedContentVersion ||
+        (dto.sourceVersion && dto.sourceVersion !== metadata.sourceVersion)
+      )
+        throw new ConflictException(
+          'Idempotency-Key đã được dùng cho yêu cầu khác',
+        );
+      return this.operationResponse(
+        { ...metadata, ...metadata.regeneration },
+        cv._id,
+        cv,
+      );
+    }
+    if (Date.parse(pending.expiresAt) <= Date.now()) {
+      await this.expirePendingDraft(cv);
+      throw new ConflictException('Bản nháp đã hết hạn');
+    }
+    if (
+      !metadata ||
+      !pending ||
+      pending.reviewStatus !== 'PENDING' ||
+      target.reviewOperationId !== pending.operationId ||
+      target.expectedDraftHash !== pending.draftHash ||
+      metadata.operationId !== pending.operationId ||
+      metadata.reviewStatus !== 'PENDING' ||
+      cv.contentVersion !== pending.expectedContentVersion ||
+      dto.expectedContentVersion !== cv.contentVersion
+    ) {
+      throw new ConflictException(
+        'Bản nháp đã thay đổi; hãy tải lại trước khi tạo lại mục',
+      );
+    }
+    if (
+      metadata.regeneration &&
+      ['QUEUED', 'RUNNING'].includes(metadata.regeneration.status)
+    )
+      throw new ConflictException('Đang tạo lại một mục khác trong bản nháp');
+
+    const source = this.resolveRegenerationSource(cv, pending, target);
+    if (!source)
+      throw new BadRequestException('Mục này không có dữ liệu nguồn hợp lệ');
+    const { policy } = await this.assertGenerationPrerequisites(
+      user,
+      metadata.templateType,
+    );
+    if (
+      policy.consentVersion !== pending.consentVersion ||
+      policy.policyHash !== pending.consentPolicyHash ||
+      !(await this.aiCvConsentsService.hasValidConsent(
+        user._id,
+        AiCvConsentScope.CV_GENERATION,
+        pending.consentVersion,
+        pending.consentPolicyHash,
+      ))
+    )
+      throw new ConflictException('Consent tạo CV không còn hợp lệ');
+
+    const acceptedAt = new Date().toISOString();
+    const operationId = randomUUID();
+    const regeneration = {
+      ...target,
+      operationId,
+      idempotencyKeyHash,
+      status: 'QUEUED' as const,
+      createdAt: acceptedAt,
+    };
+    const nextMetadata = { ...metadata, regeneration };
+    const revision = {
+      ...(cv.revision || {}),
+      sourceTrace: {
+        ...(cv.revision?.sourceTrace || {}),
+        generation: nextMetadata,
+      },
+    };
+    const reserved = await this.onlineCVRepo.update(
+      this.generationWriteCriteria(cv, true),
+      { revision },
+    );
+    if (!reserved.affected) {
+      const latest = await this.onlineCVRepo.findOne({
+        where: { _id: cv._id, userId: user._id, isDeleted: false },
+      });
+      const priorMetadata = latest && this.generationTrace(latest);
+      const prior = priorMetadata?.regeneration;
+      if (
+        latest &&
+        priorMetadata &&
+        prior &&
+        prior?.idempotencyKeyHash === idempotencyKeyHash &&
+        prior.reviewOperationId === target.reviewOperationId &&
+        prior.expectedDraftHash === target.expectedDraftHash &&
+        prior.targetPath === target.targetPath
+      )
+        return this.operationResponse(
+          { ...priorMetadata, ...prior },
+          latest._id,
+          latest,
+        );
+      throw new ConflictException('Bản nháp đã thay đổi; hãy thử lại');
+    }
+
+    const job = dto.jobId ? await this.jobsService.findOne(dto.jobId) : null;
+    const targetJobId = job?._id || metadata.targetJobId || null;
+    const payload: CvGenerationJobData = {
+      operationId,
+      idempotencyKeyHash,
+      userId: user._id,
+      cvId: cv._id,
+      kind: 'EXISTING_CV',
+      expectedContentVersion: cv.contentVersion,
+      sourceVersion: pending.sourceVersion,
+      consentVersion: pending.consentVersion,
+      consentPolicyHash: pending.consentPolicyHash,
+      templateType: metadata.templateType,
+      locale: metadata.locale,
+      targetJobId,
+      regenerationTarget: target,
+    };
+    try {
+      await this.enqueueOperation(nextMetadata, payload);
+    } catch (error) {
+      const latest = await this.onlineCVRepo.findOne({
+        where: { _id: cv._id, userId: user._id, isDeleted: false },
+      });
+      if (
+        latest &&
+        this.generationTrace(latest)?.regeneration?.operationId === operationId
+      ) {
+        const latestMetadata = this.generationTrace(latest)!;
+        const { regeneration: _regeneration, ...rest } = latestMetadata;
+        await this.onlineCVRepo.update(this.generationWriteCriteria(latest), {
+          revision: {
+            ...(latest.revision || {}),
+            sourceTrace: {
+              ...(latest.revision?.sourceTrace || {}),
+              generation: rest,
+            },
+          },
+        });
+      }
+      throw error;
+    }
+    return this.operationResponse(
+      { ...nextMetadata, ...regeneration },
+      cv._id,
+      cv,
+    );
+  }
+
+  private resolveRegenerationSource(
+    cv: OnlineCV,
+    pending: CvGenerationPendingDraft,
+    target: CvRegenerationTarget,
+  ): { field: string; index?: number } | null {
+    const targetMatch = target.targetPath.match(
+      /^\/(position|career_objective|education|work_experience|projects|skills|activities|certificates|awards)(?:\/(0|[1-9]\d*))?$/,
+    );
+    const sourceRefs = pending.sourceRefsByPath[target.targetPath];
+    if (!targetMatch || !Array.isArray(sourceRefs) || sourceRefs.length !== 1)
+      return null;
+    const [, targetField, targetIndex] = targetMatch;
+    const expectedCollection: Record<string, string> = {
+      education: 'education',
+      work_experience: 'experience',
+      projects: 'projects',
+      skills: 'skills',
+      activities: 'activities',
+      certificates: 'certificates',
+      awards: 'awards',
+    };
+    const pendingDraft = pending.draft as unknown as Record<string, unknown>;
+    if (targetField === 'position' || targetField === 'career_objective') {
+      if (targetIndex !== undefined) return null;
+      if (typeof pendingDraft[targetField] !== 'string') return null;
+    } else {
+      const values = pendingDraft[targetField];
+      if (
+        targetIndex === undefined ||
+        !Array.isArray(values) ||
+        Number(targetIndex) >= values.length
+      )
+        return null;
+    }
+
+    const sourceMatch = sourceRefs[0].match(
+      /^\/candidate\/(headline|career_objective|education|experience|projects|skills|activities|certificates|awards)(?:\/(0|[1-9]\d*))?$/,
+    );
+    if (!sourceMatch) return null;
+    const [, sourceField, sourceIndex] = sourceMatch;
+    if (targetField === 'position' && sourceField !== 'headline') return null;
+    if (
+      targetField === 'career_objective' &&
+      sourceField !== 'career_objective'
+    )
+      return null;
+    if (
+      expectedCollection[targetField] &&
+      expectedCollection[targetField] !== sourceField
+    )
+      return null;
+    if (expectedCollection[targetField]) {
+      const values = this.regenerationCandidate(cv)[sourceField];
+      if (
+        sourceIndex === undefined ||
+        !Array.isArray(values) ||
+        Number(sourceIndex) >= values.length
+      )
+        return null;
+      return { field: sourceField, index: Number(sourceIndex) };
+    }
+    const candidate = this.regenerationCandidate(cv);
+    if (target.targetPath !== '/position') candidate.headline = null;
+    if (target.targetPath !== '/career_objective')
+      candidate.career_objective = null;
+    return typeof candidate[sourceField] === 'string' && candidate[sourceField]
+      ? { field: sourceField }
+      : null;
+  }
+
+  private regenerationCandidate(cv: OnlineCV): Record<string, unknown> {
+    const input = localizedRetryInput(cv);
+    return {
+      candidate_id: cv.userId,
+      full_name: 'Candidate',
+      email: null,
+      phone: null,
+      link: null,
+      address: null,
+      headline: cv.position || null,
+      career_objective: input.careerObjective || null,
+      skills: currentCvSkillLiterals(cv),
+      experience: (input.workExperience || []).map((entry) => ({
+        company_name: entry.companyName || null,
+        position: entry.position || null,
+        start_date: entry.startDate || null,
+        end_date: entry.endDate || null,
+        description: entry.description || null,
+      })),
+      education: (input.education || []).map((entry) => ({
+        school_name: entry.schoolName || null,
+        degree: entry.degree || null,
+        major: entry.major || null,
+        start_date: entry.startDate || null,
+        end_date: entry.endDate || null,
+        description: entry.description || null,
+      })),
+      projects: (input.projects || [])
+        .filter((entry) => Boolean(entry.projectName))
+        .map((entry) => ({
+          project_name: entry.projectName,
+          role: entry.role || null,
+          start_date: entry.startDate || null,
+          end_date: entry.endDate || null,
+          description: entry.description || null,
+          technologies: entry.technologies || [],
+        })),
+      certificates: (input.certificates || [])
+        .map((entry) => (typeof entry === 'string' ? entry : entry?.name || ''))
+        .filter(Boolean),
+      activities: (input.activities || [])
+        .map((entry) =>
+          typeof entry === 'string'
+            ? entry
+            : [entry?.organizationName, entry?.position, entry?.description]
+                .filter(Boolean)
+                .join(' - '),
+        )
+        .filter(Boolean),
+      awards: (input.awards || [])
+        .map((entry) =>
+          typeof entry === 'string'
+            ? entry
+            : [entry?.name, entry?.description].filter(Boolean).join(' - '),
+        )
+        .filter(Boolean),
+    };
+  }
+
   async enqueueGenerationFromCareerProfile(
     dto: GenerateFromCareerProfileDto,
     user: IUser,
     idempotencyKey: string,
   ) {
+    const acceptedAt = new Date().toISOString();
     if (!isRedisEnabled()) {
       throw new ServiceUnavailableException('Hàng đợi tạo CV chưa được bật');
     }
@@ -2046,6 +3135,7 @@ export class OnlineCVsService {
         user,
         idempotencyKey,
         manager,
+        acceptedAt,
       ),
     );
     if (!reserved.payload) return reserved.response;
@@ -2076,6 +3166,7 @@ export class OnlineCVsService {
     user: IUser,
     idempotencyKey: string,
     manager: EntityManager,
+    acceptedAt: string,
   ) {
     const idempotencyKeyHash = this.assertGenerationKey(idempotencyKey);
     const templateType = dto.templateType || 'template1';
@@ -2187,7 +3278,7 @@ export class OnlineCVsService {
       locale,
       targetJobId,
       attempts: 1,
-      createdAt: new Date().toISOString(),
+      createdAt: acceptedAt,
     };
     metadata.cvId = randomUUID();
     const placeholder = cvRepository.create({
@@ -2256,16 +3347,157 @@ export class OnlineCVsService {
   async getGenerationJob(id: string, operationId: string, user: IUser) {
     const cv = await this.findOne(id, user);
     const metadata = this.generationTrace(cv);
-    if (!metadata || metadata.operationId !== operationId)
+    const regeneration = metadata?.regeneration;
+    const isRegeneration = regeneration?.operationId === operationId;
+    if (!metadata || (metadata.operationId !== operationId && !isRegeneration))
       throw new NotFoundException('Không tìm thấy yêu cầu tạo CV');
-    return this.operationResponse(metadata, cv._id, cv);
+    const pending = cv.generationSnapshot?.pendingDraft;
+    if (
+      pending?.operationId === operationId &&
+      pending.reviewStatus === 'PENDING' &&
+      Date.parse(pending.expiresAt) <= Date.now()
+    ) {
+      await this.expirePendingDraft(cv);
+      return this.getGenerationJob(id, operationId, user);
+    }
+    const currentOperation = isRegeneration
+      ? { ...metadata, ...regeneration }
+      : metadata;
+    if (
+      ['QUEUED', 'RUNNING'].includes(currentOperation.status) &&
+      Date.now() >=
+        Date.parse(currentOperation.createdAt) + CV_GENERATION_TIMEOUT_MS
+    ) {
+      await this.finishGeneration(
+        {
+          cvId: id,
+          userId: user._id,
+          operationId,
+          ...(isRegeneration ? { regenerationTarget: regeneration } : {}),
+        } as unknown as CvGenerationJobData,
+        'FAILED',
+        'AI_TIMEOUT',
+      );
+      return this.getGenerationJob(id, operationId, user);
+    }
+    return this.operationResponse(currentOperation, cv._id, cv);
+  }
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async expirePendingGenerationDrafts(): Promise<number> {
+    const now = new Date();
+    const expired = await this.onlineCVRepo
+      .createQueryBuilder('cv')
+      .select([
+        'cv._id',
+        'cv.userId',
+        'cv.contentVersion',
+        'cv.isDeleted',
+        'cv.generationSnapshot',
+        'cv.revision',
+      ])
+      .where('"cv"."isDeleted" = false')
+      .andWhere(
+        "\"cv\".\"generationSnapshot\"->'pendingDraft'->>'reviewStatus' = 'PENDING'",
+      )
+      .andWhere(
+        '("cv"."generationSnapshot"->\'pendingDraft\'->>\'expiresAt\')::timestamptz <= :now',
+        {
+          now: now.toISOString(),
+        },
+      )
+      .orderBy(
+        '("cv"."generationSnapshot"->\'pendingDraft\'->>\'expiresAt\')::timestamptz',
+        'ASC',
+      )
+      .take(100)
+      .getMany();
+
+    let expiredCount = 0;
+    for (const cv of expired) {
+      if (await this.expirePendingDraft(cv)) expiredCount += 1;
+    }
+    return expiredCount;
+  }
+
+  private async expirePendingDraft(cv: OnlineCV): Promise<boolean> {
+    const pending = cv.generationSnapshot?.pendingDraft;
+    const metadata = this.generationTrace(cv);
+    if (
+      !pending ||
+      pending.reviewStatus !== 'PENDING' ||
+      Date.parse(pending.expiresAt) > Date.now() ||
+      !metadata ||
+      metadata.operationId !== pending.operationId
+    )
+      return false;
+
+    const generationSnapshot = { ...(cv.generationSnapshot || {}) };
+    delete generationSnapshot.pendingDraft;
+    const revision = {
+      ...(cv.revision || {}),
+      sourceTrace: {
+        ...(cv.revision?.sourceTrace || {}),
+        generation: { ...metadata, reviewStatus: 'EXPIRED' as const },
+      },
+    };
+    const result = await this.onlineCVRepo.update(
+      this.generationWriteCriteria(cv, true),
+      { generationSnapshot, revision },
+    );
+    if (result.affected) {
+      cv.generationSnapshot = generationSnapshot;
+      cv.revision = revision as OnlineCV['revision'];
+      return true;
+    }
+    return false;
   }
 
   async cancelGeneration(id: string, operationId: string, user: IUser) {
     const cv = await this.findOne(id, user);
     const metadata = this.generationTrace(cv);
-    if (!metadata || metadata.operationId !== operationId)
+    const regeneration = metadata?.regeneration;
+    const isRegeneration = regeneration?.operationId === operationId;
+    if (!metadata || (metadata.operationId !== operationId && !isRegeneration))
       throw new NotFoundException('Không tìm thấy yêu cầu tạo CV');
+    if (isRegeneration) {
+      if (!['QUEUED', 'RUNNING'].includes(regeneration.status))
+        return this.operationResponse(
+          { ...metadata, ...regeneration },
+          cv._id,
+          cv,
+        );
+      const cancelledAttempt = {
+        ...regeneration,
+        status: 'CANCELLED' as const,
+        finishedAt: new Date().toISOString(),
+        errorCode: 'CANCELLED_BY_USER',
+      };
+      const result = await this.onlineCVRepo.update(
+        this.generationWriteCriteria(cv),
+        {
+          revision: {
+            ...(cv.revision || {}),
+            sourceTrace: {
+              ...(cv.revision?.sourceTrace || {}),
+              generation: { ...metadata, regeneration: cancelledAttempt },
+            },
+          },
+        },
+      );
+      if (!result.affected) return this.getGenerationJob(id, operationId, user);
+      try {
+        const queued = await this.generationQueue.getJob(operationId);
+        if (
+          queued &&
+          ['waiting', 'delayed', 'paused'].includes(await queued.getState())
+        )
+          await queued.remove();
+      } catch {
+        /* cancellation state is persisted even if Redis is unavailable */
+      }
+      return this.getGenerationJob(id, operationId, user);
+    }
     if (
       ['COMPLETE', 'DEGRADED', 'FAILED', 'STALE', 'CANCELLED'].includes(
         metadata.status,
@@ -2305,23 +3537,85 @@ export class OnlineCVsService {
     return this.getGenerationJob(cv._id, operationId, user);
   }
 
+  async discardGenerationDraft(
+    id: string,
+    operationId: string,
+    user: IUser,
+  ): Promise<void> {
+    const cv = await this.findOne(id, user);
+    const metadata = this.generationTrace(cv);
+    if (!metadata || metadata.operationId !== operationId)
+      throw new NotFoundException('Không tìm thấy bản nháp CV');
+
+    const pending = cv.generationSnapshot?.pendingDraft;
+    if (!pending) {
+      if (
+        metadata.reviewStatus === 'REJECTED' ||
+        metadata.reviewStatus === 'EXPIRED'
+      )
+        return;
+      throw new ConflictException('Bản nháp CV không còn chờ xem xét');
+    }
+    if (
+      pending.operationId !== operationId ||
+      pending.reviewStatus !== 'PENDING' ||
+      metadata.reviewStatus !== 'PENDING'
+    )
+      throw new NotFoundException('Không tìm thấy bản nháp CV');
+
+    const generationSnapshot = { ...(cv.generationSnapshot || {}) };
+    delete generationSnapshot.pendingDraft;
+    const revision = {
+      ...(cv.revision || {}),
+      sourceTrace: {
+        ...(cv.revision?.sourceTrace || {}),
+        generation: { ...metadata, reviewStatus: 'REJECTED' as const },
+      },
+    };
+    const result = await this.onlineCVRepo.update(
+      this.generationWriteCriteria(cv, true),
+      { generationSnapshot, revision },
+    );
+    if (!result.affected)
+      return this.discardGenerationDraft(id, operationId, user);
+  }
+
   async processGenerationJob(data: CvGenerationJobData): Promise<void> {
     const cv = await this.onlineCVRepo.findOne({
       where: { _id: data.cvId, userId: data.userId, isDeleted: false },
     });
     if (!cv) return;
     const metadata = this.generationTrace(cv);
+    const operationStatus = data.regenerationTarget
+      ? metadata?.regeneration?.status
+      : metadata?.status;
+    const operationCreatedAt = data.regenerationTarget
+      ? metadata?.regeneration?.createdAt
+      : metadata?.createdAt;
+    const operationMatches = data.regenerationTarget
+      ? metadata?.operationId === data.regenerationTarget.reviewOperationId &&
+        metadata.regeneration?.operationId === data.operationId &&
+        metadata.regeneration.expectedDraftHash ===
+          data.regenerationTarget.expectedDraftHash &&
+        metadata.regeneration.targetPath === data.regenerationTarget.targetPath
+      : metadata?.operationId === data.operationId;
+    const deadline =
+      Date.parse(operationCreatedAt || '') + CV_GENERATION_TIMEOUT_MS;
     if (
-      metadata?.operationId === data.operationId &&
-      metadata.status === 'RUNNING'
+      operationMatches &&
+      ['QUEUED', 'RUNNING'].includes(operationStatus || '') &&
+      Date.now() >= deadline
     ) {
+      return this.finishGeneration(data, 'FAILED', 'AI_TIMEOUT');
+    }
+    if (operationMatches && operationStatus === 'RUNNING') {
       return this.finishGeneration(data, 'FAILED', 'WORKER_INTERRUPTED');
     }
     if (
       !metadata ||
-      metadata.operationId !== data.operationId ||
-      metadata.status === 'CANCELLED' ||
-      metadata.status !== 'QUEUED'
+      !operationMatches ||
+      operationStatus === 'CANCELLED' ||
+      operationStatus !== 'QUEUED'
     )
       return;
     const userEntity = await this.userRepo.findOne({
@@ -2389,13 +3683,28 @@ export class OnlineCVsService {
     const running = await this.setGenerationStatus(data, 'RUNNING');
     if (!running) return;
     try {
+      if (data.regenerationTarget) {
+        const warnings = await this.generateSelectedCvItem(
+          cv,
+          user,
+          data,
+          deadline,
+        );
+        await this.finishGeneration(
+          data,
+          warnings.length ? 'DEGRADED' : 'COMPLETE',
+          undefined,
+          warnings,
+        );
+        return;
+      }
       if (data.kind === 'EXISTING_CV') {
         await this.generate(
           data.cvId,
           { jobId: data.targetJobId || undefined } as GenerateOnlineCvDto,
           user,
           data.operationId,
-          ASYNC_CV_TIMEOUT_MS,
+          this.generationRemaining(deadline),
         );
       } else {
         await this.generateFromCareerProfile(
@@ -2409,7 +3718,7 @@ export class OnlineCVsService {
           data.cvId,
           data.operationId,
           data.sourceVersion,
-          ASYNC_CV_TIMEOUT_MS,
+          this.generationRemaining(deadline),
         );
       }
       const latest = await this.onlineCVRepo.findOne({
@@ -2426,12 +3735,234 @@ export class OnlineCVsService {
       if (error instanceof ConflictException)
         return this.finishGeneration(data, 'STALE', 'SOURCE_CHANGED');
       if (
-        error instanceof AiServiceError &&
-        error.code === 'AI_SERVICE_TIMEOUT'
+        error instanceof GatewayTimeoutException ||
+        (error instanceof AiServiceError && error.code === 'AI_SERVICE_TIMEOUT')
       )
         return this.finishGeneration(data, 'FAILED', 'AI_TIMEOUT');
       return this.finishGeneration(data, 'FAILED', 'GENERATION_FAILED');
     }
+  }
+
+  private async generateSelectedCvItem(
+    cv: OnlineCV,
+    user: IUser,
+    data: CvGenerationJobData,
+    deadline: number,
+  ): Promise<string[]> {
+    const target = data.regenerationTarget;
+    const metadata = this.generationTrace(cv);
+    const pending = cv.generationSnapshot?.pendingDraft;
+    if (
+      !target ||
+      !metadata ||
+      !pending ||
+      pending.operationId !== target.reviewOperationId ||
+      pending.draftHash !== target.expectedDraftHash ||
+      pending.reviewStatus !== 'PENDING'
+    )
+      throw new ConflictException('Bản nháp đã thay đổi');
+
+    const source = this.resolveRegenerationSource(cv, pending, target);
+    if (!source) throw new ConflictException('Dữ liệu nguồn không còn hợp lệ');
+    const candidate = this.regenerationCandidate(cv);
+    for (const field of [
+      'skills',
+      'experience',
+      'education',
+      'projects',
+      'certificates',
+      'activities',
+      'awards',
+    ]) {
+      if (field === source.field) continue;
+      candidate[field] = [];
+    }
+    if (source.index !== undefined) {
+      const values = candidate[source.field];
+      if (!Array.isArray(values) || !values[source.index])
+        throw new ConflictException('Dữ liệu nguồn không còn hợp lệ');
+      candidate[source.field] = [values[source.index]];
+    }
+
+    const job = data.targetJobId
+      ? await this.jobsService.findOne(data.targetJobId)
+      : null;
+    const jobSnapshot = this.jobSnapshot(
+      job,
+      job?._id || cv._id,
+      cv.position || cv.title || undefined,
+    );
+    const request: CvDraftRequest = {
+      identity: {
+        request_id: randomUUID(),
+        trace_id: randomUUID(),
+        operation_attempt_id: randomUUID(),
+      },
+      candidate: candidate as unknown as CvDraftRequest['candidate'],
+      job: jobSnapshot,
+      template_type: data.templateType,
+      locale: data.locale,
+      source_version: data.sourceVersion,
+      content_version: (cv.contentVersion || 1) + 1,
+      consent_version: data.consentVersion,
+    };
+    const result = await this.aiServiceClient.generateCvDraftReview(request, {
+      timeoutMs: this.generationRemaining(deadline),
+    });
+    this.generationRemaining(deadline);
+    if (
+      result.draft.candidate_id !== user._id ||
+      result.draft.target_job_id !== jobSnapshot.job_id
+    )
+      throw new BadGatewayException(
+        'Dữ liệu trả về từ dịch vụ AI không hợp lệ',
+      );
+
+    const match = target.targetPath.match(
+      /^\/(position|career_objective|education|work_experience|projects|skills|activities|certificates|awards)(?:\/(\d+))?$/,
+    );
+    if (!match) throw new BadRequestException('Mục cần tạo lại không hợp lệ');
+    const [, field, rawIndex] = match;
+    const index = rawIndex === undefined ? undefined : Number(rawIndex);
+    const outputKey: Record<string, keyof CvDraftResponse> = {
+      position: 'position',
+      career_objective: 'career_objective',
+      education: 'education',
+      work_experience: 'work_experience',
+      projects: 'projects',
+      skills: 'skills',
+      activities: 'activities',
+      certificates: 'certificates',
+      awards: 'awards',
+    };
+    const key = outputKey[field];
+    const output = result.draft[key];
+    const value = Array.isArray(output) ? output[0] : output;
+    if (
+      value === undefined ||
+      value === null ||
+      (typeof value === 'string' && !value.trim())
+    )
+      throw new BadGatewayException(
+        'Dịch vụ AI không tạo được nội dung cho mục đã chọn',
+      );
+
+    const nextDraft = JSON.parse(
+      JSON.stringify(pending.draft),
+    ) as CvDraftResponse;
+    if (index === undefined) {
+      if (field === 'position') nextDraft.position = value as string;
+      else if (field === 'career_objective')
+        nextDraft.career_objective = value as string;
+      else
+        throw new BadRequestException('Đường dẫn mục cần tạo lại không hợp lệ');
+    } else {
+      const collection = nextDraft[key] as unknown[];
+      if (!Array.isArray(collection) || index >= collection.length)
+        throw new ConflictException('Mục cần tạo lại không còn tồn tại');
+      const previous = collection[index];
+      collection[index] =
+        previous &&
+        value &&
+        typeof previous === 'object' &&
+        typeof value === 'object' &&
+        'source_index' in previous
+          ? { ...value, source_index: previous.source_index }
+          : value;
+    }
+
+    const targetPrefix = target.targetPath;
+    const metadataPath = (path: string) => {
+      const generatedPrefix = targetPrefix.replace(/\/(\d+)$/, '/0');
+      return path === generatedPrefix || path.startsWith(`${generatedPrefix}/`)
+        ? `${targetPrefix}${path.slice(generatedPrefix.length)}`
+        : path;
+    };
+    const fieldOrigins = { ...pending.fieldOriginsByPath };
+    const generatedPrefix = targetPrefix.replace(/\/(\d+)$/, '/0');
+    for (const path of Object.keys(fieldOrigins))
+      if (path === targetPrefix || path.startsWith(`${targetPrefix}/`))
+        delete fieldOrigins[path];
+    for (const [path, origin] of Object.entries(
+      result.review_metadata.field_origins_by_path,
+    )) {
+      if (path !== generatedPrefix && !path.startsWith(`${generatedPrefix}/`))
+        continue;
+      fieldOrigins[metadataPath(path)] = origin;
+    }
+    const omissions = pending.omissionsByPath.filter(
+      (omission) =>
+        omission.path !== targetPrefix &&
+        !omission.path.startsWith(`${targetPrefix}/`),
+    );
+    omissions.push(
+      ...result.review_metadata.omissions_by_path
+        .filter(
+          (omission) =>
+            omission.path === generatedPrefix ||
+            omission.path.startsWith(`${generatedPrefix}/`),
+        )
+        .map((omission) => ({
+          path: metadataPath(omission.path),
+          reasonCode: omission.reason_code,
+        })),
+    );
+    const nextPending = {
+      ...pending,
+      draft: nextDraft,
+      draftHash: cvDraftHash(nextDraft),
+      fieldOriginsByPath: fieldOrigins,
+      omissionsByPath: omissions,
+    };
+    const latest = await this.onlineCVRepo.findOne({
+      where: { _id: cv._id, userId: user._id, isDeleted: false },
+    });
+    const latestMetadata = latest && this.generationTrace(latest);
+    const latestPending = latest?.generationSnapshot?.pendingDraft;
+    if (
+      !latest ||
+      !latestMetadata ||
+      latestMetadata.operationId !== target.reviewOperationId ||
+      latestMetadata.regeneration?.operationId !== data.operationId ||
+      latestMetadata.regeneration.status !== 'RUNNING' ||
+      !latestPending ||
+      latestPending.operationId !== target.reviewOperationId ||
+      latestPending.draftHash !== target.expectedDraftHash ||
+      latestPending.reviewStatus !== 'PENDING' ||
+      latest.contentVersion !== data.expectedContentVersion
+    )
+      throw new ConflictException('Bản nháp đã thay đổi trong lúc tạo lại');
+
+    const generationSnapshot = {
+      ...(latest.generationSnapshot || {}),
+      pendingDraft: nextPending,
+    };
+    const revision = {
+      ...(latest.revision || {}),
+      sourceTrace: {
+        ...(latest.revision?.sourceTrace || {}),
+        generation: {
+          ...latestMetadata,
+          regeneration: {
+            ...latestMetadata.regeneration,
+            implementation: result.implementation,
+            requestId: result.draft.request_id,
+            correlationId: result.draft.trace_id,
+          },
+        },
+      },
+    };
+    const saved = await this.onlineCVRepo.update(
+      this.generationWriteCriteria(latest, true),
+      { generationSnapshot, revision },
+    );
+    if (!saved.affected)
+      throw new ConflictException('Bản nháp đã thay đổi trong lúc tạo lại');
+    latest.generationSnapshot = generationSnapshot;
+    latest.revision = revision as OnlineCV['revision'];
+    cv.revision = revision as OnlineCV['revision'];
+    cv.generationSnapshot = generationSnapshot;
+    return safeReviewWarnings(result);
   }
 
   async markGenerationFailure(
@@ -2449,6 +3980,40 @@ export class OnlineCVsService {
       where: { _id: data.cvId, userId: data.userId, isDeleted: false },
     });
     const current = cv && this.generationTrace(cv);
+    if (data.regenerationTarget) {
+      const attempt = current?.regeneration;
+      if (
+        !cv ||
+        !current ||
+        current.operationId !== data.regenerationTarget.reviewOperationId ||
+        attempt?.operationId !== data.operationId ||
+        attempt.status !== 'QUEUED' ||
+        attempt.expectedDraftHash !==
+          data.regenerationTarget.expectedDraftHash ||
+        attempt.targetPath !== data.regenerationTarget.targetPath
+      )
+        return false;
+      const revision = {
+        ...(cv.revision || {}),
+        sourceTrace: {
+          ...(cv.revision?.sourceTrace || {}),
+          generation: {
+            ...current,
+            regeneration: {
+              ...attempt,
+              status,
+              startedAt: new Date().toISOString(),
+            },
+          },
+        },
+      };
+      const result = await this.onlineCVRepo.update(
+        this.generationWriteCriteria(cv),
+        { revision },
+      );
+      if (result.affected) cv.revision = revision as OnlineCV['revision'];
+      return Boolean(result.affected);
+    }
     if (
       !cv ||
       !current ||
@@ -2461,18 +4026,18 @@ export class OnlineCVsService {
       status,
       startedAt: new Date().toISOString(),
     };
+    const revision = {
+      ...(cv.revision || {}),
+      sourceTrace: {
+        ...(cv.revision?.sourceTrace || {}),
+        generation: metadata,
+      },
+    };
     const result = await this.onlineCVRepo.update(
       this.generationWriteCriteria(cv),
-      {
-        revision: {
-          ...(cv.revision || {}),
-          sourceTrace: {
-            ...(cv.revision?.sourceTrace || {}),
-            generation: metadata,
-          },
-        },
-      },
+      { revision },
     );
+    if (result.affected) cv.revision = revision as OnlineCV['revision'];
     return Boolean(result.affected);
   }
 
@@ -2487,6 +4052,47 @@ export class OnlineCVsService {
     });
     if (!cv) return;
     const current = this.generationTrace(cv);
+    if (data.regenerationTarget) {
+      const attempt = current?.regeneration;
+      if (
+        !current ||
+        current.operationId !== data.regenerationTarget.reviewOperationId ||
+        attempt?.operationId !== data.operationId ||
+        !['QUEUED', 'RUNNING'].includes(attempt.status) ||
+        attempt.expectedDraftHash !==
+          data.regenerationTarget.expectedDraftHash ||
+        attempt.targetPath !== data.regenerationTarget.targetPath
+      )
+        return;
+      const regeneration = {
+        ...attempt,
+        status,
+        finishedAt: new Date().toISOString(),
+        ...(errorCode ? { errorCode } : {}),
+      };
+      const revision = {
+        ...(cv.revision || {}),
+        sourceTrace: {
+          ...(cv.revision?.sourceTrace || {}),
+          generation: { ...current, regeneration },
+        },
+      };
+      const result = await this.onlineCVRepo.update(
+        this.generationWriteCriteria(cv),
+        { revision },
+      );
+      if (result.affected) {
+        cv.revision = revision as OnlineCV['revision'];
+        this.logGenerationJobObservation(
+          data,
+          { ...current, regeneration },
+          status,
+          errorCode,
+          cv.revision?.sourceTrace,
+        );
+      }
+      return;
+    }
     if (
       !current ||
       current.operationId !== data.operationId ||
@@ -2500,15 +4106,88 @@ export class OnlineCVsService {
       ...(errorCode ? { errorCode } : {}),
       ...(warnings ? { warnings } : {}),
     };
-    await this.onlineCVRepo.update(this.generationWriteCriteria(cv), {
-      revision: {
-        ...(cv.revision || {}),
-        sourceTrace: {
-          ...(cv.revision?.sourceTrace || {}),
-          generation: metadata,
-        },
+    const revision = {
+      ...(cv.revision || {}),
+      sourceTrace: {
+        ...(cv.revision?.sourceTrace || {}),
+        generation: metadata,
       },
-    });
+    };
+    const result = await this.onlineCVRepo.update(
+      this.generationWriteCriteria(cv),
+      { revision },
+    );
+    if (result.affected) {
+      cv.revision = revision as OnlineCV['revision'];
+      this.logGenerationJobObservation(
+        data,
+        metadata,
+        status,
+        errorCode,
+        cv.revision?.sourceTrace,
+      );
+    }
+  }
+
+  private logGenerationJobObservation(
+    data: CvGenerationJobData,
+    metadata: CvGenerationMetadata,
+    status: CvGenerationOperationStatus,
+    errorCode?: string,
+    sourceTrace?: Record<string, unknown>,
+  ): void {
+    const regeneration = data.regenerationTarget
+      ? metadata.regeneration
+      : undefined;
+    const operationAttemptId =
+      regeneration?.operationId || metadata.operationId;
+    const correlationId =
+      regeneration?.correlationId ||
+      (typeof sourceTrace?.traceId === 'string'
+        ? sourceTrace.traceId
+        : operationAttemptId);
+    const safeErrorType =
+      errorCode && /^[A-Z0-9_]{1,48}$/.test(errorCode) ? errorCode : null;
+    Logger.log(
+      JSON.stringify({
+        operation_attempt_id: operationAttemptId,
+        request_id:
+          regeneration?.requestId ||
+          (typeof sourceTrace?.requestId === 'string'
+            ? sourceTrace.requestId
+            : operationAttemptId),
+        trace_id: correlationId,
+        correlation_id: correlationId,
+        capability_id: 'cv_generation',
+        implementation:
+          regeneration?.implementation || metadata.implementation || 'legacy',
+        status,
+        review_status:
+          metadata.reviewStatus === 'PENDING'
+            ? 'PENDING_REVIEW'
+            : metadata.reviewStatus ||
+              (status === 'COMPLETE' || status === 'DEGRADED'
+                ? 'NOT_REQUIRED'
+                : 'FAILED'),
+        duration_ms: Math.max(
+          0,
+          Date.now() -
+            Date.parse(regeneration?.createdAt || metadata.createdAt),
+        ),
+        steps:
+          regeneration?.implementation === 'agent' ||
+          metadata.implementation === 'agent'
+            ? 1
+            : 0,
+        model_calls: 1,
+        tool_calls:
+          regeneration?.implementation === 'agent' ||
+          metadata.implementation === 'agent'
+            ? 1
+            : 0,
+        error_type: safeErrorType,
+      }),
+    );
   }
 
   // Get all online CVs of current user
@@ -2517,7 +4196,7 @@ export class OnlineCVsService {
       where: { userId: user._id, isDeleted: false },
       order: { isPrimary: 'DESC', createdAt: 'DESC' },
     });
-    Logger.log(`Found ${cvs.length} online CV(s) for user ${user.email}`);
+    Logger.log(`Found ${cvs.length} online CV(s)`);
     return cvs;
   }
 
@@ -2538,6 +4217,260 @@ export class OnlineCVsService {
     return cv;
   }
 
+  private async approvePendingDraft(
+    id: string,
+    observedCv: OnlineCV,
+    dto: UpdateOnlineCVDto,
+    user: IUser,
+  ): Promise<OnlineCV> {
+    if (!dto.generationApproval) {
+      throw new ConflictException(
+        'Cần xác nhận bản nháp đang chờ trước khi lưu',
+      );
+    }
+    if (dto.expectedContentVersion !== observedCv.contentVersion) {
+      throw new ConflictException(
+        'CV đã được thay đổi; vui lòng tải lại trước khi lưu',
+      );
+    }
+    if (dto.generationMode === OnlineCvGenerationMode.EDITOR_ONLY) {
+      throw new BadRequestException(
+        'Chỉ endpoint tạo CV bằng AI mới được chuyển CV sang chế độ EDITOR_ONLY',
+      );
+    }
+
+    const {
+      generationApproval: _generationApproval,
+      expectedContentVersion: _expectedContentVersion,
+      generationMode: _generationMode,
+      htmlContent,
+      locale,
+      ...dataToSave
+    } = normalizeCvEntryCollections(dto);
+    const saved = await this.onlineCVRepo.manager.transaction(
+      async (manager) => {
+        const { policy, userInDb } = await this.assertGenerationPrerequisites(
+          user,
+          observedCv.templateType as 'template1' | 'template2',
+          manager,
+        );
+        if (
+          dto.templateType &&
+          dto.templateType !== 'template1' &&
+          !this.usersService.isCandidatePremium(userInDb)
+        ) {
+          throw new ForbiddenException(
+            'Mẫu CV Cao Cấp này chỉ dành riêng cho tài khoản Candidate Premium',
+          );
+        }
+        const repository = manager.getRepository(OnlineCV);
+        const current = await repository.findOne({
+          where: { _id: id, userId: user._id, isDeleted: false },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!current) throw new NotFoundException('Không tìm thấy CV');
+        if (
+          current.contentVersion !== dto.expectedContentVersion ||
+          current.contentVersion !== observedCv.contentVersion
+        ) {
+          throw new ConflictException(
+            'CV đã được thay đổi; vui lòng tải lại trước khi lưu',
+          );
+        }
+
+        const pending = current.generationSnapshot?.pendingDraft;
+        const generation = this.generationTrace(current);
+        if (
+          !pending ||
+          pending.reviewStatus !== 'PENDING' ||
+          !generation ||
+          generation.reviewStatus !== 'PENDING' ||
+          pending.operationId !== dto.generationApproval.operationId ||
+          generation.operationId !== pending.operationId ||
+          pending.draftHash !== dto.generationApproval.draftHash ||
+          generation.draftHash !== pending.draftHash ||
+          pending.expectedContentVersion !== current.contentVersion ||
+          generation.expectedContentVersion !== current.contentVersion ||
+          pending.sourceVersion !== generation.sourceVersion ||
+          pending.consentVersion !== policy.consentVersion ||
+          pending.consentPolicyHash !== policy.policyHash ||
+          generation.consentVersion !== policy.consentVersion ||
+          generation.consentPolicyHash !== policy.policyHash ||
+          new Date(pending.expiresAt).getTime() <= Date.now() ||
+          cvDraftHash(pending.draft) !== pending.draftHash
+        ) {
+          throw new ConflictException(
+            'Bản nháp đang chờ duyệt không còn hợp lệ',
+          );
+        }
+        const hasConsent = await this.aiCvConsentsService.hasValidConsent(
+          user._id,
+          AiCvConsentScope.CV_GENERATION,
+          policy.consentVersion,
+          policy.policyHash,
+          manager,
+        );
+        if (!hasConsent) {
+          throw new ForbiddenException('Quyền xử lý AI đã bị thu hồi');
+        }
+
+        await this.assertPendingDraftSourceCurrent(
+          current,
+          generation,
+          user,
+          manager,
+        );
+        const nextContentVersion = Math.max(
+          1,
+          Number(current.contentVersion || 1) + 1,
+        );
+        const generationSnapshot = { ...(current.generationSnapshot || {}) };
+        delete generationSnapshot.pendingDraft;
+        const approvedGeneration: CvGenerationMetadata = {
+          ...generation,
+          reviewStatus: 'APPROVED',
+          draftHash: pending.draftHash,
+          finishedAt: new Date().toISOString(),
+        };
+        const revision = {
+          ...(current.revision || {}),
+          ...(locale
+            ? {
+                locale: normalizeCvLocale(locale),
+                sourceTrace: {
+                  ...(current.revision?.sourceTrace || {}),
+                  locale: normalizeCvLocale(locale),
+                  generation: approvedGeneration,
+                },
+              }
+            : {
+                sourceTrace: {
+                  ...(current.revision?.sourceTrace || {}),
+                  generation: approvedGeneration,
+                },
+              }),
+          contentVersion: nextContentVersion,
+        };
+        const updateResult = await repository.update(
+          this.generationWriteCriteria(current, true),
+          {
+            ...dataToSave,
+            htmlContent,
+            generationSnapshot,
+            contentVersion: nextContentVersion,
+            revision,
+            updatedBy: { _id: user._id, email: user.email },
+          },
+        );
+        if (!updateResult.affected) {
+          throw new ConflictException(
+            'Bản nháp hoặc CV đã được thay đổi; vui lòng tải lại trước khi lưu',
+          );
+        }
+        return repository.findOneOrFail({
+          where: { _id: id, userId: user._id, isDeleted: false },
+        });
+      },
+    );
+    await this.invalidateUserCvSkillsCache(user._id);
+    if (saved.generationMode !== OnlineCvGenerationMode.EDITOR_ONLY) {
+      try {
+        await this.exportToPdf(id, user, htmlContent);
+      } catch (err) {
+        Logger.error('Auto PDF generation on approval save failed:', err);
+      }
+    }
+    return saved;
+  }
+
+  private async assertPendingDraftSourceCurrent(
+    cv: OnlineCV,
+    generation: CvGenerationMetadata,
+    user: IUser,
+    manager: EntityManager,
+  ): Promise<void> {
+    if (generation.kind === 'CAREER_PROFILE') {
+      if (
+        !generation.sourceProfileId ||
+        generation.sourceProfileVersion == null
+      ) {
+        throw new ConflictException(
+          'Nguồn hồ sơ của bản nháp không còn hợp lệ',
+        );
+      }
+      const profile = await manager
+        .getRepository(CandidateCareerProfile)
+        .findOne({
+          where: { _id: generation.sourceProfileId, userId: user._id },
+          lock: { mode: 'pessimistic_write' },
+        });
+      if (
+        !profile ||
+        profile.contentVersion !== generation.sourceProfileVersion
+      ) {
+        throw new ConflictException(
+          'Hồ sơ nghề nghiệp đã thay đổi sau khi tạo bản nháp',
+        );
+      }
+      const userRecord = await manager.getRepository(User).findOne({
+        where: { _id: user._id, isDeleted: false },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!userRecord)
+        throw new NotFoundException('Không tìm thấy tài khoản người dùng');
+      const job = generation.targetJobId
+        ? await this.lockCanonicalActiveJob(manager, generation.targetJobId)
+        : null;
+      if (generation.targetJobId && !job) {
+        throw new ConflictException(
+          'Tin tuyển dụng đã thay đổi sau khi tạo bản nháp',
+        );
+      }
+      const currentSourceVersion = createHash('sha256')
+        .update(
+          JSON.stringify({
+            profile: this.normalizedCareerProfileSnapshot(profile, userRecord),
+            job: this.jobSnapshot(job, generation.targetJobId || profile._id),
+          }),
+        )
+        .digest('hex');
+      if (currentSourceVersion !== generation.sourceVersion) {
+        throw new ConflictException(
+          'Nguồn hồ sơ đã thay đổi sau khi tạo bản nháp',
+        );
+      }
+      return;
+    }
+
+    const job = generation.targetJobId
+      ? await this.lockCanonicalActiveJob(manager, generation.targetJobId)
+      : null;
+    if (generation.targetJobId && !job) {
+      throw new ConflictException(
+        'Tin tuyển dụng đã thay đổi sau khi tạo bản nháp',
+      );
+    }
+    const jobSnapshot = this.jobSnapshot(
+      job,
+      generation.targetJobId || cv._id,
+      cv.position || cv.title || 'Candidate CV',
+    );
+    const sourceVersion = createHash('sha256')
+      .update(
+        JSON.stringify({
+          job: jobSnapshot,
+          updatedAt: job?.updatedAt?.toISOString() || null,
+          profileVersion: cv.contentVersion || 1,
+        }),
+      )
+      .digest('hex');
+    if (sourceVersion !== generation.sourceVersion) {
+      throw new ConflictException(
+        'Dữ liệu nguồn đã thay đổi sau khi tạo bản nháp',
+      );
+    }
+  }
+
   // Update online CV
   async update(id: string, updateOnlineCVDto: UpdateOnlineCVDto, user: IUser) {
     const cv = await this.findOne(id, user);
@@ -2547,6 +4480,13 @@ export class OnlineCVsService {
       throw new ConflictException(
         'CV đang được tạo; vui lòng chờ hoặc hủy yêu cầu',
       );
+    }
+    const pendingDraft = cv.generationSnapshot?.pendingDraft;
+    if (pendingDraft?.reviewStatus === 'PENDING') {
+      return this.approvePendingDraft(id, cv, updateOnlineCVDto, user);
+    }
+    if (updateOnlineCVDto.generationApproval) {
+      throw new ConflictException('Bản nháp đang chờ duyệt không còn hợp lệ');
     }
     if (updateOnlineCVDto.expectedContentVersion !== cv.contentVersion) {
       throw new ConflictException(
@@ -2587,26 +4527,27 @@ export class OnlineCVsService {
       ...dataToSave
     } = normalizedDto;
     const nextContentVersion = Math.max(1, Number(cv.contentVersion || 1) + 1);
+    const revision = {
+      ...(cv.revision || {}),
+      ...(locale
+        ? {
+            locale: normalizeCvLocale(locale),
+            sourceTrace: {
+              ...(cv.revision?.sourceTrace || {}),
+              locale: normalizeCvLocale(locale),
+            },
+          }
+        : {}),
+      contentVersion: nextContentVersion,
+    };
 
     const updateResult = await this.onlineCVRepo.update(
-      this.generationWriteCriteria(cv),
+      this.generationWriteCriteria(cv, Boolean(pendingDraft)),
       {
         ...dataToSave,
         htmlContent,
         contentVersion: nextContentVersion,
-        revision: {
-          ...(cv.revision || {}),
-          ...(locale
-            ? {
-                locale: normalizeCvLocale(locale),
-                sourceTrace: {
-                  ...(cv.revision?.sourceTrace || {}),
-                  locale: normalizeCvLocale(locale),
-                },
-              }
-            : {}),
-          contentVersion: nextContentVersion,
-        },
+        revision,
         updatedBy: {
           _id: user._id,
           email: user.email,
