@@ -1,6 +1,8 @@
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
 import { Role } from 'src/decorator/customize';
 import { OnlineCvGenerationProcessor } from 'src/online-cvs/online-cv-generation.processor';
+import { Logger } from '@nestjs/common';
+import { AiServiceError } from 'src/ai-matching/ai-service.client';
 import { createHash } from 'crypto';
 
 const user = {
@@ -1718,6 +1720,40 @@ describe('async online CV generation', () => {
       status: 'FAILED',
       errorCode: 'WORKER_INTERRUPTED',
     });
+  });
+
+  it('logs correlated safe diagnostics when AI generation fails', async () => {
+    const { service, cv, queue } = createExistingService();
+    const accepted = await service.enqueueGeneration(
+      cv._id,
+      { expectedContentVersion: 1 },
+      user as any,
+      'diagnostic-failure',
+    );
+    const privateMessage = 'private provider response must not be logged';
+    const logger = jest
+      .spyOn(Logger, 'error')
+      .mockImplementation(() => undefined);
+    jest
+      .spyOn(service, 'generate')
+      .mockRejectedValue(
+        new AiServiceError('AI_SERVICE_REJECTED', privateMessage),
+      );
+
+    await service.processGenerationJob(queue.add.mock.calls[0][1]);
+
+    const diagnostic = logger.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes('cv_generation_failed'));
+    expect(diagnostic).toContain(accepted.operationId);
+    expect(diagnostic).toContain('AI_SERVICE_REJECTED');
+    expect(diagnostic).toContain('AiServiceError');
+    expect(diagnostic).not.toContain(privateMessage);
+    expect(cv.revision.sourceTrace.generation).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'GENERATION_FAILED',
+    });
+    logger.mockRestore();
   });
 
   it('never downgrades a terminal operation after a late worker failure', async () => {

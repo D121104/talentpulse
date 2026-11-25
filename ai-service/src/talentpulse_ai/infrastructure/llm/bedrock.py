@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from math import isfinite
@@ -8,6 +9,20 @@ from typing import Protocol, cast
 
 from talentpulse_ai.agent_foundation.contracts import UnstructuredTextResponse
 from talentpulse_ai.core.exceptions import ProviderFailure, provider_failure_details
+
+_LOGGER = logging.getLogger(__name__)
+_BEDROCK_STOP_REASONS = frozenset(
+    {
+        "end_turn",
+        "tool_use",
+        "max_tokens",
+        "stop_sequence",
+        "guardrail_intervened",
+        "content_filtered",
+        "malformed_model_output",
+        "model_context_window_exceeded",
+    }
+)
 
 _BEDROCK_SCHEMA_UNSUPPORTED_KEYS = frozenset(
     {
@@ -188,7 +203,7 @@ class BedrockNovaGenerationAdapter:
             client,
             prompt,
             schema=_bedrock_response_schema(schema),
-            max_tokens=num_predict or 4096,
+            max_tokens=num_predict or 65_536,
         )
 
     def _generate_with_client(
@@ -256,8 +271,37 @@ class BedrockNovaGenerationAdapter:
                 raise ValueError("generation response has no text")
             try:
                 return json.loads(text)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 if schema is not None:
+                    usage = response.get("usage") if isinstance(response, Mapping) else None
+                    safe_usage = usage if isinstance(usage, Mapping) else {}
+                    stop_reason = (
+                        response.get("stopReason") if isinstance(response, Mapping) else None
+                    )
+                    safe_stop_reason = (
+                        stop_reason
+                        if isinstance(stop_reason, str) and stop_reason in _BEDROCK_STOP_REASONS
+                        else "unknown"
+                    )
+                    input_tokens = safe_usage.get("inputTokens")
+                    output_tokens = safe_usage.get("outputTokens")
+                    if type(input_tokens) is not int or input_tokens < 0:
+                        input_tokens = "unknown"
+                    if type(output_tokens) is not int or output_tokens < 0:
+                        output_tokens = "unknown"
+                    _LOGGER.warning(
+                        "bedrock_structured_output_not_json model=%s stop_reason=%s "
+                        "input_tokens=%s output_tokens=%s text_length_chars=%d "
+                        "json_error_line=%d json_error_column=%d json_error_position=%d",
+                        self._model,
+                        safe_stop_reason,
+                        input_tokens,
+                        output_tokens,
+                        len(text),
+                        exc.lineno,
+                        exc.colno,
+                        exc.pos,
+                    )
                     return UnstructuredTextResponse(text)
                 raise
         except Exception as exc:

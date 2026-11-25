@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import socket
+import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing import Literal
 from urllib.error import HTTPError, URLError
 
@@ -38,6 +40,9 @@ _SAFE_MODEL = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
 _SAFE_PROVIDER_CODE = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 _SAFE_PROVIDER_MESSAGE = re.compile(r"[A-Za-z0-9_.:-]{1,256}\Z")
 _SAFE_EXCEPTION_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,79}\Z")
+_SAFE_FAILURE_LOCATION = re.compile(
+    r"[A-Za-z0-9_.-]{1,128}:[0-9]{1,6}:[A-Za-z_][A-Za-z0-9_]{0,63}\Z"
+)
 _PROVIDER_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _PROVIDER_UUID = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -88,6 +93,8 @@ class ProviderFailureDetails:
     provider_message: str | None = None
     exception_type: str | None = None
     duration_ms: int | None = None
+    retry_after_seconds: int | None = None
+    failure_location: str | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in _PROVIDERS:
@@ -114,6 +121,14 @@ class ProviderFailureDetails:
             type(self.duration_ms) is not int or not 0 <= self.duration_ms <= 600_000
         ):
             raise ValueError("provider duration is invalid")
+        if self.retry_after_seconds is not None and (
+            type(self.retry_after_seconds) is not int or not 0 <= self.retry_after_seconds <= 86_400
+        ):
+            raise ValueError("provider retry delay is invalid")
+        if self.failure_location is not None and not _SAFE_FAILURE_LOCATION.fullmatch(
+            self.failure_location
+        ):
+            raise ValueError("provider failure location is invalid")
 
 
 def provider_failure_details(
@@ -146,7 +161,19 @@ def provider_failure_details(
         ),
         exception_type=safe_exception_type,
         duration_ms=max(0, min(duration_ms, 600_000)),
+        failure_location=_safe_failure_location(exc),
     )
+
+
+def _safe_failure_location(exc: BaseException) -> str | None:
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return None
+    frame = frames[-1]
+    filename = PurePath(frame.filename).name
+    function = re.sub(r"[^A-Za-z0-9_]", "_", frame.name)
+    location = f"{filename}:{frame.lineno}:{function}"
+    return location if _SAFE_FAILURE_LOCATION.fullmatch(location) else None
 
 
 def _safe_bedrock_validation_message(exc: BaseException) -> str | None:

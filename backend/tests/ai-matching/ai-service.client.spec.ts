@@ -2,6 +2,7 @@ import axios from 'axios';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { ConfigService } from '@nestjs/config';
+import { Logger } from '@nestjs/common';
 import { generateKeyPairSync } from 'crypto';
 import {
   AiServiceClient,
@@ -460,6 +461,32 @@ describe('AiServiceClient', () => {
         'X-Cv-Generation-Timeout-Ms': '45000',
       },
     });
+  });
+
+  it('logs CV rejection codes with correlation IDs but no provider message', async () => {
+    const client = new AiServiceClient(config(auth));
+    const privateMessage = 'private CV text from provider response';
+    const warning = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    request.mockResolvedValue({
+      status: 502,
+      data: { code: 'cv_generation_provider_failed', message: privateMessage },
+    });
+
+    await expect(client.generateCvDraft(cvDraftRequest)).rejects.toMatchObject({
+      code: 'AI_SERVICE_REJECTED',
+    });
+
+    const diagnostic = warning.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes('cv_ai_service_rejected'));
+    expect(diagnostic).toContain(cvDraftRequest.identity.request_id);
+    expect(diagnostic).toContain(cvDraftRequest.identity.trace_id);
+    expect(diagnostic).toContain(cvDraftRequest.identity.operation_attempt_id);
+    expect(diagnostic).toContain('cv_generation_provider_failed');
+    expect(diagnostic).not.toContain(privateMessage);
+    warning.mockRestore();
   });
 
   it('preserves commas and semicolons inside whole owned skill members', async () => {

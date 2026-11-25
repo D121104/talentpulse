@@ -47,7 +47,7 @@ def _validate_http_url(value: str, label: str) -> None:
         raise RuntimeError(f"{label} must be a valid HTTP(S) URL.")
 
 
-def _create_bedrock_agent_client(region: str, timeout: float) -> object:
+def create_bedrock_client_with_timeout(region: str, timeout: float) -> object:
     if not isfinite(timeout) or timeout <= 0:
         raise ValueError("agent provider timeout must be positive and finite")
     connect_timeout = min(1.0, timeout / 4)
@@ -144,7 +144,7 @@ def create_provider_bundle(
                     if bedrock_client is not None
                     else boto3.client("bedrock-runtime", region_name=bedrock_region),
                     bedrock_model,
-                    agent_client_factory=lambda timeout: _create_bedrock_agent_client(
+                    agent_client_factory=lambda timeout: create_bedrock_client_with_timeout(
                         bedrock_region, timeout
                     ),
                 )
@@ -202,7 +202,9 @@ def create_provider_bundle(
             BedrockNovaGenerationAdapter(
                 active_bedrock,
                 bedrock_model,
-                agent_client_factory=lambda timeout: _create_bedrock_agent_client(region, timeout),
+                agent_client_factory=lambda timeout: create_bedrock_client_with_timeout(
+                    region, timeout
+                ),
             )
             if generation == "bedrock"
             else GeminiGenerationAdapter(

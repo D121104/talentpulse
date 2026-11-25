@@ -204,7 +204,7 @@ function gate() {
           return {
             generateCvDraft,
             generateCvDraftReview: async (request) => ({
-              implementation: 'legacy',
+              implementation: 'agent',
               draft: await generateCvDraft(request),
               review_metadata: {
                 source_refs_by_path: {},
@@ -1068,16 +1068,19 @@ function gate() {
     }
   });
 
-  it('rejects stale editor PATCH after atomic generated completion', async () => {
+  it('keeps structured Agent output pending until explicit approval', async () => {
     const { accepted, worker } = await start();
     inference.release();
     await worker;
     const before = await peer
       .getRepository(OnlineCV)
       .findOneByOrFail({ _id: accepted.onlineCvId });
-    expect(before.contentVersion).toBe(2);
+    expect(before.contentVersion).toBe(1);
     expect(before.revision.sourceTrace.generation.status).toBe('COMPLETE');
-    expect(before.careerObjective).toBe('Generated objective');
+    expect(before.careerObjective).toBe('Build reliable systems');
+    expect(before.generationSnapshot.pendingDraft.draft.career_objective).toBe(
+      'Generated objective',
+    );
     await expect(
       other.update(
         before._id,

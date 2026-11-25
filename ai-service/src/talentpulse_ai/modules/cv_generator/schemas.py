@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import re
-import unicodedata
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from talentpulse_ai.modules.cv_analysis.schemas import (
     MatchIdentity,
-    Sha256Value,
     UuidValue,
     VersionValue,
 )
@@ -22,49 +19,6 @@ Text = Annotated[str, Field(min_length=1, max_length=2_000)]
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
 
 
-def _content_key(value: str) -> str:
-    """Compare user/provider text without changing the value we return."""
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    # Keep technology markers such as C++ and C# meaningful while treating
-    # punctuation, bullets and repeated whitespace as presentation noise.
-    normalized = re.sub(r"[^\w+#]+", " ", normalized, flags=re.UNICODE)
-    return " ".join(normalized.split())
-
-
-def _dedupe_texts(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for value in values:
-        cleaned = " ".join(value.split()).strip()
-        key = _content_key(cleaned)
-        if cleaned and key and key not in seen:
-            seen.add(key)
-            result.append(cleaned)
-    return result
-
-
-def _model_key(value: BaseModel) -> str:
-    parts: list[str] = []
-    for field, item in value.model_dump().items():
-        if isinstance(item, list):
-            rendered = " ".join(_content_key(str(entry)) for entry in item)
-        else:
-            rendered = _content_key(str(item)) if item is not None else ""
-        parts.append(f"{field}:{rendered}")
-    return "|".join(parts)
-
-
-def _dedupe_models(values: list[BaseModel]) -> list[BaseModel]:
-    seen: set[str] = set()
-    result: list[BaseModel] = []
-    for value in values:
-        key = _model_key(value)
-        if key and key not in seen:
-            seen.add(key)
-            result.append(value)
-    return result
-
-
 SectionName = Literal[
     "objective",
     "education",
@@ -73,16 +27,6 @@ SectionName = Literal[
     "skills",
     "activities",
     "certificates",
-    "awards",
-]
-LocalizationSection = Literal[
-    "headline",
-    "education",
-    "experience",
-    "projects",
-    "skills",
-    "certificates",
-    "activities",
     "awards",
 ]
 _DEFAULT_SECTION_ORDER: list[SectionName] = [
@@ -113,11 +57,6 @@ class CandidateProject(StrictModel):
     description: Text | None = None
     technologies: list[ShortText] = Field(default_factory=list, max_length=50)
 
-    @field_validator("technologies")
-    @classmethod
-    def unique_technologies(cls, values: list[str]) -> list[str]:
-        return _dedupe_texts(values)
-
 
 class CandidateEducation(StrictModel):
     school_name: ShortText | None = None
@@ -145,30 +84,6 @@ class CandidateProfile(StrictModel):
     activities: list[ShortText] = Field(default_factory=list, max_length=50)
     awards: list[ShortText] = Field(default_factory=list, max_length=50)
 
-    @field_validator("skills", "certificates")
-    @classmethod
-    def unique_owned_literals(cls, values: list[str]) -> list[str]:
-        seen: set[str] = set()
-        result: list[str] = []
-        for value in values:
-            if not value.strip():
-                raise ValueError("Owned skill and certificate literals must not be blank")
-            key = _content_key(value)
-            if key not in seen:
-                seen.add(key)
-                result.append(value)
-        return result
-
-    @field_validator("activities", "awards")
-    @classmethod
-    def unique_values(cls, values: list[str]) -> list[str]:
-        return _dedupe_texts(values)
-
-    @field_validator("education")
-    @classmethod
-    def unique_entries(cls, values: list[BaseModel]) -> list[BaseModel]:
-        return _dedupe_models(values)
-
 
 class JobProfile(StrictModel):
     job_id: UuidValue
@@ -194,52 +109,6 @@ class CvDraftRequest(StrictModel):
     consent_version: Annotated[str, Field(min_length=1, max_length=80)] | None = None
 
 
-class GeneratedProjectBullet(StrictModel):
-    source_index: int = Field(ge=0, le=49, description="Zero-based candidate project index.")
-    text: Text = Field(description="One concise, factual CV bullet in the requested locale.")
-
-
-class GeneratedBullet(StrictModel):
-    source_index: int = Field(ge=0, le=49, description="Zero-based candidate experience index.")
-    text: Text = Field(description="One concise, factual CV bullet in the requested locale.")
-
-
-class CoreCoverage(StrictModel):
-    """Explicit source-index coverage for core bullets."""
-
-    section: Literal["experience", "projects"]
-    source_index: int = Field(ge=0, le=49)
-    bullet_count: int = Field(ge=0, le=10)
-
-
-class ProviderTextValue(StrictModel):
-    """Legacy single-value payload retained for provider compatibility."""
-
-    text: Text = Field(...)
-
-
-class ProviderLocalizedItem(StrictModel):
-    """One flat localized scalar keyed by an application-owned target key."""
-
-    key: ShortText
-    text: Text = Field(...)
-
-
-class ProviderLocalizedItems(StrictModel):
-    """Chunked localization payload; item keys never come from provider mapping."""
-
-    items: list[ProviderLocalizedItem] = Field(default_factory=list, max_length=20)
-
-
-class ProviderCoreDraft(StrictModel):
-    """Provider payload for experience and project bullets only."""
-
-    bullets: list[GeneratedBullet] = Field(default_factory=list, max_length=100)
-    project_bullets: list[GeneratedProjectBullet] = Field(default_factory=list, max_length=100)
-    coverage: list[CoreCoverage] = Field(default_factory=list, max_length=100)
-    warnings: list[ShortText] = Field(default_factory=list, max_length=20)
-
-
 class DraftProject(CandidateProject):
     source_index: int = Field(ge=0, le=49)
     bullets: list[Text] = Field(default_factory=list, max_length=10)
@@ -253,6 +122,72 @@ class DraftExperience(CandidateExperience):
 class DraftSkill(StrictModel):
     name: ShortText
     description: Text | None = None
+
+
+class GeneratedEducation(StrictModel):
+    source_index: int = Field(ge=0, le=49)
+    degree: ShortText | None = None
+    major: ShortText | None = None
+    description: Text | None = None
+
+
+class GeneratedExperience(StrictModel):
+    source_index: int = Field(ge=0, le=49)
+    position: ShortText | None = None
+    description: Text | None = None
+    bullets: list[Text] = Field(default_factory=list, max_length=10)
+
+
+class GeneratedProject(StrictModel):
+    source_index: int = Field(ge=0, le=49)
+    role: ShortText | None = None
+    description: Text | None = None
+    bullets: list[Text] = Field(default_factory=list, max_length=10)
+
+
+class GeneratedSkillGroup(StrictModel):
+    group_name: ShortText
+    source_indices: list[int] = Field(min_length=1, max_length=100)
+    job_skill_indices: list[int] = Field(max_length=100)
+
+
+class GeneratedTextItem(StrictModel):
+    source_index: int = Field(ge=0, le=49)
+    text: ShortText
+
+
+class CvGenerationContent(StrictModel):
+    """Provider-generated CV content; request identity and contact fields stay application-owned."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "required": [
+                "title",
+                "education",
+                "projects",
+                "work_experience",
+                "skills",
+                "activities",
+                "certificates",
+                "awards",
+                "section_order",
+            ]
+        }
+    )
+
+    title: ShortText
+    position: ShortText | None = None
+    career_objective: Text | None = None
+    education: list[GeneratedEducation] = Field(default_factory=list, max_length=50)
+    projects: list[GeneratedProject] = Field(default_factory=list, max_length=3)
+    work_experience: list[GeneratedExperience] = Field(default_factory=list, max_length=3)
+    skills: list[GeneratedSkillGroup] = Field(default_factory=list, max_length=16)
+    activities: list[GeneratedTextItem] = Field(default_factory=list, max_length=50)
+    certificates: list[GeneratedTextItem] = Field(default_factory=list, max_length=50)
+    awards: list[GeneratedTextItem] = Field(default_factory=list, max_length=50)
+    section_order: list[SectionName] = Field(
+        default_factory=lambda: list(_DEFAULT_SECTION_ORDER), max_length=8
+    )
 
 
 class CvDraft(StrictModel):
@@ -285,29 +220,6 @@ class CvDraft(StrictModel):
     generated_by: Annotated[str, Field(min_length=1, max_length=64)] = "ai-service"
     source_version: VersionValue
     content_version: int = Field(ge=1, le=2_147_483_647)
-
-
-SafeGenerationWarning = Literal[
-    "FALLBACK_USED",
-    "INSUFFICIENT_EVIDENCE",
-    "SOURCE_UNAVAILABLE",
-    "STRUCTURE_INVALID",
-    "LOCALIZATION_FAILED",
-]
-
-
-class GenerateDraftToolInput(StrictModel):
-    """The model cannot select sources, owners, locales, or permissions."""
-
-
-class CvGenerationReceipt(StrictModel):
-    status: Literal["GENERATED"]
-    operation_attempt_id: UuidValue
-    source_version: VersionValue
-    content_version: int = Field(ge=1, le=2_147_483_647)
-    receipt_id: UuidValue
-    draft_hash: Sha256Value
-    warnings: list[SafeGenerationWarning] = Field(default_factory=list, max_length=20)
 
 
 ReviewFieldPath = Annotated[
@@ -369,7 +281,7 @@ class CvDraftReviewMetadata(StrictModel):
 
 
 class CvDraftReviewEnvelope(StrictModel):
-    implementation: Literal["legacy", "agent"]
+    implementation: Literal["agent"]
     draft: CvDraft
     review_metadata: CvDraftReviewMetadata
 

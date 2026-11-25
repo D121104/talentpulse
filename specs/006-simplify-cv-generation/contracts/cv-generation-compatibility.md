@@ -12,15 +12,15 @@
 
 - Preserve the existing strict `CvDraftRequest` and strict inner `CvDraft` schema.
 - Preserve the current bare `CvDraft` response for internal callers that do not request review metadata.
-- Preserve the trusted optional review envelope and its safe `review_metadata` sidecar. Do not add provider-specific fields to `CvDraft`.
-- Preserve internal scope/authorization behavior and capability-based provider selection. The provider may return malformed or semantically incorrect output; application validation remains authoritative.
+- Preserve the trusted optional review envelope and its safe `review_metadata` sidecar. New envelopes always identify `implementation: "agent"`; do not add provider-specific fields to `CvDraft`.
+- Preserve internal scope/authorization behavior. CV generation no longer uses a capability selector or legacy fallback; only Gemini/Bedrock structured-output providers are accepted.
 
 ## Generation Semantics
 
-- A hosted-profile simplification may change internal provider-call count or how many application stages run, but not the accepted request fields or user-visible draft/review semantics.
-- Every retained generated fact must keep its existing source/review treatment. Rejected facts remain omitted or produce the existing controlled failure; no provider output can set canonical identity, consent, ownership, approval or persistence state.
-- Keep total/per-call bounds and late-result rejection. Any re-tuning must preserve the user-facing timeout contract.
-- Ollama-specific request settings remain local to that adapter/profile if local support remains enabled.
+- Generation is one structured response containing all CV sections; requested locale appears in the generation prompt instead of a separate localization stage.
+- Provider output is converted into the unchanged `CvDraft` contract only after schema and source-index checks. Application-owned identity/contact fields are copied from the authorized request.
+- Prompt-injection separation, consent, source-reference metadata, pending review, explicit Save proof, per-request timeout and late-result rejection remain enforced.
+- Ollama is not a supported CV-generation provider; unrelated Ollama embedding/RAG usage is outside this contract.
 
 ## Compatibility Verification
 

@@ -31,6 +31,33 @@ class StructuredFakeProvider:
         return self.response
 
 
+def test_adapter_direct_output_uses_final_schema_without_decision_envelope() -> None:
+    class GeminiFakeProvider(StructuredFakeProvider):
+        provider_name = "gemini"
+        supports_structured_outputs = True
+
+    provider = GeminiFakeProvider({"title": "Synthetic CV"})
+    schema = {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+        "additionalProperties": False,
+    }
+    adapter = AgentModelAdapter(provider, direct_output=True)
+
+    decision = adapter.decide(
+        "Generate a CV in Vietnamese.",
+        timeout=2.5,
+        final_output_schema=schema,
+        tool_input_schemas={},
+    )
+
+    assert isinstance(decision, FinalDecision)
+    assert decision.output == {"title": "Synthetic CV"}
+    assert provider.received_schema == schema
+    assert provider.received_timeout == 2.5
+
+
 class TextFakeProvider:
     def __init__(self, response: object) -> None:
         self.response = response
@@ -174,6 +201,36 @@ def test_bedrock_uses_structured_decision_schema_for_final_and_allowed_tools() -
     assert provider.structured_schema["properties"]["input"]["anyOf"][0]["properties"] == {
         "query": {"type": "string"}
     }
+
+
+def test_bedrock_no_tool_agent_requires_non_null_final_output() -> None:
+    class StructuredBedrockProvider(TextFakeProvider):
+        provider_name = "bedrock"
+        supports_structured_outputs = True
+
+        def generate_structured(self, prompt, schema, timeout=None):
+            self.structured_prompt = prompt
+            self.structured_schema = schema
+            return {"kind": "final", "output": {"title": "Engineer"}}
+
+    output_schema = {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+        "additionalProperties": False,
+    }
+    provider = StructuredBedrockProvider({})
+
+    decision = AgentModelAdapter(provider).decide(
+        "Generate a CV.",
+        timeout=3.0,
+        final_output_schema=output_schema,
+        tool_input_schemas={},
+    )
+
+    assert isinstance(decision, FinalDecision)
+    assert decision.output == {"title": "Engineer"}
+    assert provider.structured_schema["properties"]["output"] == output_schema
 
 
 def test_bedrock_empty_tool_input_is_omitted_and_normalized_to_empty_object() -> None:

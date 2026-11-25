@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from io import BytesIO
 from urllib.error import HTTPError
 
@@ -8,8 +9,10 @@ import pytest
 from botocore.config import Config
 from pydantic import SecretStr, ValidationError
 
+from talentpulse_ai.agent_foundation.model import AgentModelAdapter
 from talentpulse_ai.core.config import Settings
 from talentpulse_ai.core.exceptions import ProviderFailure
+from talentpulse_ai.core.logging import log_ai_provider_failure
 from talentpulse_ai.infrastructure.embeddings.model import (
     CohereEmbeddingAdapter,
     OllamaEmbeddingAdapter,
@@ -220,6 +223,10 @@ def test_local_factory_supports_gemini_generation_with_ollama_embeddings() -> No
     assert isinstance(bundle.embedding, OllamaEmbeddingAdapter)
     assert isinstance(bundle.retriever, QdrantVectorRetriever)
     assert isinstance(bundle.generation, GeminiGenerationAdapter)
+    assert bundle.generation.supports_structured_outputs is True
+    assert (
+        AgentModelAdapter(bundle.generation, direct_output=True).supports_structured_outputs is True
+    )
     assert bundle.retriever.dimensions == settings.ollama_embedding_dimensions
     assert qdrant.calls == []
 
@@ -354,6 +361,80 @@ def test_gemini_adapter_logs_only_sanitized_structured_request_error(monkeypatch
     assert caught.value.details.provider_code == "INVALID_ARGUMENT"
     assert caught.value.details.provider_message == "response_json_schema_rejected"
     assert private not in repr(caught.value.details)
+
+
+@pytest.mark.parametrize(
+    ("http_status", "provider_status", "provider_message", "safe_message", "category"),
+    [
+        (
+            503,
+            "UNAVAILABLE",
+            "backend temporarily unavailable PRIVATE_CV",
+            "service_unavailable",
+            "connectivity",
+        ),
+        (
+            429,
+            "RESOURCE_EXHAUSTED",
+            "request quota exceeded PRIVATE_CV",
+            "rate_limited",
+            "rate_limited",
+        ),
+    ],
+)
+def test_gemini_adapter_extracts_safe_transient_error_metadata(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+    http_status: int,
+    provider_status: str,
+    provider_message: str,
+    safe_message: str,
+    category: str,
+) -> None:
+    body = json.dumps(
+        {
+            "error": {
+                "code": http_status,
+                "status": provider_status,
+                "message": provider_message,
+            }
+        }
+    ).encode()
+
+    def failed_urlopen(request: object, timeout: float) -> object:
+        del request, timeout
+        raise HTTPError(
+            "https://example.invalid",
+            http_status,
+            "provider failure",
+            {"Retry-After": "30"},
+            BytesIO(body),
+        )
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.llm.gemini.urlopen", failed_urlopen)
+    provider = GeminiGenerationAdapter("test-key", "gemini-3.5-flash-lite")
+
+    with pytest.raises(ProviderFailure) as caught:
+        provider.generate_structured("prompt", {"type": "object"})
+
+    assert caught.value.details is not None
+    assert caught.value.details.provider_status == http_status
+    assert caught.value.details.provider_code == provider_status
+    assert caught.value.details.provider_message == safe_message
+    assert caught.value.details.category == category
+    assert caught.value.details.retry_after_seconds == 30
+    assert "PRIVATE_CV" not in repr(caught.value.details)
+    with caplog.at_level(logging.WARNING):
+        log_ai_provider_failure(
+            details=caught.value.details,
+            capability="cv_generation",
+            operation="agent_model",
+            attempt="agent_model",
+        )
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"provider_code={provider_status}" in log
+    assert "retry_after_seconds=30" in log
+    assert "PRIVATE_CV" not in log
 
 
 def test_gemini_adapter_sanitizes_provider_failures(monkeypatch) -> None:

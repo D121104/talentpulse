@@ -71,18 +71,24 @@ def _gemini_response_schema(schema: Mapping[str, object]) -> dict[str, object]:
     return projected_schema
 
 
-def _safe_gemini_error_metadata(error: HTTPError) -> tuple[str | None, str | None]:
-    if error.code not in {400, 422}:
-        return None, None
+def _safe_gemini_error_metadata(
+    error: HTTPError,
+) -> tuple[str | None, str | None, int | None]:
+    """Extract bounded error metadata without retaining provider message text."""
+    if error.code not in {400, 422, 429} and not 500 <= error.code <= 599:
+        return None, None, None
     try:
         payload = json.loads(error.read(8192))
         provider_error = payload.get("error") if isinstance(payload, Mapping) else None
         if not isinstance(provider_error, Mapping):
-            return None, None
+            provider_error = {}
         provider_code = provider_error.get("status")
+        if not isinstance(provider_code, str):
+            provider_code = provider_error.get("code")
         message = provider_error.get("message")
     except (OSError, TypeError, ValueError):
-        return None, None
+        provider_code = None
+        message = None
 
     safe_code = (
         provider_code
@@ -90,7 +96,27 @@ def _safe_gemini_error_metadata(error: HTTPError) -> tuple[str | None, str | Non
         else None
     )
     normalized_message = message.casefold() if isinstance(message, str) else ""
-    if "responsejsonschema" in normalized_message:
+    normalized_code = safe_code.casefold() if safe_code is not None else ""
+    if error.code == 429 or normalized_code in {
+        "resource_exhausted",
+        "quota_exceeded",
+        "rate_limit_exceeded",
+        "too_many_requests",
+    }:
+        safe_message = "rate_limited"
+    elif error.code >= 500 or normalized_code in {"unavailable", "internal"}:
+        safe_message = (
+            "service_unavailable"
+            if (
+                normalized_code == "unavailable"
+                or any(
+                    phrase in normalized_message
+                    for phrase in ("unavailable", "overloaded", "try again later")
+                )
+            )
+            else "provider_server_error"
+        )
+    elif "responsejsonschema" in normalized_message:
         safe_message = "response_json_schema_rejected"
     elif "responseschema" in normalized_message:
         safe_message = "response_schema_rejected"
@@ -104,11 +130,20 @@ def _safe_gemini_error_metadata(error: HTTPError) -> tuple[str | None, str | Non
         safe_message = "model_rejected"
     else:
         safe_message = "invalid_request"
-    return safe_code, safe_message
+    retry_after = None
+    if error.headers is not None:
+        raw_retry_after = error.headers.get("Retry-After")
+        if isinstance(raw_retry_after, str) and raw_retry_after.isdecimal():
+            seconds = int(raw_retry_after)
+            if seconds <= 86_400:
+                retry_after = seconds
+    return safe_code, safe_message, retry_after
 
 
 class GeminiGenerationAdapter:
     """JSON generation adapter for the Gemini generateContent API."""
+
+    supports_structured_outputs = True
 
     def __init__(self, api_key: str, model: str, timeout: float = 25.0) -> None:
         if not api_key or not model or not isfinite(timeout) or timeout <= 0:
@@ -182,13 +217,14 @@ class GeminiGenerationAdapter:
                 model=self._model,
                 duration_ms=round((time.perf_counter() - started_at) * 1000),
             )
-            provider_code, provider_message = _safe_gemini_error_metadata(exc)
+            provider_code, provider_message, retry_after = _safe_gemini_error_metadata(exc)
             raise ProviderFailure(
                 "generation provider failed",
                 details=replace(
                     details,
                     provider_code=provider_code or details.provider_code,
                     provider_message=provider_message,
+                    retry_after_seconds=retry_after,
                 ),
             ) from exc
         except (URLError, TimeoutError, OSError) as exc:

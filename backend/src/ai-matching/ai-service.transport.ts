@@ -2,7 +2,12 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { createPrivateKey, createSign, randomUUID } from 'crypto';
-import { AiServiceError, isRecord, isString } from './ai-service.common';
+import {
+  AiServiceError,
+  isRecord,
+  isString,
+  isUuid,
+} from './ai-service.common';
 
 const DEFAULT_CV_PARSE_SCOPE = 'cv:parse';
 const DEFAULT_CV_MATCH_SCOPE = 'cv:match';
@@ -38,11 +43,27 @@ function ecdsaDerToJose(signature: Buffer): Buffer {
   return Buffer.concat([pad(r), pad(s)]);
 }
 function providerErrorCode(data: unknown): string | undefined {
-  if (!isRecord(data) || !isRecord(data.detail) || !isString(data.detail.code))
-    return undefined;
-  return /^[a-z0-9_]{1,64}$/.test(data.detail.code)
-    ? data.detail.code
-    : undefined;
+  if (!isRecord(data)) return undefined;
+  const nestedCode = isRecord(data.detail) ? data.detail.code : undefined;
+  const code = isString(nestedCode) ? nestedCode : data.code;
+  return isString(code) && /^[a-z0-9_]{1,64}$/.test(code) ? code : undefined;
+}
+
+function safeCvRequestIdentity(data: unknown, path: string) {
+  if (
+    path !== '/internal/v1/cv/draft' ||
+    !isRecord(data) ||
+    !isRecord(data.identity)
+  )
+    return {};
+  const { request_id, trace_id, operation_attempt_id } = data.identity;
+  return {
+    request_id: isUuid(request_id) ? request_id : 'none',
+    trace_id: isUuid(trace_id) ? trace_id : 'none',
+    operation_attempt_id: isUuid(operation_attempt_id)
+      ? operation_attempt_id
+      : 'none',
+  };
 }
 
 export class AiServiceTransport {
@@ -217,6 +238,26 @@ export class AiServiceTransport {
     try {
       response = await axios.request(request);
     } catch (error) {
+      if (path === '/internal/v1/cv/draft') {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'cv_ai_transport_failed',
+            ...safeCvRequestIdentity(data, path),
+            error_code:
+              axios.isAxiosError(error) &&
+              ['ECONNABORTED', 'ETIMEDOUT', 'ERR_CANCELED'].includes(
+                error.code || '',
+              )
+                ? 'AI_SERVICE_TIMEOUT'
+                : 'AI_SERVICE_UNAVAILABLE',
+            error_type:
+              error instanceof Error &&
+              /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(error.name)
+                ? error.name
+                : 'UnknownError',
+          }),
+        );
+      }
       if (
         (axios.isAxiosError(error) || isRecord(error)) &&
         (error.code === 'ECONNABORTED' ||
@@ -253,11 +294,22 @@ export class AiServiceTransport {
     }
     if (response.status < 200 || response.status >= 300) {
       const code = providerErrorCode(response.data);
-      this.logger.warn(
-        `AI service rejected request (${response.status}${
-          code ? `, ${code}` : ''
-        })`,
-      );
+      if (path === '/internal/v1/cv/draft') {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'cv_ai_service_rejected',
+            ...safeCvRequestIdentity(data, path),
+            status: response.status,
+            provider_error_code: code || 'none',
+          }),
+        );
+      } else {
+        this.logger.warn(
+          `AI service rejected request (${response.status}${
+            code ? `, ${code}` : ''
+          })`,
+        );
+      }
       throw new AiServiceError(
         path === '/internal/v1/cv/match-analysis' &&
         code === 'invalid_analysis_output'

@@ -11,16 +11,16 @@ This feature changes generation behavior only. It adds no persisted entity, data
 `CvDraftRequest` is an internal, strict, non-persisted request containing:
 
 - `identity`: request, trace and operation-attempt UUIDs.
-- `candidate`: candidate ID and name/contact fields plus optional headline, objective, skills, experience, education, projects, certificates, activities and awards.
+- `candidate`: source sections needed for generation; identity and contact values remain app-owned and are not sent to the model.
 - `job`: target job ID/title plus available company, description, location, work mode, level and skill facts.
 - `template_type`: `template1` or `template2`; `locale`: `en-US`, `vi-VN`, `en` or `vi`.
 - `source_version`, `content_version` and optional `consent_version`.
 
-The existing model rejects unknown fields and bounds text/list sizes. Identity, locale, template, consent and source/content version values are inputs, not fields this feature may redefine. Only the minimum required candidate facts are sent to the selected content provider.
+The existing request rejects unknown fields and bounds text/list sizes. Identity, locale, template, consent and source/content version values are inputs, not fields the model may redefine. Only candidate facts needed to generate the CV are sent to the selected Gemini/Bedrock provider.
 
 ### Provider Generation Result
 
-`ProviderCoreDraft` returns bounded experience/project bullets, source indices, coverage and warnings. Localization uses `ProviderLocalizedItems`, whose keys are application-owned; arbitrary provider-selected keys are not accepted. Both are untrusted intermediate results, not persistence entities. The AI service validates structure and then applies application-owned source, locale, relevance and factual checks. Provider-specific response schemas or JSON modes do not become the product contract.
+`CvGenerationContent` is the one structured Agent response. It contains CV sections and source indices; it is validated as a strict transient model and is not persisted. Locale is specified in the prompt. No core/localization intermediate payloads, repair objects, lexical or skill-rule results are produced.
 
 ### Editable CV Draft
 
@@ -28,7 +28,7 @@ The existing strict `CvDraft` represents the output shown in the CV editor. It c
 
 ### Review Metadata
 
-The existing opt-in review sidecar contains field origins and safe omission paths/reasons derived by the application. Existing draft warnings remain in their current `CvDraft` field. The sidecar contains no source text and does not replace `CvDraft`; this feature preserves its format and the NestJS mapping/staging behavior.
+The existing opt-in review sidecar contains field origins and source references derived by the application; it contains no source text and does not replace `CvDraft`. The sidecar format and NestJS mapping/staging behavior remain unchanged.
 
 ### Canonical CV and Profile
 
@@ -38,7 +38,7 @@ Saved CV/profile values, content version, primary/searchable flags and ownership
 
 ```text
 Authorized request
-  -> provider generation and application validation
+  -> one structured Agent response and schema/source-index validation
   -> editable draft + safe review metadata
   -> pending review in existing editor
   -> explicit applicant Save: apply validated draft

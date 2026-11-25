@@ -48,6 +48,30 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "value",
         "citation_keys",
         "referenced_job_ids",
+        "title",
+        "position",
+        "career_objective",
+        "education",
+        "projects",
+        "work_experience",
+        "skills",
+        "activities",
+        "certificates",
+        "awards",
+        "section_order",
+        "source_index",
+        "degree",
+        "major",
+        "description",
+        "role",
+        "bullets",
+        "name",
+        "project_name",
+        "technologies",
+        "company_name",
+        "start_date",
+        "end_date",
+        "school_name",
     }
 )
 _AGENT_VALIDATION_STAGES = frozenset(
@@ -56,6 +80,21 @@ _AGENT_VALIDATION_STAGES = frozenset(
 _AGENT_DECISION_FIELDS = frozenset({"kind", "output", "tool_call_id", "tool_id", "input"})
 _AGENT_OUTPUT_FIELDS = frozenset(
     {"answer_blocks", "claims", "citation_keys", "referenced_job_ids", "selected_job_ids"}
+)
+_CV_GENERATION_OUTPUT_FIELDS = frozenset(
+    {
+        "title",
+        "position",
+        "career_objective",
+        "education",
+        "projects",
+        "work_experience",
+        "skills",
+        "activities",
+        "certificates",
+        "awards",
+        "section_order",
+    }
 )
 _AGENT_INPUT_FIELDS = frozenset({"job_id", "occupation_query"})
 
@@ -110,7 +149,7 @@ def agent_response_shape(value: object) -> str:
         parts.append(f"extra={min(extra_count, 99)}")
 
     for field_name, allowed_fields in (
-        ("output", _AGENT_OUTPUT_FIELDS),
+        ("output", _AGENT_OUTPUT_FIELDS | _CV_GENERATION_OUTPUT_FIELDS),
         ("input", _AGENT_INPUT_FIELDS),
     ):
         nested = value.get(field_name)
@@ -145,6 +184,9 @@ def _safe_json_type(value: object) -> str:
         return "object"
     if isinstance(value, list):
         return "array"
+    type_name = type(value).__name__
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", type_name):
+        return f"instance:{type_name}"
     return "other"
 
 
@@ -206,6 +248,12 @@ def log_ai_provider_failure(
             ),
             "provider_code": details.provider_code or "none",
             "provider_message": details.provider_message or "none",
+            "retry_after_seconds": (
+                str(details.retry_after_seconds)
+                if details.retry_after_seconds is not None
+                else "none"
+            ),
+            "failure_location": details.failure_location or "none",
             "exception_type": details.exception_type or "none",
             "duration_ms": str(details.duration_ms) if details.duration_ms is not None else "none",
             "validation_errors": _validated_validation_summary(validation_errors),
@@ -224,6 +272,8 @@ def log_ai_provider_failure(
             f" provider_status={optional['provider_status']}"
             f" provider_code={optional['provider_code']}"
             f" provider_message={optional['provider_message']}"
+            f" retry_after_seconds={optional['retry_after_seconds']}"
+            f" failure_location={optional['failure_location']}"
             f" exception_type={optional['exception_type']}"
             f" duration_ms={optional['duration_ms']}"
             f" validation_errors={optional['validation_errors']}"

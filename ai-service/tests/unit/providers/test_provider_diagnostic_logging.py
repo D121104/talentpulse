@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from talentpulse_ai.core import logging as app_logging
 from talentpulse_ai.core.exceptions import ProviderFailureDetails
+from talentpulse_ai.modules.cv_generator.schemas import CvGenerationContent
 
 
 def _details() -> ProviderFailureDetails:
@@ -42,8 +43,8 @@ def test_event_includes_fixed_fields_and_valid_correlation(
         "model=cohere.embed-multilingual-v3 operation=embed_document attempt=single "
         "attempt_index=none category=rate_limited request_id="
         f"{request_id} trace_id={trace_id} provider_status=429 "
-        "provider_code=ThrottlingException provider_message=none "
-        "exception_type=ClientError duration_ms=250"
+        "provider_code=ThrottlingException provider_message=none retry_after_seconds=none "
+        "failure_location=none exception_type=ClientError duration_ms=250 validation_errors=none"
     ) in caplog.text
 
 
@@ -137,3 +138,60 @@ def test_validation_summary_logs_locations_and_types_without_values(
     )
     assert "PRIVATE_VALUE" not in caplog.text
     assert "PRIVATE_RESPONSE" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_type"),
+    [
+        (None, "null"),
+        ("private response", "string"),
+        ([], "array"),
+        (12, "number"),
+        (False, "boolean"),
+    ],
+)
+def test_agent_response_shape_identifies_exact_json_output_type(
+    value: object,
+    expected_type: str,
+) -> None:
+    shape = app_logging.agent_response_shape({"kind": "final", "output": value})
+
+    assert shape.endswith(f"output={expected_type}")
+    assert "private response" not in shape
+
+
+def test_agent_response_shape_identifies_opaque_type_without_value() -> None:
+    class ProviderOutput:
+        def __repr__(self) -> str:
+            return "private CV response"
+
+    shape = app_logging.agent_response_shape({"kind": "final", "output": ProviderOutput()})
+
+    assert shape.endswith("output=instance:ProviderOutput")
+    assert "private CV response" not in shape
+
+
+def test_cv_response_shape_reports_known_field_types_without_values() -> None:
+    shape = app_logging.agent_response_shape(
+        {
+            "kind": "final",
+            "output": {"education": "private education text", "skills": []},
+        }
+    )
+
+    assert "output_fields=education:string-skills:array" in shape
+    assert "private education text" not in shape
+
+
+def test_cv_validation_summary_keeps_static_schema_paths_without_values() -> None:
+    try:
+        CvGenerationContent.model_validate(
+            {"title": "Engineer", "education": "private education text"}
+        )
+    except ValidationError as error:
+        summary = app_logging.validation_error_summary(error)
+    else:
+        raise AssertionError("invalid CV output unexpectedly passed validation")
+
+    assert "education:list_type" in summary
+    assert "private education text" not in summary

@@ -34,6 +34,7 @@ from talentpulse_ai.agent_foundation.tools import ToolDispatcher, ToolDispatchEr
 from talentpulse_ai.core.logging import (
     agent_response_shape,
     log_ai_agent_validation_failure,
+    log_ai_provider_failure,
     validation_error_summary,
 )
 
@@ -168,6 +169,24 @@ def build_agent_graph(
                 allow_text_recovery=bool(tool_results),
             )
         except AgentModelError as exc:
+            if request.capability_id == "cv_generation" and exc.details is not None:
+                log_ai_provider_failure(
+                    details=exc.details,
+                    capability="cv_generation",
+                    operation="agent_model",
+                    attempt="agent_model",
+                    request_id=(
+                        request_id
+                        if isinstance(
+                            (request_id := request.authorized_context.get("request_id")), str
+                        )
+                        else None
+                    ),
+                    trace_id=request.correlation_id,
+                    attempt_index=1,
+                    validation_errors=exc.validation_errors,
+                    response_shape=exc.response_shape,
+                )
             interruption = interruption_error(policy, started_at, cancellation_event)
             error = interruption or _safe_error(exc.code, exc.safe_message, retryable=True)
             return {

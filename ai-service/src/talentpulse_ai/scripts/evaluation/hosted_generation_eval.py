@@ -6,7 +6,7 @@ import argparse
 import json
 import re
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from math import isfinite
 from pathlib import Path
 from typing import Any, cast
@@ -15,7 +15,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from talentpulse_ai.agent_foundation.contracts import ModelDecision
 from talentpulse_ai.modules.cv_analysis.schemas import MatchNarrative
-from talentpulse_ai.modules.cv_generator.schemas import CvDraft, ProviderLocalizedItems
+from talentpulse_ai.modules.cv_generator.schemas import CvDraft
 from talentpulse_ai.modules.rag_chatbot.schemas import ProviderGeneration
 
 JOURNEYS = (
@@ -69,7 +69,7 @@ def _contract(journey: str) -> TypeAdapter[Any]:
         "CAREER_CHAT_AGENT": ModelDecision,
         "CV_MATCH_ANALYSIS": MatchNarrative,
         "CV_GENERATION": CvDraft,
-        "CV_LOCALIZATION": ProviderLocalizedItems,
+        "CV_LOCALIZATION": CvDraft,
     }
     return TypeAdapter(models.get(journey, ProviderGeneration))
 
@@ -93,9 +93,9 @@ def _safety(case: dict[str, Any], value: dict[str, Any]) -> bool:
                     if re.fullmatch(r"[mg]\d+", ref) and ref not in supplied:
                         return False
     if case["journey"] == "CV_LOCALIZATION":
-        expected = re.findall(r"\b([a-z_]+) =", case["prompt"])
-        keys = [item["key"] for item in value["items"]]
-        return sorted(keys) == sorted(expected)
+        return value.get("generation_mode") == "EDITOR_ONLY" and not any(
+            value.get(key) for key in ("email", "phone", "address", "link")
+        )
     return True
 
 
@@ -230,6 +230,7 @@ def evaluate_application_journeys(
     provider_factory: Callable[[], object],
     *,
     provider_name: str = "scripted",
+    journeys: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Run explicit synthetic service requests, without constructing application dependencies.
 
@@ -239,18 +240,24 @@ def evaluate_application_journeys(
     from talentpulse_ai.agent_foundation.model import AgentModelAdapter
     from talentpulse_ai.modules.cv_analysis.analysis import MatchAnalysisService
     from talentpulse_ai.modules.cv_analysis.schemas import MatchAnalysisRequest
+    from talentpulse_ai.modules.cv_generator.agent import CvGenerationAgent
     from talentpulse_ai.modules.cv_generator.schemas import CvDraftRequest
-    from talentpulse_ai.modules.cv_generator.service import CvDraftGenerationService
     from talentpulse_ai.modules.rag_chatbot.agent import CareerChatAgent
     from talentpulse_ai.modules.rag_chatbot.generation.generator import GenerationService
     from talentpulse_ai.modules.rag_chatbot.schemas import GenerationProvider, RagGenerateRequest
 
+    selected_journeys = tuple(dict.fromkeys(JOURNEYS if journeys is None else journeys))
+    if not selected_journeys or any(journey not in JOURNEYS for journey in selected_journeys):
+        raise ValueError("invalid_journey_selection")
+    selected_journey_set = set(selected_journeys)
     if scan_sensitive(cases):
         raise ValueError("unsafe_dataset")
     provider: object | None = None
     results: list[dict[str, Any]] = []
     review_sheet: list[dict[str, Any]] = []
     for case in cases:
+        if case.get("journey") not in selected_journey_set:
+            continue
         row = {
             "provider": provider_name,
             "case_id": case["id"],
@@ -269,7 +276,7 @@ def evaluate_application_journeys(
             row["outcome"] = "fixture_validation_failure"
             continue
         journey = case["journey"]
-        draft_service: CvDraftGenerationService | None = None
+        cv_metrics: dict[str, object] | None = None
         try:
             if provider is None:
                 provider = provider_factory()
@@ -291,23 +298,20 @@ def evaluate_application_journeys(
                     .model_dump(mode="json")
                 )
             else:
-                # Localization is an application-owned stage of draft generation, not
-                # a public endpoint accepting arbitrary provider localization keys.
-                draft_service = CvDraftGenerationService(cast(GenerationProvider, provider))
-                value = draft_service.generate(cast(CvDraftRequest, request)).model_dump(
-                    mode="json"
-                )
+                generation = CvGenerationAgent(
+                    AgentModelAdapter(cast(GenerationProvider, provider), direct_output=True)
+                ).generate_with_review(cast(CvDraftRequest, request))
+                value = generation.draft.model_dump(mode="json")
+                cv_metrics = _cv_generation_metrics(generation)
             if scan_sensitive(value):
                 row["outcome"] = "safety_failure"
                 continue
-            first_pass = _first_pass_contract_valid(
-                journey,
-                value,
-                draft_service.last_metrics if draft_service is not None else None,
-            )
+            first_pass = _first_pass_contract_valid(journey, value, cv_metrics)
             row["outcome"] = "application_completed"
             row["first_pass_contract_valid"] = first_pass
             row["response"] = value
+            if cv_metrics is not None:
+                row["cv_generation_metrics"] = cv_metrics
             review_id = f"review-{len(review_sheet) + 1}"
             row["review_id"] = review_id
             review_sheet.append(
@@ -329,7 +333,7 @@ def evaluate_application_journeys(
         except Exception as exc:
             row["outcome"] = _failure_outcome(exc)
     groups = []
-    for journey in JOURNEYS:
+    for journey in selected_journeys:
         rows = [row for row in results if row["journey"] == journey]
         passed = sum(row.get("first_pass_contract_valid") is True for row in rows)
         available_reviews = sum(row["outcome"] == "application_completed" for row in rows)
@@ -358,7 +362,7 @@ def evaluate_application_journeys(
             "Service execution only; no API authorization, retrieval or persistence coverage.",
             "Service completion includes repair/fallback; first_pass_contract_valid excludes them.",
             "Agent tools read only the supplied prepared context; no canonical lookup is executed.",
-            "CV localization executes within draft generation using application runtime budgets.",
+            "Both CV journeys use one structured Agent response; no legacy localization call runs.",
             "Prose cases require explicit canonical IDs, consent snapshots and matching facts.",
             "Hosted quality requires live provider evidence and independent human review.",
         ],
@@ -386,20 +390,34 @@ def _validated_application_request(case: dict[str, Any]) -> BaseModel:
 
 
 def _first_pass_contract_valid(
-    journey: str, response: dict[str, Any], metrics: dict[str, object] | None = None
+    journey: str, response: dict[str, Any], metrics: Mapping[str, object] | None = None
 ) -> bool:
     if journey.startswith("RAG_") or journey == "CAREER_CHAT_AGENT":
         return response.get("source") == "llm" and response.get("degraded") is False
     if journey in {"CV_GENERATION", "CV_LOCALIZATION"}:
-        call_kinds = (metrics or {}).get("provider_call_kinds", [])
-        warnings = response.get("warnings", [])
         return (
-            isinstance(call_kinds, list)
-            and not any("repair" in str(kind) for kind in call_kinds)
-            and not bool((metrics or {}).get("provider_timeout_count", 0))
-            and not any("provenance=fallback" in str(item) for item in warnings)
+            (metrics or {}).get("provider_call_count") == 1
+            and (metrics or {}).get("repair_call_count") == 0
+            and (metrics or {}).get("tool_call_count") == 0
+            and response.get("generation_mode") == "EDITOR_ONLY"
         )
     return True
+
+
+def _cv_generation_metrics(result: object) -> dict[str, object]:
+    from talentpulse_ai.modules.cv_generator.agent import CvGenerationReviewResult
+
+    if not isinstance(result, CvGenerationReviewResult):
+        raise TypeError("cv_generation_metrics_require_agent_result")
+    return {
+        "provider_call_count": result.model_calls,
+        "provider_calls_by_kind": {"structured_cv_draft": result.model_calls},
+        "repair_call_count": 0,
+        "tool_call_count": result.tool_calls,
+        "provider_elapsed_ms": result.elapsed_ms,
+        "total_elapsed_ms": result.elapsed_ms,
+        "omission_count": len(result.review_metadata.omissions_by_path),
+    }
 
 
 def validate_application_dataset(
@@ -480,6 +498,7 @@ def _live_provider(name: str) -> tuple[object, str]:
     from talentpulse_ai.core.config import Settings
     from talentpulse_ai.infrastructure.llm.bedrock import BedrockNovaGenerationAdapter
     from talentpulse_ai.infrastructure.llm.gemini import GeminiGenerationAdapter
+    from talentpulse_ai.infrastructure.provider_factory import create_bedrock_client_with_timeout
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     adapter: Any
@@ -494,12 +513,20 @@ def _live_provider(name: str) -> tuple[object, str]:
     else:
         if not settings.bedrock_model or not settings.bedrock_region:
             raise ValueError("provider_configuration_failure")
+        bedrock_model = settings.bedrock_model
+        bedrock_region = settings.bedrock_region
         client = boto3.client(
             "bedrock-runtime",
-            region_name=settings.bedrock_region,
+            region_name=bedrock_region,
             config=Config(read_timeout=30, connect_timeout=5, retries={"total_max_attempts": 1}),
         )
-        adapter = BedrockNovaGenerationAdapter(client, settings.bedrock_model)
+        adapter = BedrockNovaGenerationAdapter(
+            client,
+            bedrock_model,
+            agent_client_factory=lambda timeout: create_bedrock_client_with_timeout(
+                bedrock_region, timeout
+            ),
+        )
 
     return adapter, str(adapter.model_name)
 
@@ -514,6 +541,7 @@ def main() -> int:
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--reviewed-report", type=Path)
+    parser.add_argument("--journey", choices=JOURNEYS, action="append")
     args = parser.parse_args()
     try:
         if args.reviewed_report is not None:
@@ -532,6 +560,7 @@ def main() -> int:
                     cases,
                     _constant_provider_factory(provider),
                     provider_name=name,
+                    journeys=tuple(args.journey) if args.journey else None,
                 )
                 for name, provider in providers.items()
             ]

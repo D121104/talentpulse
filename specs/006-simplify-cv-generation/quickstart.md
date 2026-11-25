@@ -1,53 +1,57 @@
-# Quickstart: Rút gọn quy trình tạo CV
+# Quickstart: Tạo CV bằng Agent và structured output
 
-## Prerequisites
+## Runtime
 
-- Python 3.12 or 3.13 and `uv` for the AI service.
-- Node 24 first on `PATH` for the existing NestJS test suites, installed backend/frontend dependencies, and a disposable PostgreSQL test database for persistence integration cases.
-- Deterministic provider doubles for routine tests. Do not load `.env`, print credentials, or use real CV data.
-- Live hosted-model comparison is optional and may incur charges. It requires explicit authorization for the selected profiles, data processing terms, and any human review of outputs.
+CV generation luôn chạy qua một Agent structured response và chỉ chấp nhận provider Gemini hoặc Bedrock. Không cần `AI_AGENT_ENABLED_CAPABILITIES` để bật CV; selector đó chỉ còn cho các capability khác.
 
-## 1. Run Deterministic CV Generation Tests
+Chạy Gemini:
+
+```bash
+scripts/start-local.sh --ai-profile=gemini
+```
+
+Chạy Bedrock:
+
+```bash
+scripts/start-local.sh --ai-profile=bedrock
+```
+
+Gemini cần `AI_GEMINI_API_KEY`; Bedrock cần region và AWS credentials. Cung cấp cấu hình an toàn qua môi trường local hiện hành, không ghi credentials vào lệnh hoặc log. Startup script có thể còn chạy Ollama cho embedding/RAG; CV content generation dùng provider Gemini/Bedrock đã chọn và từ chối Ollama.
+
+Trước khi tạo CV, ứng viên cần consent còn hiệu lực. Draft được staging ở trạng thái pending review; chỉ explicit Save mới cập nhật CV canonical.
+
+## Deterministic Verification
 
 Run from `ai-service/`:
 
 ```bash
-uv sync
-uv run pytest tests/unit/cv_generator tests/unit/providers/test_provider_factory.py tests/integration/test_cv_api.py -q
-uv run ruff check src/talentpulse_ai/modules/cv_generator tests/unit/cv_generator tests/integration/test_cv_api.py
-uv run mypy
+AI_ENVIRONMENT=test AI_EMBEDDING_PROVIDER=deterministic AI_VECTOR_STORE_PROVIDER=memory AI_GENERATION_PROVIDER=deterministic \
+  uv run pytest tests/unit/cv_generator/test_structured_agent.py tests/unit/agent_foundation/test_model.py tests/unit/evals/test_application_journeys.py tests/unit/evals/test_hosted_generation_eval.py tests/unit/providers/test_provider_factory.py tests/integration/test_cv_api.py -q
+AI_ENVIRONMENT=test AI_EMBEDDING_PROVIDER=deterministic AI_VECTOR_STORE_PROVIDER=memory AI_GENERATION_PROVIDER=deterministic \
+  uv run ruff check src tests
+AI_ENVIRONMENT=test AI_EMBEDDING_PROVIDER=deterministic AI_VECTOR_STORE_PROVIDER=memory AI_GENERATION_PROVIDER=deterministic \
+  uv run mypy
 ```
 
-Expected: tests do not contact Gemini, Bedrock, Ollama, Qdrant or a live database. Assertions cover the unchanged draft/review contract, grounding, locale, source identity, partial/unsafe output, deadlines and finite provider calls.
+Tests use synthetic inputs and provider doubles; they do not call Gemini/Bedrock, Ollama, Qdrant or a live database. Assertions cover one structured response, requested locale in prompt, source-index bounds, canonical identity copying, no-tool execution, unsupported-provider rejection and review envelope compatibility.
 
-## 2. Verify Existing Review and Persistence Boundaries
+Implementation verification completed: the AI-service full deterministic suite passed with the existing production-provider startup test excluded because local `AI_QDRANT_URL` configuration is not HTTPS; affected AI CV/Agent/evaluator/API suites, Ruff and mypy passed. Backend build passed; 135 focused CV lifecycle/unit tests and 28 PostgreSQL integration tests passed. Frontend editor tests passed (24). No live provider call or human quality evaluation was run.
+
+## Review/Persistence Verification
 
 Run from the repository root:
 
 ```bash
-npm --prefix backend test -- --runInBand tests/online-cvs/async-generation.service.spec.ts tests/online-cvs/async-generation.postgres.integration.spec.ts tests/online-cvs/online-cvs.service.spec.ts tests/online-cvs/legacy-generation-privacy.spec.ts
+npm --prefix backend test -- --runInBand tests/online-cvs/async-generation.service.spec.ts tests/online-cvs/async-generation.postgres.integration.spec.ts tests/online-cvs/online-cvs.service.spec.ts tests/online-cvs/generate-from-career-profile.service.spec.ts
 node --test frontend/src/pages/cv/CVEditorPage.test.mjs
 ```
 
-Expected: generation still produces a pending editable draft; source CV/profile stay unchanged until explicit Save; Reject/Expire and stale approvals retain their existing behavior.
+Confirm pending drafts remain readable and can be explicitly saved, rejected or expired. Existing persisted legacy metadata remains readable; it cannot invoke legacy generation.
 
-## 3. Compare a Candidate Change
+## Hosted Evaluation
 
-1. Record the exact non-secret hosted generation profiles and the current code revision. Do not infer active production profiles from a local developer configuration.
-2. After the feature adds journey filtering to the existing evaluator, run the opt-in synthetic evaluation only after explicit authorization. From `ai-service/`:
-
-```bash
-PYTHONPATH=src uv run python -m talentpulse_ai.scripts.evaluation.hosted_generation_eval \
-  --provider all \
-  --journey CV_GENERATION \
-  --journey CV_LOCALIZATION \
-  --dataset evals/datasets/generation_quality_eval_v1.json \
-  --output /tmp/talentpulse-cv-generation-candidate.json
-```
-
-3. Compare with the recorded baseline per hosted profile. Confirm first-pass contract validity, completion/retry frequency, call/repair counts, latency, omissions and safety outcomes independently. Human-review at least 10 representative synthetic outputs per profile using relevance, factual accuracy, usefulness and grounding.
-4. Do not run the command or start reviewer distribution until the user authorizes provider cost/data processing. No results from deterministic provider doubles count as hosted-quality evidence.
+The fixed synthetic evaluator supports filtering with `--journey CV_GENERATION` and `--journey CV_LOCALIZATION`; both groups run the complete structured draft flow with different locales. Do not run live provider comparison until provider cost/data processing is explicitly authorized. No hosted baseline or human rating is claimed for this implementation.
 
 ## Rollback
 
-Restore the previous AI-service CV generation code/provider policy for the affected profile. Keep NestJS ownership/consent/approval enforcement and the editor's pending-draft lifecycle active. No database migration or persisted CV repair is required; do not delete or apply pending drafts as part of rollback. Re-run the deterministic CV API, provider and review lifecycle suites before restoring the candidate policy.
+Rollback by restoring the previous release/source revision (`3426ba0`). The new runtime has no legacy generation selector or fallback. No database migration or saved-CV repair is required; leave pending drafts for normal review/expiry behavior.

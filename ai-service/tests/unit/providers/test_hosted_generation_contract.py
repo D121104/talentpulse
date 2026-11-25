@@ -18,6 +18,42 @@ from talentpulse_ai.infrastructure.llm.gemini import (
     GeminiGenerationAdapter,
     _gemini_response_schema,
 )
+from talentpulse_ai.modules.cv_generator.schemas import CvGenerationContent
+
+
+def test_bedrock_decision_schema_requires_final_payload_without_tools() -> None:
+    output_schema = {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+        "additionalProperties": False,
+    }
+
+    decision_schema = _bedrock_decision_schema(output_schema, None)
+
+    assert decision_schema["properties"]["output"] == output_schema
+    assert decision_schema["required"] == ["kind", "output"]
+
+
+def test_bedrock_decision_schema_keeps_null_output_for_tool_calls() -> None:
+    output_schema = {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+        "additionalProperties": False,
+    }
+    tool_schema = {
+        "lookup": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        }
+    }
+
+    decision_schema = _bedrock_decision_schema(output_schema, tool_schema)
+
+    assert decision_schema["properties"]["output"] == {"anyOf": [output_schema, {"type": "null"}]}
 
 
 def test_gemini_projection_removes_complexity_bounds_but_preserves_contract() -> None:
@@ -171,7 +207,7 @@ def test_bedrock_structured_generation_uses_converse_json_schema() -> None:
     assert result == {"kind": "final", "output": {}, "tool_id": None, "input": None}
     request = client.calls[0]
     assert request["modelId"] == "global.moonshotai.kimi-k3.1"
-    assert request["inferenceConfig"] == {"maxTokens": 4096}
+    assert request["inferenceConfig"] == {"maxTokens": 65536}
     assert client_factory_calls == [4.0]
     assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
     assert (
@@ -327,3 +363,54 @@ def test_agent_contracts_project_to_bedrock_structured_schema_subset() -> None:
         optional_properties, union_properties = count_constraints(schema)
         assert optional_properties <= 12
         assert union_properties <= 16
+
+
+def test_cv_generation_schema_fits_bedrock_structured_output_limits() -> None:
+    decision_schema = _bedrock_decision_schema(
+        CvGenerationContent.model_json_schema(),
+        None,
+    )
+    schema = _bedrock_response_schema(decision_schema)
+
+    generated_content = decision_schema["properties"]["output"]
+    assert isinstance(generated_content, dict)
+    assert set(generated_content["required"]) == {
+        "title",
+        "education",
+        "projects",
+        "work_experience",
+        "skills",
+        "activities",
+        "certificates",
+        "awards",
+        "section_order",
+    }
+
+    def count_constraints(value: object) -> tuple[int, int]:
+        if isinstance(value, dict):
+            properties = value.get("properties", {})
+            required = value.get("required", [])
+            optional = len(properties) - len(required) if isinstance(properties, dict) else 0
+            unions = (
+                sum(
+                    1
+                    for property_schema in properties.values()
+                    if isinstance(property_schema, dict)
+                    and (
+                        isinstance(property_schema.get("type"), list) or "anyOf" in property_schema
+                    )
+                )
+                if isinstance(properties, dict)
+                else 0
+            )
+            for child in value.values():
+                child_optional, child_unions = count_constraints(child)
+                optional += child_optional
+                unions += child_unions
+            return optional, unions
+        if isinstance(value, list):
+            totals = [count_constraints(child) for child in value]
+            return sum(item[0] for item in totals), sum(item[1] for item in totals)
+        return 0, 0
+
+    assert count_constraints(schema) == (10, 9)

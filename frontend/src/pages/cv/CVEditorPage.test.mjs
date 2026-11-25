@@ -668,17 +668,15 @@ test("T028: pending local edits remain local and explicit Save carries the origi
   assert.equal(writes[0].payload.title, "Locally reviewed title");
 });
 
-test("T028 source contract: review UI consumes field-level origins, not just draft-wide provenance", () => {
-  assert.match(source, /fieldOriginsByPath/, "Read owner-scoped field origins");
-  for (const origin of ["SOURCE", "LOCALIZED", "AI_SUGGESTED", "FALLBACK"]) {
-    assert.match(source, new RegExp(`\\b${origin}\\b`), `Label ${origin}`);
-  }
-  assert.match(source, /uiVi\s*\?[^\n]*[à-ỹ][^\n]*:[^\n]*[A-Za-z]/);
-  assert.match(
-    source,
-    /fieldOriginsByPath[\s\S]*?\[/,
-    "Resolve origin by field path",
+test("T028 source contract: review banner omits per-field regeneration controls", () => {
+  const banner = source.slice(
+    source.indexOf('{generationMode === "EDITOR_ONLY" && ('),
+    source.indexOf("{/* ================= IN-PLACE A4 PAPER CANVAS"),
   );
+  assert.doesNotMatch(banner, /fieldOriginsByPath/);
+  assert.doesNotMatch(banner, /Tạo lại mục này|Regenerate this item/);
+  assert.match(banner, /omissionsByPath/);
+  assert.match(banner, /handleDiscardPendingDraft/);
 });
 
 test("T028 source contract: omission details expose localized paths and safe reasons in both UI languages", () => {
@@ -727,15 +725,9 @@ test("T028 source contract: reject/discard is a distinct explicit action, not Sa
   assert.match(source, /(?:Discard draft|Reject draft)/);
 });
 
-test("T028 source contract: selected regeneration binds the target to pending operation and hash", () => {
-  assert.match(
-    source,
-    /regenerationTarget\s*:/,
-    "Use the existing async selected-item request",
-  );
-  assert.match(source, /regenerationTarget\s*:[\s\S]*?reviewOperationId/);
-  assert.match(source, /regenerationTarget\s*:[\s\S]*?expectedDraftHash/);
-  assert.match(source, /regenerationTarget\s*:[\s\S]*?targetPath/);
+test("T028 source contract: selected regeneration is not exposed in the editor UI", () => {
+  assert.doesNotMatch(source, /regenerateSelectedItem/);
+  assert.doesNotMatch(source, /Tạo lại mục này|Regenerate this item/);
 });
 
 test("T028: safe partial draft displays only retained content, never resurrecting omitted saved content", async () => {

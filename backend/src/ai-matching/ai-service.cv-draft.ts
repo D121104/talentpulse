@@ -168,7 +168,7 @@ export interface CvDraftResponse {
   content_version: number;
 }
 
-export type CvDraftImplementation = 'legacy' | 'agent';
+export type CvDraftImplementation = 'agent';
 export type CvDraftFieldOrigin =
   | 'SOURCE'
   | 'LOCALIZED'
@@ -523,21 +523,17 @@ export function validateCvDraftResponse(
       ),
       experience: (value.work_experience as unknown[]).map((experience) => {
         if (!isRecord(experience)) return experience;
-        const {
-          bullets: _bullets,
-          source_index: _sourceIndex,
-          ...source
-        } = experience;
+        const source = { ...experience };
+        delete source.bullets;
+        delete source.source_index;
         return source;
       }),
       education: value.education,
       projects: (value.projects as unknown[]).map((project) => {
         if (!isRecord(project)) return project;
-        const {
-          bullets: _bullets,
-          source_index: _sourceIndex,
-          ...source
-        } = project;
+        const source = { ...project };
+        delete source.bullets;
+        delete source.source_index;
         return source;
       }),
       certificates: value.certificates,
@@ -557,25 +553,6 @@ export function validateCvDraftResponse(
         'Invalid CV draft response',
       );
     assertExactKeys(skill, ['name', 'description']);
-    if (skill.description) {
-      if (
-        !matchOwnedSkillMembers(
-          skill.description as string,
-          ownedSkillLiterals(request.candidate),
-          request.candidate.skills,
-        )
-      ) {
-        throw new AiServiceError(
-          'AI_INVALID_RESPONSE',
-          'Invalid CV draft skill membership',
-        );
-      }
-    } else if (ownedSkillLiterals(request.candidate).length) {
-      throw new AiServiceError(
-        'AI_INVALID_RESPONSE',
-        'Invalid CV draft skill membership',
-      );
-    }
   }
   for (const [entries, sourceCount] of [
     [value.work_experience, request.candidate.experience.length],
@@ -660,7 +637,7 @@ export function validateCvDraftReviewResponse(
     );
   }
   assertExactKeys(value, ['implementation', 'draft', 'review_metadata']);
-  if (value.implementation !== 'legacy' && value.implementation !== 'agent') {
+  if (value.implementation !== 'agent') {
     throw new AiServiceError(
       'AI_INVALID_RESPONSE',
       'Invalid CV review implementation',

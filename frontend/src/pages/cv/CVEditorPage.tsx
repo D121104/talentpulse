@@ -78,18 +78,6 @@ const asRecord = (value: unknown): UnknownRecord =>
 const asText = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
-const reviewOriginLabel = (origin: string, uiVi: boolean) => {
-  const labels: Record<string, [string, string]> = {
-    SOURCE: ["Từ hồ sơ", "From profile"],
-    LOCALIZED: ["Đã bản địa hóa", "Localized"],
-    AI_SUGGESTED: ["AI đề xuất", "AI suggested"],
-    FALLBACK: ["Nội dung dự phòng", "Fallback content"],
-  };
-  return (
-    labels[origin]?.[uiVi ? 0 : 1] || (uiVi ? "Cần rà soát" : "Review needed")
-  );
-};
-
 const omissionReasonLabel = (reasonCode: string, uiVi: boolean) => {
   const labels: Record<string, [string, string]> = {
     SOURCE_UNAVAILABLE: ["Không có dữ liệu nguồn", "Source data unavailable"],
@@ -129,14 +117,6 @@ const localizedReviewPath = (path: string, uiVi: boolean) => {
     .filter(Boolean)
     .map((part) => labels[part]?.[uiVi ? 0 : 1] || part)
     .join(" / ");
-};
-
-const selectedTargetFromFieldPath = (path: string): string | null => {
-  if (path === "/position" || path === "/career_objective") return path;
-  const match = path.match(
-    /^\/(education|work_experience|projects|skills|activities|certificates|awards)\/(0|[1-9]\d*)(?:\/.*)?$/,
-  );
-  return match ? `/${match[1]}/${match[2]}` : null;
 };
 
 const createIdempotencyKey = (): string => {
@@ -1936,15 +1916,6 @@ export default function CVEditorPage() {
     }
   };
 
-  const regenerateSelectedItem = (targetPath: string) => {
-    if (!pendingApproval || generationIsActive) return;
-    void handleGenerateWithAi({
-      reviewOperationId: pendingApproval.operationId,
-      expectedDraftHash: pendingApproval.draftHash,
-      targetPath,
-    });
-  };
-
   // Back button handler returning to previous page
   const handleBack = () => {
     if (
@@ -2758,43 +2729,6 @@ export default function CVEditorPage() {
                   </p>
                   {hasPendingGeneration && pendingReviewMetadata && (
                     <div className="mt-3 space-y-3 border-t border-current/15 pt-3">
-                      {Object.entries(
-                        pendingReviewMetadata.fieldOriginsByPath || {},
-                      ).length > 0 && (
-                        <ul className="space-y-1">
-                          {Object.entries(
-                            pendingReviewMetadata.fieldOriginsByPath || {},
-                          ).map(([path, origin]) => {
-                            const targetPath =
-                              selectedTargetFromFieldPath(path);
-                            return (
-                              <li
-                                key={path}
-                                className="flex flex-wrap items-center gap-x-2 gap-y-1"
-                              >
-                                <span>
-                                  {localizedReviewPath(path, uiVi)}:{" "}
-                                  {reviewOriginLabel(origin, uiVi)}
-                                </span>
-                                {targetPath && (
-                                  <button
-                                    type="button"
-                                    disabled={generationIsActive}
-                                    onClick={() =>
-                                      regenerateSelectedItem(targetPath)
-                                    }
-                                    className="min-h-8 rounded-md px-2 font-medium underline underline-offset-2 disabled:opacity-50"
-                                  >
-                                    {uiVi
-                                      ? "Tạo lại mục này"
-                                      : "Regenerate this item"}
-                                  </button>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
                       {(pendingReviewMetadata.omissionsByPath || []).length >
                         0 && (
                         <ul className="list-disc space-y-1 pl-5">

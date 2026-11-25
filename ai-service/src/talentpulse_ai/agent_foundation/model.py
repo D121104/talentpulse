@@ -6,6 +6,10 @@ from collections.abc import Mapping
 from typing import cast
 from uuid import uuid4
 
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from talentpulse_ai.agent_foundation.contracts import (
@@ -36,6 +40,53 @@ _GEMINI_DECISION_SCHEMA: dict[str, object] = {
     "additionalProperties": False,
 }
 
+def _log_raw_response(
+    raw: object,
+    provider: str | None,
+    model: str | None,
+) -> None:
+    try:
+        log_dir = Path("logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Serialize raw response
+        if isinstance(raw, UnstructuredTextResponse):
+            raw_data = raw.text
+
+        elif isinstance(raw, BaseModel):
+            raw_data = raw.model_dump(mode="json")
+
+        elif isinstance(raw, (dict, list, str)):
+            raw_data = raw
+
+        else:
+            raw_data = str(raw)
+
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "provider": provider,
+            "model": model,
+            "raw_type": type(raw).__name__,
+            "raw": raw_data,
+        }
+
+        with open(
+            log_dir / "raw_responses.jsonl",
+            "a",
+            encoding="utf-8",
+        ) as f:
+            f.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    default=str,
+                ) + "\n"
+            )
+
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to write raw response log"
+        )
 
 def _normalize_gemini_decision(value: object) -> object:
     if not isinstance(value, Mapping):
@@ -110,7 +161,7 @@ def _bedrock_decision_schema(
             "type": "string",
             "enum": ["final", "tool_call"] if tools else ["final"],
         },
-        "output": {"anyOf": [output_schema, {"type": "null"}]},
+        "output": ({"anyOf": [output_schema, {"type": "null"}]} if tools else output_schema),
     }
     required = ["kind", "output"]
     if tools:
@@ -238,13 +289,19 @@ class AgentModelError(RuntimeError):
 class AgentModelAdapter:
     """Normalize existing generation providers into validated agent decisions."""
 
-    def __init__(self, provider: GenerationProvider) -> None:
+    def __init__(self, provider: GenerationProvider, *, direct_output: bool = False) -> None:
         self._provider = provider
+        self._direct_output = direct_output
         self._decision_adapter: TypeAdapter[ModelDecision] = TypeAdapter(ModelDecision)
 
     @property
     def supports_structured_outputs(self) -> bool:
         return getattr(self._provider, "supports_structured_outputs", False) is True
+
+    @property
+    def provider_name(self) -> str | None:
+        provider_name = getattr(self._provider, "provider_name", None)
+        return provider_name if isinstance(provider_name, str) else None
 
     def _provider_details(
         self,
@@ -294,7 +351,18 @@ class AgentModelAdapter:
                         "Model provider does not support structured outputs.",
                     )
                 schema: Mapping[str, object]
-                if provider_name == "gemini":
+                if self._direct_output:
+                    if tool_input_schemas or final_output_schema is None:
+                        raise AgentModelError(
+                            AgentErrorCode.PROVIDER_ERROR,
+                            "Direct structured output requires one final schema and no tools.",
+                        )
+                    schema = final_output_schema
+                    prompt += (
+                        "\nReturn the final output directly, matching the supplied schema. "
+                        "Do not wrap it in a decision envelope and do not call tools."
+                    )
+                elif provider_name == "gemini":
                     schema = _GEMINI_DECISION_SCHEMA
                     prompt += (
                         '\nReturn a decision object. Use {"kind":"final",'
@@ -331,6 +399,7 @@ class AgentModelAdapter:
                 else:
                     schema = cast(Mapping[str, object], self._decision_adapter.json_schema())
                 raw = generate_structured(prompt, schema, timeout)
+
             elif timeout is not None:
                 generate_with_timeout = getattr(self._provider, "generate_with_timeout", None)
                 if not callable(generate_with_timeout):
@@ -365,11 +434,19 @@ class AgentModelAdapter:
                 details=details,
             ) from None
 
+        _log_raw_response(
+            raw=raw,
+            provider=provider_name,
+            model=getattr(self._provider, "model_name", None),
+        )
+
         try:
             if isinstance(raw, str):
                 raw = json.loads(raw)
             elif isinstance(raw, BaseModel):
                 raw = raw.model_dump(mode="python")
+            if self._direct_output:
+                raw = {"kind": "final", "output": raw}
             if isinstance(raw, UnstructuredTextResponse):
                 raw = (
                     _recover_cv_plain_text(raw, final_output_schema, tool_input_schemas)

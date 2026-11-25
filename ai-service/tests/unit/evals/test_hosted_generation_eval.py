@@ -161,16 +161,17 @@ def test_cli_dispatches_application_journeys_after_fixture_preflight(
     )
     monkeypatch.setattr(evaluation, "validate_application_dataset", lambda values: None)
     monkeypatch.setattr(evaluation, "_live_provider", lambda name: (object(), "synthetic-model"))
-    dispatched: list[tuple[str, int]] = []
+    dispatched: list[tuple[str, int, tuple[str, ...] | None]] = []
 
     def run_application(
         values: list[dict[str, Any]],
         provider_factory: Callable[[], object],
         *,
         provider_name: str,
+        journeys: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         assert provider_factory() is not None
-        dispatched.append((provider_name, len(values)))
+        dispatched.append((provider_name, len(values), journeys))
         return {
             "scope": "application_generation_services",
             "release_ready": False,
@@ -183,12 +184,124 @@ def test_cli_dispatches_application_journeys_after_fixture_preflight(
     monkeypatch.setattr(evaluation, "evaluate_application_journeys", run_application)
 
     exit_code = evaluation.main()
-    assert dispatched == [("gemini", 210)]
+    assert dispatched == [("gemini", 210, None)]
     assert exit_code == 0
     report = json.loads(output.read_text())
     assert report["scope"] == "application_generation_services"
     assert report["profiles"] == {"gemini": "synthetic-model"}
     assert report["release_ready"] is False
+
+
+def test_cli_accepts_repeated_journey_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cases = [
+        {
+            "id": f"{journey.lower().replace('_', '-')}-{index}",
+            "journey": journey,
+            "synthetic": True,
+            "prompt": f"Synthetic case {journey}-{index}.",
+            "rubric": f"Check grounded claims for {journey}-{index}.",
+            "request": {"fixture": "validated-by-test-double"},
+        }
+        for journey in JOURNEYS
+        for index in range(30)
+    ]
+    dataset = tmp_path / "dataset.json"
+    output = tmp_path / "report.json"
+    dataset.write_text(json.dumps({"synthetic": True, "cases": cases}))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eval",
+            "--provider",
+            "gemini",
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+            "--journey",
+            "CV_GENERATION",
+            "--journey",
+            "CV_LOCALIZATION",
+        ],
+    )
+    monkeypatch.setattr(evaluation, "validate_application_dataset", lambda values: None)
+    monkeypatch.setattr(evaluation, "_live_provider", lambda name: (object(), "synthetic-model"))
+    received: list[tuple[int, tuple[str, ...] | None]] = []
+
+    def run_application(
+        values: list[dict[str, Any]],
+        provider_factory: Callable[[], object],
+        *,
+        provider_name: str,
+        journeys: tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
+        del provider_name
+        assert provider_factory() is not None
+        received.append((len(values), journeys))
+        return {
+            "scope": "application_generation_services",
+            "release_ready": False,
+            "results": [],
+            "groups": [],
+            "review_sheet": [],
+            "limitations": [],
+        }
+
+    monkeypatch.setattr(evaluation, "evaluate_application_journeys", run_application)
+
+    assert evaluation.main() == 0
+    assert received == [(210, ("CV_GENERATION", "CV_LOCALIZATION"))]
+
+
+def test_bedrock_live_provider_uses_production_bounded_client_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from botocore.config import Config
+
+    constructions: list[dict[str, Any]] = []
+
+    class BedrockClient:
+        def converse(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "output": {
+                    "message": {"content": [{"text": '{"items": []}'}]}
+                }
+            }
+
+    def fake_client(service_name: str, **kwargs: Any) -> BedrockClient:
+        assert service_name == "bedrock-runtime"
+        constructions.append(kwargs)
+        return BedrockClient()
+
+    monkeypatch.setattr(
+        "talentpulse_ai.core.config.Settings",
+        lambda **kwargs: SimpleNamespace(
+            bedrock_model="global.moonshotai.kimi-k3.1",
+            bedrock_region="ap-southeast-2",
+        ),
+    )
+    monkeypatch.setattr("boto3.client", fake_client)
+
+    provider, model = evaluation._live_provider("bedrock")
+    assert model == "global.moonshotai.kimi-k3.1"
+    assert provider.generate_structured(
+        "synthetic prompt",
+        {"type": "object", "properties": {"items": {"type": "array"}}},
+        timeout=2.0,
+    ) == {"items": []}
+
+    assert len(constructions) == 2
+    bounded_config = constructions[1]["config"]
+    assert isinstance(bounded_config, Config)
+    assert 0 < bounded_config.connect_timeout <= 2.0
+    assert 0 < bounded_config.read_timeout <= 2.0
+    assert bounded_config.retries["total_max_attempts"] == 1
 
 
 def test_human_review_requires_ten_complete_reviews_and_ninety_percent_pass_rate() -> None:

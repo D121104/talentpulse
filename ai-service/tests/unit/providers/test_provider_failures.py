@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from urllib.error import HTTPError
 
 import pytest
 from botocore.exceptions import ClientError
 
+from talentpulse_ai.agent_foundation.contracts import UnstructuredTextResponse
 from talentpulse_ai.core.exceptions import ProviderFailure
 from talentpulse_ai.infrastructure.embeddings.model import (
     CohereEmbeddingAdapter,
@@ -90,6 +92,64 @@ def test_bedrock_timeout_is_classified_without_exception_message() -> None:
     assert failure.value.details.category == "timeout"
     assert failure.value.details.exception_type == "TimeoutError"
     assert "secret provider timeout details" not in str(failure.value)
+
+
+def test_bedrock_type_error_records_safe_origin_frame() -> None:
+    class Client:
+        def converse(self, **kwargs: object) -> object:
+            del kwargs
+            raise TypeError("private response detail")
+
+    adapter = BedrockNovaGenerationAdapter(Client(), "amazon.nova-lite-v1:0")
+
+    with pytest.raises(ProviderFailure) as failure:
+        adapter.generate("private prompt")
+
+    assert failure.value.details is not None
+    assert failure.value.details.exception_type == "TypeError"
+    assert failure.value.details.failure_location is not None
+    assert failure.value.details.failure_location.endswith(":converse")
+    assert "private response detail" not in str(failure.value.details)
+
+
+def test_bedrock_non_json_response_logs_stop_reason_usage_and_parse_position(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    response_text = '{"output":"private CV text'
+
+    class Client:
+        def converse(self, **kwargs: object) -> object:
+            del kwargs
+            return {
+                "output": {"message": {"content": [{"text": response_text}]}},
+                "stopReason": "max_tokens",
+                "usage": {"inputTokens": 321, "outputTokens": 4096},
+            }
+
+    adapter = BedrockNovaGenerationAdapter(Client(), "global.moonshotai.kimi-k3.1")
+    schema = {
+        "type": "object",
+        "properties": {"output": {"type": "string"}},
+        "required": ["output"],
+        "additionalProperties": False,
+    }
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="talentpulse_ai.infrastructure.llm.bedrock",
+    ):
+        result = adapter.generate_structured("private CV prompt", schema)
+
+    assert isinstance(result, UnstructuredTextResponse)
+    assert "bedrock_structured_output_not_json" in caplog.text
+    assert "stop_reason=max_tokens" in caplog.text
+    assert "input_tokens=321" in caplog.text
+    assert "output_tokens=4096" in caplog.text
+    assert f"text_length_chars={len(response_text)}" in caplog.text
+    assert "json_error_line=1" in caplog.text
+    assert "json_error_column=" in caplog.text
+    assert response_text not in caplog.text
+    assert "private CV text" not in caplog.text
 
 
 def test_gemini_http_error_records_status_without_reading_body(monkeypatch) -> None:

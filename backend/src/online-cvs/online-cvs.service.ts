@@ -565,44 +565,6 @@ type LocalizationRetry = {
   skills: string[];
 };
 
-function localizedRetryInput(cv: OnlineCV): OnlineCV {
-  const retry = cv.generationSnapshot?.localizationRetry as
-    | LocalizationRetry
-    | undefined;
-  if (
-    cv.revision?.locale !== 'en-US' ||
-    retry?.contentVersion !== cv.contentVersion ||
-    !cv.revision?.warnings?.some(
-      (warning) =>
-        warning.includes('localization_omission') ||
-        warning.includes('skill_member_locale_omission'),
-    )
-  )
-    return cv;
-  const input = { ...cv };
-  if (
-    !input.careerObjective &&
-    typeof retry.fields?.careerObjective === 'string'
-  ) {
-    input.careerObjective = retry.fields.careerObjective;
-  }
-  for (const section of Object.keys(
-    RETRY_TEXT_FIELDS,
-  ) as (keyof typeof RETRY_TEXT_FIELDS)[]) {
-    const entries = (cv[section] || []).map((entry, index) => {
-      const restored = { ...entry };
-      for (const field of RETRY_TEXT_FIELDS[section]) {
-        const value = retry.fields?.[`${section}.${index}.${field}`];
-        if (!restored[field] && typeof value === 'string')
-          restored[field] = value;
-      }
-      return restored;
-    });
-    Object.assign(input, { [section]: entries });
-  }
-  return input;
-}
-
 function localizationRetry(
   source: Pick<OnlineCV, keyof typeof RETRY_TEXT_FIELDS | 'careerObjective'>,
   output: Pick<OnlineCV, keyof typeof RETRY_TEXT_FIELDS | 'careerObjective'>,
@@ -901,12 +863,7 @@ export class OnlineCVsService {
       trace_id: randomUUID(),
       operation_attempt_id: randomUUID(),
     };
-    const inputCv = localizedRetryInput(cv);
-    const retry = cv.generationSnapshot?.localizationRetry as
-      | LocalizationRetry
-      | undefined;
-    const retrySkills =
-      inputCv !== cv && Array.isArray(retry?.skills) ? retry.skills : [];
+    const inputCv = cv;
     const profile = {
       candidate_id: user._id,
       // Contact PII stays in canonical PostgreSQL data and is restored from the CV
@@ -918,9 +875,7 @@ export class OnlineCVsService {
       address: null,
       headline: cv.position || null,
       career_objective: inputCv.careerObjective || null,
-      skills: retrySkills.length
-        ? Array.from(new Set([...currentCvSkillLiterals(cv), ...retrySkills]))
-        : currentCvSkillLiterals(cv),
+      skills: currentCvSkillLiterals(cv),
       experience: (inputCv.workExperience || []).map((entry) => ({
         company_name: entry.companyName || null,
         position: entry.position || null,
@@ -966,7 +921,7 @@ export class OnlineCVsService {
         )
         .filter(Boolean),
     };
-    // Legacy CVs created before locale metadata existed remain Vietnamese by contract.
+    // Keep the selected output locale across regeneration.
     const locale = normalizeCvLocale(cv.revision?.locale);
     const request: CvDraftRequest = {
       identity,
@@ -986,6 +941,7 @@ export class OnlineCVsService {
         { timeoutMs: this.generationRemaining(deadline) },
       );
     } catch (error) {
+      this.logCvGenerationFailure(request, operationId, error);
       if (
         error instanceof GatewayTimeoutException ||
         (error instanceof AiServiceError && error.code === 'AI_SERVICE_TIMEOUT')
@@ -1007,32 +963,36 @@ export class OnlineCVsService {
         'Dữ liệu trả về từ dịch vụ AI không hợp lệ',
       );
     }
-    if (reviewResponse.implementation === 'agent') {
-      const result = await this.stageAgentDraft({
-        deadline,
-        cv,
-        user,
-        job,
-        targetJobId,
-        policy,
-        request,
-        reviewResponse,
-        expectedContentVersion,
-        operationId,
-        kind: 'EXISTING_CV',
-      });
-      this.logCvGenerationObservation({
-        request,
-        implementation: reviewResponse.implementation,
-        status: result.status,
-        reviewStatus: 'PENDING_REVIEW',
-        durationMs: Date.now() - startedAt,
-        modelCalls: 1,
-        toolCalls: 1,
-        errorType: null,
-      });
-      return result;
+    if (reviewResponse.implementation !== 'agent') {
+      throw new BadGatewayException(
+        'Dịch vụ AI trả về kiểu tạo CV không được hỗ trợ',
+      );
     }
+    const stagedResult = await this.stageAgentDraft({
+      deadline,
+      cv,
+      user,
+      job,
+      targetJobId,
+      policy,
+      request,
+      reviewResponse,
+      expectedContentVersion,
+      operationId,
+      kind: 'EXISTING_CV',
+    });
+    this.logCvGenerationObservation({
+      request,
+      implementation: 'agent',
+      status: stagedResult.status,
+      reviewStatus: 'PENDING_REVIEW',
+      durationMs: Date.now() - startedAt,
+      modelCalls: 1,
+      toolCalls: 0,
+      errorType: null,
+    });
+    return stagedResult;
+
     const warnings = [...(generated.warnings || [])];
     const text = (
       source: string | null | undefined,
@@ -1347,6 +1307,37 @@ export class OnlineCVsService {
     );
   }
 
+  private logCvGenerationFailure(
+    request: CvDraftRequest,
+    operationId: string | undefined,
+    error: unknown,
+  ): void {
+    const errorCode =
+      error instanceof AiServiceError
+        ? error.code
+        : error instanceof BadRequestException ||
+          error instanceof ForbiddenException ||
+          error instanceof NotFoundException ||
+          error instanceof ServiceUnavailableException
+        ? `HTTP_${error.getStatus()}`
+        : 'AI_GENERATION_FAILED';
+    const errorType =
+      error instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(error.name)
+        ? error.name
+        : 'UnknownError';
+    Logger.error(
+      JSON.stringify({
+        event: 'cv_ai_generation_failed',
+        operation_id: operationId || 'none',
+        request_id: request.identity.request_id,
+        trace_id: request.identity.trace_id,
+        operation_attempt_id: request.identity.operation_attempt_id,
+        error_code: errorCode,
+        error_type: errorType,
+      }),
+    );
+  }
+
   private normalizedCareerProfileSnapshot(
     profile: CandidateCareerProfile,
     user: User,
@@ -1574,6 +1565,7 @@ export class OnlineCVsService {
         { timeoutMs: this.generationRemaining(deadline) },
       );
     } catch (error) {
+      this.logCvGenerationFailure(request, operationId, error);
       if (
         error instanceof GatewayTimeoutException ||
         (error instanceof AiServiceError && error.code === 'AI_SERVICE_TIMEOUT')
@@ -1607,6 +1599,92 @@ export class OnlineCVsService {
         'Hồ sơ nghề nghiệp đã được thay đổi trong khi AI đang tạo CV; vui lòng thử lại',
       );
     }
+
+    if (reviewResponse.implementation !== 'agent') {
+      throw new BadGatewayException(
+        'Dịch vụ AI trả về kiểu tạo CV không được hỗ trợ',
+      );
+    }
+    const sourceOnlyPlaceholder: DeepPartial<OnlineCV> = {
+      title: job ? `CV - ${job.name}` : 'Candidate CV',
+      generationMode: OnlineCvGenerationMode.EDITOR_ONLY,
+      contentVersion: 1,
+      sourceVersion,
+      generatedBy: null,
+      targetJobId,
+      sourceProfileId: profile._id,
+      sourceProfileVersion: profile.contentVersion,
+      fullName: normalizedProfile.contact.fullName,
+      email: normalizedProfile.contact.email,
+      phone: normalizedProfile.contact.phone,
+      link: normalizedProfile.contact.link,
+      address: normalizedProfile.contact.address,
+      avatar: normalizedProfile.contact.avatar,
+      position: job?.name || normalizedProfile.headline,
+      careerObjective: normalizedProfile.objective,
+      education: normalizedProfile.education.map((entry: any) => ({
+        schoolName: entry.schoolName || entry.school || null,
+        degree: entry.degree || null,
+        major: entry.major || null,
+        startDate: entry.startDate || null,
+        endDate: entry.endDate || null,
+        description: entry.description || null,
+      })),
+      workExperience: normalizedProfile.experience.map((entry: any) => ({
+        companyName: entry.companyName || null,
+        position: entry.position || null,
+        startDate: entry.startDate || null,
+        endDate: entry.endDate || null,
+        description: entry.description || null,
+      })),
+      skills: normalizedProfile.skills
+        .map((entry: any) => ({
+          name: skillLiteral(entry),
+          description: entry?.description || null,
+        }))
+        .filter((entry: any) => Boolean(entry.name)),
+      projects: normalizedProfile.projects.map((entry: any) => ({
+        projectName: entry.projectName || entry.name || null,
+        role: entry.role || null,
+        startDate: entry.startDate || null,
+        endDate: entry.endDate || null,
+        description: entry.description || null,
+        technologies: entry.technologies || [],
+      })),
+      certificates: normalizedProfile.certificates.map((entry: any) =>
+        typeof entry === 'string' ? { name: entry } : entry,
+      ),
+      activities: normalizedProfile.activities,
+      awards: normalizedProfile.awards,
+      generationSnapshot: normalizedProfile,
+      revision: {
+        contentVersion: 1,
+        locale,
+        sourceTrace: {
+          locale,
+          sourceProfileId: profile._id,
+          sourceProfileVersion: profile.contentVersion,
+        },
+      },
+      htmlContent: null,
+      pdfUrl: null,
+      isPrimary: false,
+      isSearchable: false,
+    };
+    return this.stageCareerProfileAgentDraft({
+      deadline,
+      targetCvId,
+      sourcePlaceholderData: sourceOnlyPlaceholder,
+      user,
+      profile,
+      normalizedProfile,
+      job,
+      targetJobId,
+      policy,
+      request,
+      reviewResponse,
+      operationId,
+    });
 
     const warnings = [...(generated.warnings || [])];
     const text = (
@@ -1876,90 +1954,6 @@ export class OnlineCVsService {
             : [],
         ),
       };
-    }
-
-    if (reviewResponse.implementation === 'agent') {
-      const sourceOnlyPlaceholder: DeepPartial<OnlineCV> = {
-        ...newCvData,
-        title: job ? `CV - ${applicationPosition || job.name}` : 'Candidate CV',
-        generationMode: OnlineCvGenerationMode.EDITOR_ONLY,
-        contentVersion: 1,
-        sourceVersion,
-        generatedBy: null,
-        targetJobId,
-        sourceProfileId: profile._id,
-        sourceProfileVersion: profile.contentVersion,
-        fullName: normalizedProfile.contact.fullName,
-        email: normalizedProfile.contact.email,
-        phone: normalizedProfile.contact.phone,
-        link: normalizedProfile.contact.link,
-        address: normalizedProfile.contact.address,
-        avatar: normalizedProfile.contact.avatar,
-        position: applicationPosition || normalizedProfile.headline,
-        careerObjective: normalizedProfile.objective,
-        education: normalizedProfile.education.map((entry: any) => ({
-          schoolName: entry.schoolName || entry.school || null,
-          degree: entry.degree || null,
-          major: entry.major || null,
-          startDate: entry.startDate || null,
-          endDate: entry.endDate || null,
-          description: entry.description || null,
-        })),
-        workExperience: normalizedProfile.experience.map((entry: any) => ({
-          companyName: entry.companyName || null,
-          position: entry.position || null,
-          startDate: entry.startDate || null,
-          endDate: entry.endDate || null,
-          description: entry.description || null,
-        })),
-        skills: normalizedProfile.skills
-          .map((entry: any) => ({
-            name: skillLiteral(entry),
-            description: entry?.description || null,
-          }))
-          .filter((entry: any) => Boolean(entry.name)),
-        projects: normalizedProfile.projects.map((entry: any) => ({
-          projectName: entry.projectName || entry.name || null,
-          role: entry.role || null,
-          startDate: entry.startDate || null,
-          endDate: entry.endDate || null,
-          description: entry.description || null,
-          technologies: entry.technologies || [],
-        })),
-        certificates: normalizedProfile.certificates.map((entry: any) =>
-          typeof entry === 'string' ? { name: entry } : entry,
-        ),
-        activities: normalizedProfile.activities,
-        awards: normalizedProfile.awards,
-        generationSnapshot: normalizedProfile,
-        revision: {
-          contentVersion: 1,
-          locale,
-          sourceTrace: {
-            locale,
-            sourceProfileId: profile._id,
-            sourceProfileVersion: profile.contentVersion,
-          },
-        },
-        htmlContent: null,
-        pdfUrl: null,
-        isPrimary: false,
-        isSearchable: false,
-      };
-      return this.stageCareerProfileAgentDraft({
-        deadline,
-        targetCvId,
-        sourcePlaceholderData: sourceOnlyPlaceholder,
-        user,
-        profile,
-        normalizedProfile,
-        job,
-        targetJobId,
-        policy,
-        request,
-        reviewResponse,
-        operationId,
-      });
     }
 
     const persist = async (manager: EntityManager): Promise<OnlineCV> => {
@@ -3062,7 +3056,6 @@ export class OnlineCVsService {
   }
 
   private regenerationCandidate(cv: OnlineCV): Record<string, unknown> {
-    const input = localizedRetryInput(cv);
     return {
       candidate_id: cv.userId,
       full_name: 'Candidate',
@@ -3071,16 +3064,16 @@ export class OnlineCVsService {
       link: null,
       address: null,
       headline: cv.position || null,
-      career_objective: input.careerObjective || null,
+      career_objective: cv.careerObjective || null,
       skills: currentCvSkillLiterals(cv),
-      experience: (input.workExperience || []).map((entry) => ({
+      experience: (cv.workExperience || []).map((entry) => ({
         company_name: entry.companyName || null,
         position: entry.position || null,
         start_date: entry.startDate || null,
         end_date: entry.endDate || null,
         description: entry.description || null,
       })),
-      education: (input.education || []).map((entry) => ({
+      education: (cv.education || []).map((entry) => ({
         school_name: entry.schoolName || null,
         degree: entry.degree || null,
         major: entry.major || null,
@@ -3088,7 +3081,7 @@ export class OnlineCVsService {
         end_date: entry.endDate || null,
         description: entry.description || null,
       })),
-      projects: (input.projects || [])
+      projects: (cv.projects || [])
         .filter((entry) => Boolean(entry.projectName))
         .map((entry) => ({
           project_name: entry.projectName,
@@ -3098,10 +3091,10 @@ export class OnlineCVsService {
           description: entry.description || null,
           technologies: entry.technologies || [],
         })),
-      certificates: (input.certificates || [])
+      certificates: (cv.certificates || [])
         .map((entry) => (typeof entry === 'string' ? entry : entry?.name || ''))
         .filter(Boolean),
-      activities: (input.activities || [])
+      activities: (cv.activities || [])
         .map((entry) =>
           typeof entry === 'string'
             ? entry
@@ -3110,7 +3103,7 @@ export class OnlineCVsService {
                 .join(' - '),
         )
         .filter(Boolean),
-      awards: (input.awards || [])
+      awards: (cv.awards || [])
         .map((entry) =>
           typeof entry === 'string'
             ? entry
@@ -3739,6 +3732,28 @@ export class OnlineCVsService {
         (error instanceof AiServiceError && error.code === 'AI_SERVICE_TIMEOUT')
       )
         return this.finishGeneration(data, 'FAILED', 'AI_TIMEOUT');
+      Logger.error(
+        JSON.stringify({
+          event: 'cv_generation_failed',
+          operation_id: data.operationId,
+          kind: data.kind,
+          stage: 'generation',
+          error_code:
+            error instanceof AiServiceError
+              ? error.code
+              : error instanceof BadRequestException ||
+                error instanceof ForbiddenException ||
+                error instanceof NotFoundException ||
+                error instanceof ServiceUnavailableException
+              ? `HTTP_${error.getStatus()}`
+              : 'GENERATION_FAILED',
+          error_type:
+            error instanceof Error &&
+            /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(error.name)
+              ? error.name
+              : 'UnknownError',
+        }),
+      );
       return this.finishGeneration(data, 'FAILED', 'GENERATION_FAILED');
     }
   }
@@ -4180,11 +4195,7 @@ export class OnlineCVsService {
             ? 1
             : 0,
         model_calls: 1,
-        tool_calls:
-          regeneration?.implementation === 'agent' ||
-          metadata.implementation === 'agent'
-            ? 1
-            : 0,
+        tool_calls: 0,
         error_type: safeErrorType,
       }),
     );
