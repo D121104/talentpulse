@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger } from 'nestjs-pino';
 import { TransformInterceptor } from './core/transform.interceptor';
 import cookieParser from 'cookie-parser';
 import serveStatic from 'serve-static';
@@ -34,7 +35,11 @@ types.setTypeParser(1184, (stringValue: string) => {
 });
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+  });
+  const logger = app.get(Logger);
+  app.useLogger(logger);
   const configService = app.get(ConfigService);
 
   app.useStaticAssets(join(__dirname, '..', 'public'));
@@ -59,7 +64,7 @@ async function bootstrap() {
     next();
   });
 
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', { exclude: ['metrics'] });
   app.use(cookieParser());
   app.enableVersioning({
     type: VersioningType.URI,
@@ -117,7 +122,10 @@ async function bootstrap() {
 
   const PORT = configService.get<string>('PORT') || 8000;
   await app.listen(PORT);
-  console.log(`Application is running on: http://localhost:${PORT}`);
+  logger.log(
+    `Application is running on: http://localhost:${PORT}`,
+    'Bootstrap',
+  );
 }
 
 bootstrap();

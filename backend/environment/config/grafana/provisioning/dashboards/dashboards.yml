@@ -1,0 +1,15 @@
+apiVersion: 1
+
+providers:
+  - name: TalentPulse Backend
+    orgId: 1
+    folder: TalentPulse Backend
+    folderUid: talentpulse-backend
+    type: file
+    disableDeletion: false
+    editable: true
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: false

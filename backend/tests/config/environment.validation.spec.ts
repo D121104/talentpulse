@@ -76,7 +76,8 @@ describe('validateEnvironment', () => {
     );
     expect(
       validateEnvironment({
-        AI_JOB_INDEX_REPRESENTATION_VERSION: 'local-ollama-qwen3-embedding-4b-2560-v2',
+        AI_JOB_INDEX_REPRESENTATION_VERSION:
+          'local-ollama-qwen3-embedding-4b-2560-v2',
       }).AI_JOB_INDEX_REPRESENTATION_VERSION,
     ).toBe('local-ollama-qwen3-embedding-4b-2560-v2');
     expect(() =>
@@ -183,5 +184,64 @@ describe('validateEnvironment', () => {
         JWT_REFRESH_SECRET: 'refresh-secret',
       }),
     ).toThrow('DB_SYNCHRONIZE must be false in production');
+  });
+
+  it('defaults and validates observability logging variables', () => {
+    const defaults = validateEnvironment({});
+    expect(defaults).toMatchObject({
+      LOG_LEVEL: 'info',
+      LOG_FILE_ENABLED: 'true',
+    });
+    expect(defaults).not.toHaveProperty('LOG_DIR');
+    expect(defaults).not.toHaveProperty('METRICS_BEARER_TOKEN');
+
+    expect(
+      validateEnvironment({
+        LOG_LEVEL: ' WARN ',
+        LOG_DIR: ' /var/log/talentpulse ',
+        LOG_FILE_ENABLED: 'FALSE',
+      }),
+    ).toMatchObject({
+      LOG_LEVEL: 'warn',
+      LOG_DIR: '/var/log/talentpulse',
+      LOG_FILE_ENABLED: 'false',
+    });
+
+    expect(() => validateEnvironment({ LOG_LEVEL: 'verbose' })).toThrow(
+      'LOG_LEVEL must be one of:',
+    );
+    expect(() => validateEnvironment({ LOG_FILE_ENABLED: 'yes' })).toThrow(
+      'LOG_FILE_ENABLED must be true or false',
+    );
+    expect(() => validateEnvironment({ LOG_DIR: 'a'.repeat(513) })).toThrow(
+      'LOG_DIR must be a bounded directory path',
+    );
+    expect(() => validateEnvironment({ LOG_DIR: '/var/log\napp' })).toThrow(
+      'LOG_DIR must be a bounded directory path',
+    );
+  });
+
+  it('trims and validates METRICS_BEARER_TOKEN when provided', () => {
+    expect(
+      validateEnvironment({ METRICS_BEARER_TOKEN: '  scrape-secret-123  ' })
+        .METRICS_BEARER_TOKEN,
+    ).toBe('scrape-secret-123');
+
+    expect(validateEnvironment({})).not.toHaveProperty('METRICS_BEARER_TOKEN');
+    expect(() =>
+      validateEnvironment({ METRICS_BEARER_TOKEN: '   ' }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateEnvironment({ METRICS_BEARER_TOKEN: 'invalid token' }),
+    ).toThrow(
+      'METRICS_BEARER_TOKEN must be a bounded token without whitespace',
+    );
+
+    expect(() =>
+      validateEnvironment({ METRICS_BEARER_TOKEN: 't'.repeat(513) }),
+    ).toThrow(
+      'METRICS_BEARER_TOKEN must be a bounded token without whitespace',
+    );
   });
 });
