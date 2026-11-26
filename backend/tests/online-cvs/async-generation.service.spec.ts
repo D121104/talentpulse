@@ -4,6 +4,9 @@ import { OnlineCvGenerationProcessor } from 'src/online-cvs/online-cv-generation
 import { Logger } from '@nestjs/common';
 import { AiServiceError } from 'src/ai-matching/ai-service.client';
 import { createHash } from 'crypto';
+import { OnlineCvDraftLifecycleService } from 'src/online-cvs/online-cv-draft-lifecycle.service';
+import { OnlineCvGenerationStateService } from 'src/online-cvs/online-cv-generation-state.service';
+import { OnlineCvGenerationWorkerService } from 'src/online-cvs/online-cv-generation-worker.service';
 
 const user = {
   _id: '11111111-1111-4111-8111-111111111111',
@@ -107,22 +110,48 @@ function createExistingService() {
       omissions_by_path: [],
     },
   }));
+  const draftLifecycle = new OnlineCvDraftLifecycleService(repo);
+  const usersService = {
+    isCandidatePremium: jest.fn().mockReturnValue(false),
+    getUserMaxCvLimit: jest.fn().mockReturnValue(3),
+  };
+  const aiCvConsentsService = {
+    lockScope: jest.fn().mockResolvedValue(undefined),
+    hasValidConsent: jest.fn().mockResolvedValue(true),
+  };
+  const configService = { get: jest.fn() };
+  const jobsService = { findOne: jest.fn().mockResolvedValue(null) };
+  const careerProfileService = { requireMine: jest.fn() };
+  const generationState = new OnlineCvGenerationStateService(
+    repo,
+    queue as any,
+    draftLifecycle,
+  );
+  const generationWorker = new OnlineCvGenerationWorkerService(
+    repo,
+    userRepo as any,
+    configService as any,
+    aiCvConsentsService as any,
+    usersService as any,
+    jobsService as any,
+    careerProfileService as any,
+    generationState,
+  );
   const service = Object.create(OnlineCVsService.prototype) as OnlineCVsService;
   Object.assign(service as any, {
     onlineCVRepo: repo,
     generationQueue: queue,
     userRepo,
-    usersService: {
-      isCandidatePremium: jest.fn().mockReturnValue(false),
-      getUserMaxCvLimit: jest.fn().mockReturnValue(3),
-    },
-    aiCvConsentsService: {
-      lockScope: jest.fn().mockResolvedValue(undefined),
-      hasValidConsent: jest.fn().mockResolvedValue(true),
-    },
+    usersService,
+    aiCvConsentsService,
     aiServiceClient,
-    configService: { get: jest.fn() },
-    jobsService: { findOne: jest.fn().mockResolvedValue(null) },
+    configService,
+    jobsService,
+    careerProfileService,
+    pdfService: { isAvailable: jest.fn().mockReturnValue(false) },
+    draftLifecycle,
+    generationState,
+    generationWorker,
   });
   return { service, cv, queue, repo };
 }

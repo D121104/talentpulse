@@ -17,6 +17,9 @@ import { CvGenerationJobData } from 'src/online-cvs/async-cv-generation.types';
 import { Company } from 'src/companies/entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import { OnlineCvDraftLifecycleService } from 'src/online-cvs/online-cv-draft-lifecycle.service';
+import { OnlineCvGenerationStateService } from 'src/online-cvs/online-cv-generation-state.service';
+import { OnlineCvGenerationWorkerService } from 'src/online-cvs/online-cv-generation-worker.service';
 
 jest.setTimeout(120_000);
 
@@ -151,29 +154,56 @@ function gate() {
         config,
         source,
       );
+      const lifecycle = new OnlineCvDraftLifecycleService(
+        source.getRepository(OnlineCV),
+      );
+      const onlineCVRepo = source.getRepository(OnlineCV);
+      const userRepo = source.getRepository(User);
+      const usersService = {
+        isCandidatePremium: () => true,
+        getUserMaxCvLimit: () => 3,
+      };
+      const careerProfileService = {
+        requireMine: () =>
+          source
+            .getRepository(CandidateCareerProfile)
+            .findOneByOrFail({ userId: user._id }),
+      };
+      const jobsService = {
+        findOne: (id: string) =>
+          new ActiveJobQueryService(
+            source.getRepository(Job),
+            source.getRepository(Company),
+          ).findActiveById(id),
+      };
+      const generationState = new OnlineCvGenerationStateService(
+        onlineCVRepo,
+        queue as any,
+        lifecycle,
+      );
+      const generationWorker = new OnlineCvGenerationWorkerService(
+        onlineCVRepo,
+        userRepo,
+        config,
+        consents,
+        usersService as any,
+        jobsService as any,
+        careerProfileService as any,
+        generationState,
+      );
       Object.assign(instance, {
-        onlineCVRepo: source.getRepository(OnlineCV),
-        userRepo: source.getRepository(User),
+        onlineCVRepo,
+        userRepo,
         configService: config,
         aiCvConsentsService: consents,
-        usersService: {
-          isCandidatePremium: () => true,
-          getUserMaxCvLimit: () => 3,
-        },
-        careerProfileService: {
-          requireMine: () =>
-            source
-              .getRepository(CandidateCareerProfile)
-              .findOneByOrFail({ userId: user._id }),
-        },
+        usersService,
+        careerProfileService,
         generationQueue: queue,
-        jobsService: {
-          findOne: (id: string) =>
-            new ActiveJobQueryService(
-              source.getRepository(Job),
-              source.getRepository(Company),
-            ).findActiveById(id),
-        },
+        pdfService: { isAvailable: () => false },
+        draftLifecycle: lifecycle,
+        generationState,
+        generationWorker,
+        jobsService,
         aiServiceClient: (() => {
           const generateCvDraft = async (request) => {
             entered.release();

@@ -2,6 +2,10 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OnlineCVsController } from './online-cvs.controller';
 import { OnlineCVsService } from './online-cvs.service';
+import { OnlineCvPdfService } from './online-cv-pdf.service';
+import { OnlineCvDraftLifecycleService } from './online-cv-draft-lifecycle.service';
+import { OnlineCvGenerationStateService } from './online-cv-generation-state.service';
+import { OnlineCvGenerationWorkerService } from './online-cv-generation-worker.service';
 import { OnlineCV } from './entities/online-cv.entity';
 import { User } from 'src/users/entities/user.entity';
 import { FilesModule } from 'src/files/files.module';
@@ -40,6 +44,10 @@ const backgroundJobsEnabled = areBackgroundJobsEnabled();
   controllers: [OnlineCVsController],
   providers: [
     OnlineCVsService,
+    OnlineCvPdfService,
+    OnlineCvDraftLifecycleService,
+    OnlineCvGenerationStateService,
+    OnlineCvGenerationWorkerService,
     ...(redisEnabled
       ? backgroundJobsEnabled
         ? [OnlineCvGenerationProcessor]

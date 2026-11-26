@@ -192,6 +192,7 @@ function createService() {
     companyRepository,
     configService: { get: jest.fn() },
     careerProfileService: { requireMine: jest.fn().mockResolvedValue(profile) },
+    pdfService: { isAvailable: jest.fn().mockReturnValue(false) },
   });
 
   return {

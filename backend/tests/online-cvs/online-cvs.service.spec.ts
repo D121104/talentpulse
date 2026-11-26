@@ -1,4 +1,6 @@
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
+import { OnlineCvDraftLifecycleService } from 'src/online-cvs/online-cv-draft-lifecycle.service';
+import { OnlineCvGenerationStateService } from 'src/online-cvs/online-cv-generation-state.service';
 import { OnlineCvGenerationMode } from 'src/online-cvs/entities/online-cv.entity';
 import { createHash } from 'crypto';
 import { plainToInstance } from 'class-transformer';
@@ -152,8 +154,11 @@ function createPendingReviewService() {
     ),
   };
   repository.manager = manager;
+  const queue = { getJob: jest.fn().mockResolvedValue(null) };
+  const draftLifecycle = new OnlineCvDraftLifecycleService(repository);
   const service = Object.assign(Object.create(OnlineCVsService.prototype), {
     onlineCVRepo: repository,
+    generationQueue: queue,
     aiCvConsentsService: {
       lockScope: jest.fn().mockResolvedValue(undefined),
       hasValidConsent: jest.fn().mockResolvedValue(true),
@@ -161,6 +166,13 @@ function createPendingReviewService() {
     configService: { get: jest.fn() },
     invalidateUserCvSkillsCache: jest.fn(),
     usersService: { isCandidatePremium: jest.fn().mockReturnValue(false) },
+    pdfService: { isAvailable: jest.fn().mockReturnValue(false) },
+    draftLifecycle,
+    generationState: new OnlineCvGenerationStateService(
+      repository,
+      queue as any,
+      draftLifecycle,
+    ),
   }) as OnlineCVsService;
   return { service, cv, repository, pendingDraft, policy };
 }
@@ -447,6 +459,7 @@ describe('online CV generation approval boundary', () => {
       };
       const service = Object.assign(Object.create(OnlineCVsService.prototype), {
         onlineCVRepo: repository,
+        pdfService: { isAvailable: jest.fn().mockReturnValue(false) },
       }) as OnlineCVsService;
 
       await expect(
@@ -740,6 +753,7 @@ describe('online CV locale metadata', () => {
       const service = Object.assign(Object.create(OnlineCVsService.prototype), {
         onlineCVRepo: repository,
         redisService: { deleteValue: jest.fn().mockResolvedValue(undefined) },
+        pdfService: { isAvailable: jest.fn().mockReturnValue(false) },
       }) as OnlineCVsService;
       await service.update(
         'cv-1',
@@ -770,6 +784,7 @@ describe('online CV locale metadata', () => {
     };
     const service = Object.assign(Object.create(OnlineCVsService.prototype), {
       onlineCVRepo: repository,
+      pdfService: { isAvailable: jest.fn().mockReturnValue(false) },
     }) as OnlineCVsService;
     await expect(
       service.update(
@@ -869,6 +884,7 @@ describe('online CV create locale metadata', () => {
       },
       redisService: { deleteValue: jest.fn().mockResolvedValue(undefined) },
       exportToPdf: jest.fn().mockResolvedValue(undefined),
+      pdfService: { isAvailable: jest.fn().mockReturnValue(false) },
       findOne: jest.fn().mockResolvedValue(saved),
     });
 
