@@ -45,6 +45,7 @@ import { JobsTab } from './pages/admin/tabs/JobsTab';
 import { SkillsTab } from './pages/admin/tabs/SkillsTab';
 import { ScrollToTop } from './components/common/ScrollToTop';
 import AssistantHost from './components/assistant/AssistantHost';
+import InterviewRoomPage from './pages/interview/InterviewRoomPage';
 
 function App() {
   return (
@@ -89,6 +90,7 @@ function App() {
                     <Route path="/payment/history" element={<Navigate to="/payment-history" replace />} />
                     <Route path="/payment/verify/:orderCode" element={<PaymentVerifyPage />} />
                     <Route path="/payment/verify" element={<PaymentVerifyPage />} />
+                    <Route path="/interview-room/:roomId" element={<InterviewRoomPage />} />
                   </Route>
                   <Route element={<ProtectedRoute allowedRoles={['HR', 'ADMIN']} />}>
                     <Route path="/dashboard" element={<EmployerDashboardPage />} />
@@ -111,6 +113,7 @@ function App() {
                     <Route path="/profile/cv-views" element={<Navigate to="/profile-viewers" replace />} />
                     <Route path="/applied-jobs" element={<AppliedJobsPage />} />
                     <Route path="/jobs/applied" element={<Navigate to="/applied-jobs" replace />} />
+                    <Route path="/candidate/applied-jobs" element={<Navigate to="/applied-jobs" replace />} />
                     <Route path="/cv-templates" element={<CVTemplatePage />} />
                     <Route path="/cv-editor/:id" element={<CVEditorPage />} />
                     <Route path="/cv-editor/new" element={<CVEditorPage />} />

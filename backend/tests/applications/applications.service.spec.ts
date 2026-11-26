@@ -80,6 +80,7 @@ function createHarness({
       createdAt,
     })),
     findOne: jest.fn(),
+    save: jest.fn(async (entity) => entity),
     update: jest.fn().mockResolvedValue(undefined),
     softDelete: jest.fn().mockResolvedValue({ affected: 1 }),
   };
@@ -291,9 +292,40 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
       user,
     );
     harness.queueCVProcessing.mockClear();
-    await harness.service.remove(ids.application, user);
-    expect(harness.applicationRepo.findOne).toHaveBeenLastCalledWith({
-      where: { _id: ids.application, userId: ids.user, isDeleted: false },
+    const withdrawn = await harness.service.remove(ids.application, user);
+    expect(harness.applicationRepo.findOne).toHaveBeenCalledWith({
+      where: { _id: ids.application, isDeleted: false },
+    });
+    expect(harness.applicationRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: ids.application,
+        status: ApplicationStatus.WITHDRAWN,
+        withdrawnAt: expect.any(Date),
+      }),
+    );
+    expect(withdrawn).toEqual(
+      expect.objectContaining({ status: ApplicationStatus.WITHDRAWN }),
+    );
+    expect(harness.cvMatchResultRepo.delete).toHaveBeenCalledWith({
+      applicationId: ids.application,
+    });
+    expect(harness.queueCVProcessing).not.toHaveBeenCalled();
+    expect(harness.consentEventRepo.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('soft-deletes non-pending applications for ADMIN and clears only its matching result', async () => {
+    const harness = createHarness();
+    harness.applicationRepo.findOne.mockResolvedValueOnce({
+      _id: ids.application,
+      cvId: ids.cv,
+      userId: ids.user,
+      jobId: ids.job,
+      companyId: ids.company,
+      status: ApplicationStatus.REVIEWING,
+    });
+    await harness.service.remove(ids.application, {
+      ...user,
+      role: 'ADMIN',
     });
     expect(harness.applicationRepo.update).toHaveBeenCalledWith(
       ids.application,
@@ -305,8 +337,6 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
     expect(harness.applicationRepo.softDelete).toHaveBeenCalledWith(
       ids.application,
     );
-    expect(harness.queueCVProcessing).not.toHaveBeenCalled();
-    expect(harness.consentEventRepo.save).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the application when the matching queue is unavailable', async () => {

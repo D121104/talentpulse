@@ -37,11 +37,15 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Application, ApplicationStatus } from './entities/application.entity';
 import { Company } from 'src/companies/entities/company.entity';
+import { ApplicationStateMachine } from './application-state-machine';
 import { CVMatchResult } from 'src/ai-matching/entities/cv-match-result.entity';
 import { ApplicationAiScoreSummary } from './dto/application-ai-score.dto';
 import { IUser } from 'src/users/users.interface';
 import { CreateApplicationDto } from './dto/create-application.dto';
-import { UpdateApplicationStatusDto } from './dto/update-application.dto';
+import {
+  UpdateApplicationStatusDto,
+  WithdrawApplicationDto,
+} from './dto/update-application.dto';
 import { UsersService } from 'src/users/users.service';
 import { UserCVsService } from 'src/usercvs/usercvs.service';
 import { OnlineCVsService } from 'src/online-cvs/online-cvs.service';
@@ -503,6 +507,9 @@ export class ApplicationsService implements OnModuleInit {
       jobId: app.jobId,
       coverLetter: app.coverLetter,
       status: app.status,
+      version: app.version,
+      withdrawnAt: app.withdrawnAt,
+      withdrawReason: app.withdrawReason,
       history: app.history,
       createdAt: app.createdAt,
       updatedAt: app.updatedAt,
@@ -694,6 +701,7 @@ export class ApplicationsService implements OnModuleInit {
   }
 
   // Update application status (HR/Admin) -> sends realtime socket notification + pushes to Bull Queue for email
+  // Update application status (HR/Admin) -> validates state machine, sends realtime socket notification + optional email
   async updateStatus(
     id: string,
     updateDto: UpdateApplicationStatusDto,
@@ -708,6 +716,35 @@ export class ApplicationsService implements OnModuleInit {
       throw new NotFoundException('Đơn ứng tuyển không tồn tại');
     }
 
+    // Authorization: If HR, ensure belongs to the same company
+    if (user.role === Role.HR) {
+      const userCompanyId = user.company?._id;
+      if (!userCompanyId || application.companyId !== userCompanyId) {
+        throw new ForbiddenException(
+          'Bạn không có quyền thao tác trên đơn ứng tuyển của công ty khác.',
+        );
+      }
+    }
+
+    // Optimistic locking check
+    if (
+      updateDto.expectedVersion !== undefined &&
+      application.version !== updateDto.expectedVersion
+    ) {
+      throw new ConflictException(
+        `Đơn ứng tuyển đã bị cập nhật bởi người khác (phiên bản: ${application.version}). Vui lòng tải lại trang.`,
+      );
+    }
+
+    // State machine transition validation
+    ApplicationStateMachine.validateTransition({
+      currentStatus: application.status,
+      targetStatus: updateDto.status,
+      userRole: user.role,
+      isOwner: application.userId === user._id,
+      reason: updateDto.reason,
+    });
+
     const history = application.history || [];
     history.push({
       status: updateDto.status,
@@ -716,17 +753,20 @@ export class ApplicationsService implements OnModuleInit {
         _id: user._id,
         email: user.email,
       },
+      reason: updateDto.reason,
+      note: updateDto.note,
     });
 
-    await this.applicationRepo.update(id, {
-      status: updateDto.status,
-      history,
-      updatedBy: {
-        _id: user._id,
-        email: user.email,
-      },
-    });
+    application.status = updateDto.status;
+    application.history = history;
+    application.updatedBy = {
+      _id: user._id,
+      email: user.email,
+    };
 
+    await this.applicationRepo.save(application);
+
+    // Create In-App Notification for candidate
     const notiObj: CreateNotificationDto = {
       userId: application.userId,
       title: '',
@@ -754,7 +794,7 @@ export class ApplicationsService implements OnModuleInit {
         break;
 
       case ApplicationStatus.CONSIDERING:
-        notiObj.title = 'Hồ sơ ứng tuyển của bạn đang được Cân nhắc';
+        notiObj.title = 'Hồ sơ ứng tuyển đang được Cân nhắc';
         notiObj.content = `Nhà tuyển dụng từ công ty ${
           application.company?.name || ''
         } đã đánh giá CV của bạn cho vị trí ${
@@ -763,9 +803,20 @@ export class ApplicationsService implements OnModuleInit {
         await this.notificationsService.create(notiObj);
         break;
 
+      case ApplicationStatus.INTERVIEWING:
+        notiObj.title = 'Hồ sơ đã chuyển sang giai đoạn Phỏng vấn';
+        notiObj.content = `Nhà tuyển dụng từ công ty ${
+          application.company?.name || ''
+        } đã chuyển hồ sơ của bạn cho vị trí ${
+          application.job?.name || ''
+        } sang vòng phỏng vấn.`;
+        await this.notificationsService.create(notiObj);
+        break;
+
+      case ApplicationStatus.SUITABLE:
       case ApplicationStatus.APPROVED:
         notiObj.title = 'Hồ sơ của bạn được đánh giá Phù hợp';
-        notiObj.content = `Chúc mừng! Nhà tuyển dụng từ công ty ${
+        notiObj.content = `Nhà tuyển dụng từ công ty ${
           application.company?.name || ''
         } đã đánh giá CV của bạn cho vị trí ${
           application.job?.name || ''
@@ -782,14 +833,20 @@ export class ApplicationsService implements OnModuleInit {
         break;
     }
 
-    // Push email job to Bull Queue asynchronously for CONSIDERING, APPROVED, REJECTED
-    if (
-      [
-        ApplicationStatus.CONSIDERING,
-        ApplicationStatus.APPROVED,
-        ApplicationStatus.REJECTED,
-      ].includes(updateDto.status)
-    ) {
+    // Email delivery:
+    // 1. If INTERVIEWING: send email only if sendEmail is explicitly true (or custom email provided)
+    // 2. If CONSIDERING, SUITABLE, REJECTED: send standard notification email
+    const shouldSendEmail =
+      updateDto.status === ApplicationStatus.INTERVIEWING
+        ? updateDto.sendEmail === true || !!updateDto.customEmailContent
+        : [
+            ApplicationStatus.CONSIDERING,
+            ApplicationStatus.SUITABLE,
+            ApplicationStatus.APPROVED,
+            ApplicationStatus.REJECTED,
+          ].includes(updateDto.status);
+
+    if (shouldSendEmail) {
       try {
         let candidateEmail = application.user?.email;
         let candidateName = application.user?.name;
@@ -811,6 +868,9 @@ export class ApplicationsService implements OnModuleInit {
               jobTitle: application.job?.name || 'Vị trí tuyển dụng',
               companyName: application.company?.name || 'Doanh nghiệp',
               status: updateDto.status,
+              note: updateDto.note,
+              customSubject: updateDto.customEmailSubject,
+              customContent: updateDto.customEmailContent,
             },
             {
               attempts: 3,
@@ -833,19 +893,121 @@ export class ApplicationsService implements OnModuleInit {
     return await this.findOne(id);
   }
 
-  // Delete application (user can withdraw their application)
+  // Candidate withdraws application when in PENDING status
+  async withdraw(id: string, withdrawDto: WithdrawApplicationDto, user: IUser) {
+    const application = await this.applicationRepo.findOne({
+      where: { _id: id, isDeleted: false },
+      relations: ['job', 'company', 'user'],
+    });
+
+    if (!application) {
+      throw new NotFoundException('Đơn ứng tuyển không tồn tại');
+    }
+
+    // Ownership check
+    const isOwner = application.userId === user._id;
+    if (!isOwner && user.role !== Role.ADMIN) {
+      throw new ForbiddenException(
+        'Bạn không có quyền rút đơn ứng tuyển này.',
+      );
+    }
+
+    // Optimistic lock check
+    if (
+      withdrawDto?.expectedVersion !== undefined &&
+      application.version !== withdrawDto.expectedVersion
+    ) {
+      throw new ConflictException(
+        `Đơn ứng tuyển đã bị thay đổi bởi phiên làm việc khác (phiên bản: ${application.version}). Vui lòng tải lại trang.`,
+      );
+    }
+
+    // State machine check: only PENDING can be withdrawn
+    ApplicationStateMachine.validateTransition({
+      currentStatus: application.status,
+      targetStatus: ApplicationStatus.WITHDRAWN,
+      userRole: user.role,
+      isOwner: true,
+      reason: withdrawDto?.reason,
+    });
+
+    const history = application.history || [];
+    history.push({
+      status: ApplicationStatus.WITHDRAWN,
+      updatedAt: new Date(),
+      updatedBy: {
+        _id: user._id,
+        email: user.email,
+      },
+      reason: withdrawDto?.reason || 'Ứng viên chủ động rút đơn',
+    });
+
+    application.status = ApplicationStatus.WITHDRAWN;
+    application.withdrawnAt = new Date();
+    application.withdrawReason =
+      withdrawDto?.reason || 'Ứng viên chủ động rút đơn';
+    application.history = history;
+    application.updatedBy = {
+      _id: user._id,
+      email: user.email,
+    };
+
+    await this.applicationRepo.save(application);
+    await this.cvMatchResultRepo.delete({ applicationId: id });
+
+    // Notify HR users belonging to the company
+    if (application.companyId) {
+      try {
+        const hrUsers = await this.usersService.findAllByCompanyId(
+          application.companyId,
+        );
+        for (const hr of hrUsers) {
+          await this.notificationsService.create({
+            userId: hr._id,
+            title: 'Ứng viên đã rút hồ sơ ứng tuyển',
+            content: `Ứng viên ${
+              application.user?.name || ''
+            } đã rút hồ sơ ứng tuyển vị trí ${application.job?.name || ''}.`,
+            type: NotificationType.APPLICATION,
+            targetType: NotificationTargetType.APPLICATION,
+            targetId: application._id,
+            data: {
+              applicationId: application._id,
+              jobId: application.jobId,
+              status: ApplicationStatus.WITHDRAWN,
+            },
+          });
+        }
+      } catch (err) {
+        this.logger.error(`Failed to notify HR of withdrawal: ${err.message}`);
+      }
+    }
+
+    return await this.findOne(id);
+  }
+
+  // Delete application (admin soft-delete or legacy user withdrawal fallback)
   async remove(id: string, user: IUser) {
     const application = await this.applicationRepo.findOne({
       where: {
         _id: id,
-        userId: user._id,
         isDeleted: false,
       },
     });
 
     if (!application) {
-      throw new BadRequestException(
-        'Đơn ứng tuyển không tồn tại hoặc không thuộc về bạn',
+      throw new BadRequestException('Đơn ứng tuyển không tồn tại');
+    }
+
+    // If candidate calls delete and it is still PENDING, treat as proper withdrawal
+    if (application.userId === user._id && application.status === ApplicationStatus.PENDING) {
+      return await this.withdraw(id, { reason: 'Ứng viên hủy đơn ứng tuyển' }, user);
+    }
+
+    // Only Admin can hard soft-delete non-pending or other user's application
+    if (user.role !== Role.ADMIN) {
+      throw new ForbiddenException(
+        'Bạn không có quyền xóa đơn ứng tuyển này.',
       );
     }
 

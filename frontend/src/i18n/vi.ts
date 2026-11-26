@@ -453,8 +453,10 @@ export const vi = {
       statusPending: 'Đã gửi tới NTD',
       statusReviewing: 'NTD đã xem CV',
       statusConsidering: 'Cân nhắc',
+      statusInterviewing: 'Đang phỏng vấn',
       statusApproved: 'Phù hợp',
       statusRejected: 'Chưa phù hợp',
+      statusWithdrawn: 'Đã hủy đơn',
     },
     companyTab: {
       title: 'Quản lý thông tin doanh nghiệp',

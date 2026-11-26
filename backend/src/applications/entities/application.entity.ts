@@ -8,6 +8,7 @@ import {
   DeleteDateColumn,
   ManyToOne,
   JoinColumn,
+  VersionColumn,
 } from 'typeorm';
 import { UserCV } from 'src/usercvs/entities/usercv.entity';
 import { User } from 'src/users/entities/user.entity';
@@ -18,8 +19,11 @@ export enum ApplicationStatus {
   PENDING = 'PENDING',
   REVIEWING = 'REVIEWING',
   CONSIDERING = 'CONSIDERING',
+  INTERVIEWING = 'INTERVIEWING',
+  SUITABLE = 'SUITABLE',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
+  WITHDRAWN = 'WITHDRAWN',
 }
 
 @Entity('applications')
@@ -81,6 +85,15 @@ export class Application {
   })
   status: ApplicationStatus;
 
+  @VersionColumn({ default: 1 })
+  version: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  withdrawnAt: Date;
+
+  @Column({ type: 'text', nullable: true })
+  withdrawReason: string;
+
   @Column({ type: 'jsonb', default: '[]' })
   history: {
     status: string;
@@ -89,6 +102,8 @@ export class Application {
       _id: string;
       email: string;
     };
+    reason?: string;
+    note?: string;
   }[];
 
   @Column({ default: false })

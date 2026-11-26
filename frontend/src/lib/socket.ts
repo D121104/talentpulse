@@ -130,3 +130,21 @@ export function getChatSocket(userId?: string): Socket {
 
   return chatSocket;
 }
+let interviewSocket: Socket | null = null;
+
+export function getInterviewRoomSocket(): Socket {
+  const wsUrl = getSocketBaseUrl();
+
+  if (!interviewSocket) {
+    interviewSocket = io(`${wsUrl}/interview-room`, {
+      transports: ['websocket', 'polling'],
+      autoConnect: true,
+      withCredentials: true,
+      reconnection: true,
+      reconnectionAttempts: 15,
+      reconnectionDelay: 1500,
+    });
+  }
+
+  return interviewSocket;
+}

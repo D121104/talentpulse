@@ -454,8 +454,10 @@ export const en = {
       statusPending: 'Sent to Employer',
       statusReviewing: 'Employer Viewed CV',
       statusConsidering: 'Considering',
+      statusInterviewing: 'Interviewing',
       statusApproved: 'Suitable',
       statusRejected: 'Unsuitable',
+      statusWithdrawn: 'Withdrawn',
     },
     companyTab: {
       title: 'Company & Team Management',

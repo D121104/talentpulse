@@ -3,51 +3,128 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Việc làm mới phù hợp</title>
+  <title>Việc làm mới phù hợp - TalentPulse</title>
 </head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f7fa;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f5f7fa; padding: 40px 20px;">
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; -webkit-font-smoothing: antialiased;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 32px 16px;">
     <tr>
       <td align="center">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
-          <!-- Header -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); border: 1px solid #e2e8f0;">
+          
+          <!-- Brand Header Banner -->
           <tr>
-            <td style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center;">
-              <h1 style="color: #ffffff; margin: 0; font-size: 26px; font-weight: 700;">🎯 Việc làm phù hợp với bạn</h1>
-              <p style="color: rgba(255,255,255,0.9); margin: 12px 0 0; font-size: 15px;">Dựa trên kỹ năng: <strong>{{skillNames}}</strong></p>
+            <td style="background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #2563eb 100%); padding: 30px 32px; text-align: left;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td align="left" style="vertical-align: middle;">
+                    <div style="display: inline-flex; align-items: center; gap: 8px;">
+                      <span style="display: inline-block; width: 34px; height: 34px; line-height: 34px; background: #ffffff; color: #2563eb; border-radius: 10px; text-align: center; font-weight: 900; font-size: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.15);">T</span>
+                      <span style="font-size: 24px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; margin-left: 8px; vertical-align: middle;">TalentPulse</span>
+                    </div>
+                  </td>
+                  <td align="right" style="vertical-align: middle;">
+                    <span style="color: #93c5fd; font-size: 13px; font-weight: 600; letter-spacing: 0.2px; text-transform: uppercase;">
+                      Tiếp lợi thế - Nối thành công
+                    </span>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
           
-          <!-- Body -->
+          <!-- Main Content Body -->
           <tr>
-            <td style="padding: 35px 30px;">
-              <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 8px;">Xin chào <strong>{{subscriberEmail}}</strong>,</p>
-              <p style="color: #6b7280; font-size: 15px; line-height: 1.6; margin: 0 0 30px;">Chúng tôi tìm thấy một số việc làm mới phù hợp với kỹ năng của bạn!</p>
-              
+            <td style="padding: 40px 32px 32px;">
+              <!-- Title -->
+              <h2 style="color: #0f172a; margin: 0 0 20px; font-size: 22px; font-weight: 800; text-align: center; letter-spacing: -0.3px;">
+                Việc làm mới phù hợp với bạn
+              </h2>
+
+              <!-- Greeting -->
+              <p style="color: #0f172a; font-size: 16px; line-height: 1.6; margin: 0 0 14px;">
+                Xin chào <strong style="color: #2563eb;">{{subscriberEmail}}</strong>,
+              </p>
+
+              <!-- Intro -->
+              <p style="color: #334155; font-size: 15px; line-height: 1.7; margin: 0 0 24px;">
+                Dựa trên danh sách kỹ năng bạn đang theo dõi (<strong>{{skillNames}}</strong>), TalentPulse đã chọn lọc các cơ hội nghề nghiệp mới nhất dành cho bạn:
+              </p>
+
               <!-- Jobs List -->
-              {{#each jobs}}
-              <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
-                <h3 style="color: #1e293b; font-size: 17px; font-weight: 600; margin: 0 0 8px;">{{this.name}}</h3>
-                <p style="color: #64748b; font-size: 14px; margin: 0 0 8px;">🏢 {{this.company.name}}</p>
-                <p style="color: #10b981; font-size: 15px; font-weight: 600; margin: 0 0 4px;">💰 {{#if this.salary}}{{this.salary}} VNĐ{{else}}Thương lượng{{/if}}</p>
-                {{#if this.location}}<p style="color: #6b7280; font-size: 14px; margin: 0;">📍 {{this.location}}</p>{{/if}}
+              <div style="margin: 0 0 24px;">
+                {{#each jobs}}
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 20px; margin-bottom: 14px;">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                    <tr>
+                      <td>
+                        <h3 style="color: #0f172a; font-size: 16px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.2px;">
+                          {{this.name}}
+                        </h3>
+                        <p style="color: #475569; font-size: 14px; font-weight: 600; margin: 0 0 10px;">
+                          {{this.company.name}}
+                        </p>
+                        <div style="margin-bottom: 12px;">
+                          <span style="display: inline-block; background-color: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; font-size: 12px; font-weight: 700; border-radius: 6px; padding: 4px 10px; margin-right: 6px;">
+                            Mức lương: {{#if this.salary}}{{this.salary}} VNĐ{{else}}Thỏa thuận{{/if}}
+                          </span>
+                          {{#if this.location}}
+                          <span style="display: inline-block; background-color: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; font-size: 12px; font-weight: 600; border-radius: 6px; padding: 4px 10px;">
+                            Địa điểm: {{this.location}}
+                          </span>
+                          {{/if}}
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding-top: 4px;">
+                        <a href="{{#if this.jobUrl}}{{this.jobUrl}}{{else}}{{../portalUrl}}/{{this._id}}{{/if}}" style="display: inline-block; background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 700;">
+                          Xem chi tiết vị trí →
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+                {{/each}}
               </div>
-              {{/each}}
-              
-              <!-- Tips -->
-              <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 12px; padding: 20px; margin-top: 20px;">
-                <p style="color: #92400e; font-size: 14px; margin: 0; line-height: 1.6;">💡 <strong>Mẹo:</strong> Cập nhật CV thường xuyên để tăng cơ hội được nhà tuyển dụng chú ý!</p>
+
+              <!-- Guidance Advice -->
+              <div style="color: #334155; font-size: 14px; line-height: 1.7; margin: 24px 0 28px; background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 16px 18px;">
+                <strong>Gợi ý từ TalentPulse:</strong> Thường xuyên cập nhật hồ sơ và bổ sung các chứng chỉ liên quan sẽ giúp CV của bạn được các nhà tuyển dụng chú ý hơn.
+              </div>
+
+              <!-- CTA Button -->
+              <div style="text-align: center; margin: 28px 0 10px;">
+                <a href="{{portalUrl}}" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: #ffffff; text-decoration: none; padding: 14px 36px; border-radius: 12px; font-size: 15px; font-weight: 700; box-shadow: 0 6px 18px rgba(37, 99, 235, 0.35); letter-spacing: 0.2px;">
+                  Khám phá toàn bộ việc làm trên TalentPulse →
+                </a>
               </div>
             </td>
           </tr>
           
-          <!-- Footer -->
+          <!-- Brand Footer -->
           <tr>
-            <td style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
-              <p style="color: #64748b; font-size: 14px; margin: 0 0 8px;">Trân trọng,</p>
-              <p style="color: #1e293b; font-size: 16px; font-weight: 600; margin: 0 0 20px;">Đội ngũ hỗ trợ Job Portal</p>
-              <div style="border-top: 1px solid #e2e8f0; padding-top: 20px;">
-                <p style="color: #94a3b8; font-size: 12px; margin: 0;">© 2026 Job Portal. All rights reserved.</p>
+            <td style="background-color: #0f172a; padding: 32px 24px; text-align: center; border-top: 1px solid #1e293b;">
+              <!-- Mini Brand -->
+              <div style="margin-bottom: 16px;">
+                <span style="font-size: 18px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px;">TalentPulse</span>
+                <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 0;">Nền tảng Tuyển dụng & Kết nối Việc làm Thông minh với AI</p>
+              </div>
+
+              <!-- Social Links -->
+              <div style="margin-bottom: 20px;">
+                <a href="#" style="display: inline-block; width: 32px; height: 32px; line-height: 32px; background: #1e293b; color: #38bdf8; border-radius: 50%; text-decoration: none; font-weight: bold; margin: 0 4px; font-size: 13px;">fb</a>
+                <a href="#" style="display: inline-block; width: 32px; height: 32px; line-height: 32px; background: #1e293b; color: #60a5fa; border-radius: 50%; text-decoration: none; font-weight: bold; margin: 0 4px; font-size: 13px;">in</a>
+                <a href="#" style="display: inline-block; width: 32px; height: 32px; line-height: 32px; background: #1e293b; color: #f43f5e; border-radius: 50%; text-decoration: none; font-weight: bold; margin: 0 4px; font-size: 13px;">tt</a>
+              </div>
+
+              <!-- Address & Copyright -->
+              <div style="border-top: 1px solid #1e293b; padding-top: 16px;">
+                <p style="color: #64748b; font-size: 12px; margin: 0 0 6px; line-height: 1.5;">
+                  Tòa nhà TalentPulse Innovation Hub, Quận Cầu Giấy, TP. Hà Nội
+                </p>
+                <p style="color: #475569; font-size: 12px; margin: 0;">
+                  © 2024-2026 TalentPulse Ecosystem. All rights reserved.
+                </p>
               </div>
             </td>
           </tr>

@@ -38,6 +38,7 @@ import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
 import { SavedJobsModule } from './saved-jobs/saved-jobs.module';
 import { ChatModule } from './chat/chat.module';
 import { AdminModule } from './admin/admin.module';
+import { InterviewsModule } from './interviews/interviews.module';
 import { areQueueWorkersEnabled, isRedisEnabled } from './config/runtime-flags';
 import { createRedisConnectionOptions } from './redis/redis.module';
 import { createPostgresSslOptions } from './database/postgres-ssl';
@@ -146,6 +147,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     ChatModule,
     AdminModule,
     ObservabilityModule,
+    InterviewsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
