@@ -60,6 +60,8 @@ import type {
   CVGenerationStatus,
   CVGenerationJobStatus,
   CVGenerationDraft,
+  CVGenerationReviewMetadata,
+  GenerationApproval,
   GenerateOnlineCVDraftResponse,
   GenerateOnlineCVJobStatusResponse,
   CreateOnlineCVDto,
@@ -67,20 +69,61 @@ import type {
   CVLocale,
 } from "../../lib/cvTypes";
 import { CV_EDITOR_TEMPLATES } from "../../components/cv/editor/templates";
-import {
-  normalizeCvGenerationWarnings,
-} from "../../lib/cvWarningNormalization";
+import { normalizeCvGenerationWarnings } from "../../lib/cvWarningNormalization";
 
 type UnknownRecord = Record<string, unknown>;
-
 const asRecord = (value: unknown): UnknownRecord =>
   value && typeof value === "object" ? (value as UnknownRecord) : {};
 
 const asText = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
+const omissionReasonLabel = (reasonCode: string, uiVi: boolean) => {
+  const labels: Record<string, [string, string]> = {
+    SOURCE_UNAVAILABLE: ["Không có dữ liệu nguồn", "Source data unavailable"],
+    INSUFFICIENT_EVIDENCE: [
+      "Chưa đủ dữ liệu xác thực",
+      "Insufficient supporting evidence",
+    ],
+    STRUCTURE_INVALID: [
+      "Nội dung không đúng cấu trúc",
+      "Content did not match the required structure",
+    ],
+    LOCALIZATION_FAILED: [
+      "Không thể bản địa hóa nội dung",
+      "Content could not be localized",
+    ],
+  };
+  return (
+    labels[reasonCode]?.[uiVi ? 0 : 1] ||
+    (uiVi ? "Đã lược bỏ nội dung" : "Content omitted")
+  );
+};
+
+const localizedReviewPath = (path: string, uiVi: boolean) => {
+  const labels: Record<string, [string, string]> = {
+    position: ["Vị trí", "Position"],
+    career_objective: ["Mục tiêu nghề nghiệp", "Career objective"],
+    work_experience: ["Kinh nghiệm làm việc", "Work experience"],
+    education: ["Học vấn", "Education"],
+    projects: ["Dự án", "Projects"],
+    skills: ["Kỹ năng", "Skills"],
+    activities: ["Hoạt động", "Activities"],
+    certificates: ["Chứng chỉ", "Certificates"],
+    awards: ["Giải thưởng", "Awards"],
+  };
+  return path
+    .split("/")
+    .filter(Boolean)
+    .map((part) => labels[part]?.[uiVi ? 0 : 1] || part)
+    .join(" / ");
+};
+
 const createIdempotencyKey = (): string => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return crypto.randomUUID();
   }
   return `cv-generation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -91,13 +134,28 @@ const localizedGenerationStatus = (
   locale: CVLocale,
 ): string => {
   const messages: Record<string, [string, string]> = {
-    QUEUED: ["Yêu cầu đã được tiếp nhận. Đang xếp hàng xử lý...", "Request accepted. Waiting to start..."],
+    QUEUED: [
+      "Yêu cầu đã được tiếp nhận. Đang xếp hàng xử lý...",
+      "Request accepted. Waiting to start...",
+    ],
     PROCESSING: ["Đang tạo bản nháp CV...", "Creating your CV draft..."],
-    CANCEL_REQUESTED: ["Đang xử lý yêu cầu hủy...", "Processing cancellation request..."],
+    CANCEL_REQUESTED: [
+      "Đang xử lý yêu cầu hủy...",
+      "Processing cancellation request...",
+    ],
     COMPLETE: ["Đã tạo xong bản nháp CV.", "Your CV draft is ready."],
-    DEGRADED: ["Đã tạo bản nháp an toàn. Hãy kiểm tra nội dung.", "A safe draft is ready. Review the content."],
-    STALE: ["Yêu cầu đã hết hiệu lực. Bạn có thể thử lại.", "This request is no longer current. You can try again."],
-    FAILED: ["Không thể tạo bản nháp lúc này. Vui lòng thử lại.", "The draft could not be created. Please try again."],
+    DEGRADED: [
+      "Đã tạo bản nháp an toàn. Hãy kiểm tra nội dung.",
+      "A safe draft is ready. Review the content.",
+    ],
+    STALE: [
+      "Yêu cầu đã hết hiệu lực. Bạn có thể thử lại.",
+      "This request is no longer current. You can try again.",
+    ],
+    FAILED: [
+      "Không thể tạo bản nháp lúc này. Vui lòng thử lại.",
+      "The draft could not be created. Please try again.",
+    ],
     CANCELLED: ["Đã hủy tạo bản nháp.", "Draft generation was cancelled."],
     IDLE: ["", ""],
   };
@@ -434,12 +492,13 @@ export default function CVEditorPage() {
   const [link, setLink] = useState<string>("");
   const [address, setAddress] = useState<string>(user?.address || "");
   const [careerObjective, setCareerObjective] = useState<string>("");
-  const [expectedSalary, setExpectedSalary] = useState('');
+  const [expectedSalary, setExpectedSalary] = useState("");
   const [shareExpectedSalary, setShareExpectedSalary] = useState(false);
   let salaryValue: number | null = null;
   let salaryValid = true;
   try {
-    salaryValue = optionalCandidateNumber(expectedSalary, 2147483647, true) ?? null;
+    salaryValue =
+      optionalCandidateNumber(expectedSalary, 2147483647, true) ?? null;
   } catch {
     salaryValid = false;
   }
@@ -503,10 +562,18 @@ export default function CVEditorPage() {
   const [cvLanguage, setCvLanguage] = useState<"vi" | "en">(initialLanguage);
   const cvLocale: CVLocale = cvLanguage === "en" ? "en-US" : "vi-VN";
   const { i18n } = useTranslation();
-  const uiLocale: CVLocale = (i18n.resolvedLanguage || i18n.language || "vi").toLowerCase().startsWith("en") ? "en-US" : "vi-VN";
+  const uiLocale: CVLocale = (i18n.resolvedLanguage || i18n.language || "vi")
+    .toLowerCase()
+    .startsWith("en")
+    ? "en-US"
+    : "vi-VN";
   const uiVi = uiLocale === "vi-VN";
   const saveCopy = (vi: string, en: string) =>
-    (i18n.resolvedLanguage || i18n.language || "vi").toLowerCase().startsWith("en") ? en : vi;
+    (i18n.resolvedLanguage || i18n.language || "vi")
+      .toLowerCase()
+      .startsWith("en")
+      ? en
+      : vi;
   const localeLabels = CV_TEMPLATE_LABELS[cvLocale];
 
   const SECTION_LABELS = {
@@ -554,11 +621,24 @@ export default function CVEditorPage() {
   const [generationStatus, setGenerationStatus] =
     useState<CVGenerationStatus>("IDLE");
   const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
+  const [pendingApproval, setPendingApproval] =
+    useState<GenerationApproval | null>(null);
+  const [pendingReviewMetadata, setPendingReviewMetadata] =
+    useState<CVGenerationReviewMetadata | null>(null);
+  const [hasPendingGeneration, setHasPendingGeneration] = useState(false);
+  const [isDiscardingDraft, setIsDiscardingDraft] = useState(false);
   const [showGenerationWarnings, setShowGenerationWarnings] = useState(false);
-  const [generationErrorStatus, setGenerationError] = useState<CVGenerationJobStatus | "NAME_REQUIRED" | null>(null);
-  const generationError = generationErrorStatus === "NAME_REQUIRED"
-    ? uiVi ? "Hãy nhập họ tên trước khi tạo CV bằng AI." : "Enter a full name before creating an AI CV."
-    : generationErrorStatus ? localizedGenerationStatus(generationErrorStatus, uiLocale) : null;
+  const [generationErrorStatus, setGenerationError] = useState<
+    CVGenerationJobStatus | "NAME_REQUIRED" | null
+  >(null);
+  const generationError =
+    generationErrorStatus === "NAME_REQUIRED"
+      ? uiVi
+        ? "Hãy nhập họ tên trước khi tạo CV bằng AI."
+        : "Enter a full name before creating an AI CV."
+      : generationErrorStatus
+        ? localizedGenerationStatus(generationErrorStatus, uiLocale)
+        : null;
   const [generationJobId, setGenerationJobId] = useState("");
   const [generationJobStatus, setGenerationJobStatus] = useState<
     CVGenerationJobStatus | "IDLE"
@@ -737,10 +817,22 @@ export default function CVEditorPage() {
     if (!accessToken) return;
 
     setIsLoadingExistingCv(true);
+    let cancelled = false;
     void (async () => {
       try {
         const cv = await onlineCvApi.findOne(id, accessToken);
+        if (cancelled) return;
         if (cv) {
+          const pending = asRecord(asRecord(cv).pendingGeneration);
+          setHasPendingGeneration(pending.reviewStatus === "PENDING");
+          setPendingApproval(null);
+          if (
+            pending.reviewStatus === "PENDING" &&
+            !generationQueryOperationId &&
+            typeof pending.operationId === "string"
+          ) {
+            persistGenerationQuery(cv._id, pending.operationId);
+          }
           // Apply revision locale before loaded fields can trigger an autosave.
           const loadedLocale = resolveLoadedCvLocale(cv.revision);
           setCvLanguage(loadedLocale === "en-US" ? "en" : "vi");
@@ -781,7 +873,11 @@ export default function CVEditorPage() {
           setLink(cv.link || "");
           setAddress(cv.address || "");
           setCareerObjective(cv.careerObjective || "");
-          setExpectedSalary(cv.expectedSalaryVndMonthly == null ? '' : String(cv.expectedSalaryVndMonthly));
+          setExpectedSalary(
+            cv.expectedSalaryVndMonthly == null
+              ? ""
+              : String(cv.expectedSalaryVndMonthly),
+          );
           setShareExpectedSalary(cv.shareExpectedSalary === true);
 
           const normalizedSectionOrder = normalizeSectionOrder(cv.sectionOrder);
@@ -833,13 +929,18 @@ export default function CVEditorPage() {
             }));
           }
         }
-      } catch (error) {
-        console.error("Failed to load CV:", error);
+      } catch {
+        if (!cancelled) setGenerationError("FAILED");
       } finally {
-        setIsLoadingExistingCv(false);
+        if (!cancelled) setIsLoadingExistingCv(false);
       }
     })();
-  }, [id, isNew, accessToken, generationQueryOperationId]);
+    return () => {
+      cancelled = true;
+    };
+    // Query cleanup must not reload canonical fields over the reviewed draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, isNew, accessToken]);
 
   // Fetch existing user CVs for library tool
   useEffect(() => {
@@ -987,10 +1088,12 @@ export default function CVEditorPage() {
     return payload;
   };
 
-  latestPayloadRef.current = !salaryValid ? null : {
-    ...buildCvPayload(false, generationMode, false),
-    expectedContentVersion: contentVersionRef.current,
-  };
+  latestPayloadRef.current = !salaryValid
+    ? null
+    : {
+        ...buildCvPayload(false, generationMode, false),
+        expectedContentVersion: contentVersionRef.current,
+      };
   latestDraftRevisionRef.current = draftRevision;
 
   // Generated drafts and subsequent manual edits use the same PATCH contract.
@@ -1003,6 +1106,7 @@ export default function CVEditorPage() {
       !isDirty ||
       !salaryValid ||
       isSaving ||
+      hasPendingGeneration ||
       generationIsActive
     ) {
       return;
@@ -1017,9 +1121,13 @@ export default function CVEditorPage() {
       void onlineCvApi
         .update(activeCvId, payload, accessToken)
         .then((saved) => {
-          if (generationContextRef.current.cvId !== activeCvId ||
-              generationContextRef.current.accessToken !== accessToken) return;
-          contentVersionRef.current = saved.contentVersion || contentVersionRef.current;
+          if (
+            generationContextRef.current.cvId !== activeCvId ||
+            generationContextRef.current.accessToken !== accessToken
+          )
+            return;
+          contentVersionRef.current =
+            saved.contentVersion || contentVersionRef.current;
           setContentVersion(contentVersionRef.current);
           if (latestDraftRevisionRef.current === revision) setIsDirty(false);
         })
@@ -1038,6 +1146,7 @@ export default function CVEditorPage() {
     draftRevision,
     editorCvId,
     generationIsActive,
+    hasPendingGeneration,
     id,
     isDirty,
     isLoadingExistingCv,
@@ -1050,11 +1159,39 @@ export default function CVEditorPage() {
   const applyGeneratedDraft = (
     response: GenerateOnlineCVDraftResponse | GenerateOnlineCVJobStatusResponse,
   ) => {
+    const review = asRecord(response);
+    const isPending = review.reviewStatus === "PENDING";
+    if (isPending) {
+      if (
+        !review.draft ||
+        typeof review.operationId !== "string" ||
+        typeof review.draftHash !== "string"
+      ) {
+        setHasPendingGeneration(true);
+        setPendingApproval(null);
+        setGenerationStatus("FAILED");
+        setGenerationError("FAILED");
+        return;
+      }
+      setHasPendingGeneration(true);
+      setPendingApproval({
+        operationId: review.operationId,
+        draftHash: review.draftHash,
+      });
+      if (typeof setPendingReviewMetadata === "function")
+        setPendingReviewMetadata(
+          review.reviewMetadata && typeof review.reviewMetadata === "object"
+            ? (review.reviewMetadata as CVGenerationReviewMetadata)
+            : null,
+        );
+    } else if (typeof setPendingReviewMetadata === "function") {
+      setPendingReviewMetadata(null);
+    }
     const mappedResponse = mapGeneratedDraftResponse(response);
     const draft = mappedResponse.draft;
     if (mappedResponse.locale)
       setCvLanguage(mappedResponse.locale === "en-US" ? "en" : "vi");
-    if (draft.title && !isTitleManual) setTitle(draft.title);
+    if (draft.title && (isPending || !isTitleManual)) setTitle(draft.title);
     if (draft.fullName !== undefined) setFullName(draft.fullName || "");
     if (draft.position !== undefined) setPosition(draft.position || "");
     if (draft.phone !== undefined) setPhone(draft.phone || "");
@@ -1063,17 +1200,20 @@ export default function CVEditorPage() {
     if (draft.address !== undefined) setAddress(draft.address || "");
     if (draft.careerObjective !== undefined)
       setCareerObjective(draft.careerObjective || "");
-    if (draft.education)
+    if (draft.education || isPending)
       setEducation(filterMeaningfulCvEntries(draft.education));
-    if (draft.workExperience)
+    if (draft.workExperience || isPending)
       setWorkExperience(filterMeaningfulCvEntries(draft.workExperience));
-    if (draft.skills) setSkills(filterMeaningfulCvEntries(draft.skills));
-    if (draft.activities)
+    if (draft.skills || isPending)
+      setSkills(filterMeaningfulCvEntries(draft.skills));
+    if (draft.activities || isPending)
       setActivities(filterMeaningfulCvEntries(draft.activities));
-    if (draft.projects) setProjects(filterMeaningfulCvEntries(draft.projects));
-    if (draft.certificates)
+    if (draft.projects || isPending)
+      setProjects(filterMeaningfulCvEntries(draft.projects));
+    if (draft.certificates || isPending)
       setCertificates(filterMeaningfulCvEntries(draft.certificates));
-    if (draft.awards) setAwards(filterMeaningfulCvEntries(draft.awards));
+    if (draft.awards || isPending)
+      setAwards(filterMeaningfulCvEntries(draft.awards));
     if (draft.sectionOrder?.length) setSectionOrder(draft.sectionOrder);
     if (draft.fontFamily) setFontFamilyId(draft.fontFamily);
     if (draft.themeColor) setThemeColorId(draft.themeColor);
@@ -1095,15 +1235,116 @@ export default function CVEditorPage() {
       ...(draft.awards ? { awards: draft.awards.length > 0 } : {}),
     }));
     // The generate endpoint is editor-only even if an older response omitted the mode.
-    setGenerationMode(mappedResponse.generationMode || "EDITOR_ONLY");
+    setGenerationMode(
+      isPending
+        ? "EDITOR_ONLY"
+        : mappedResponse.generationMode || "EDITOR_ONLY",
+    );
     if (response.contentVersion !== undefined) {
       contentVersionRef.current = response.contentVersion;
       setContentVersion(response.contentVersion);
     }
     setGenerationWarnings(mappedResponse.warnings);
+    if (isPending) setShowGenerationWarnings(true);
     setGenerationStatus(mappedResponse.status);
     setGenerationError(null);
-    markDirty();
+    if (isPending) {
+      setIsDirty(true);
+      setDraftRevision((revision) => revision + 1);
+    } else {
+      markDirty();
+    }
+  };
+
+  const applySelectedRegenerationResult = (
+    response: GenerateOnlineCVJobStatusResponse,
+    target: {
+      reviewOperationId: string;
+      expectedDraftHash: string;
+      targetPath: string;
+    },
+  ): boolean => {
+    if (
+      !pendingApproval ||
+      pendingApproval.operationId !== target.reviewOperationId ||
+      pendingApproval.draftHash !== target.expectedDraftHash ||
+      response.reviewStatus !== "PENDING" ||
+      !/^[a-f0-9]{64}$/i.test(response.draftHash || "") ||
+      !response.draft
+    )
+      return false;
+
+    const draft = mapGeneratedDraftResponse(response).draft;
+    const collectionTarget = target.targetPath.match(
+      /^\/(education|work_experience|projects|skills|activities|certificates|awards)\/(0|[1-9]\d*)$/,
+    );
+    if (target.targetPath === "/position") {
+      if (typeof draft.position !== "string") return false;
+      setPosition(draft.position);
+    } else if (target.targetPath === "/career_objective") {
+      if (typeof draft.careerObjective !== "string") return false;
+      setCareerObjective(draft.careerObjective);
+    } else if (collectionTarget) {
+      const [, section, rawIndex] = collectionTarget;
+      const index = Number(rawIndex);
+      const sectionValues: Record<string, unknown[]> = {
+        education: draft.education || [],
+        work_experience: draft.workExperience || [],
+        projects: draft.projects || [],
+        skills: draft.skills || [],
+        activities: draft.activities || [],
+        certificates: draft.certificates || [],
+        awards: draft.awards || [],
+      };
+      const value = sectionValues[section]?.[index];
+      if (value === undefined) return false;
+      const applyItem = <T,>(previous: T[]) =>
+        previous.map((entry, itemIndex) =>
+          itemIndex === index ? (value as T) : entry,
+        );
+      switch (section) {
+        case "education":
+          setEducation(applyItem);
+          break;
+        case "work_experience":
+          setWorkExperience(applyItem);
+          break;
+        case "projects":
+          setProjects(applyItem);
+          break;
+        case "skills":
+          setSkills(applyItem);
+          break;
+        case "activities":
+          setActivities(applyItem);
+          break;
+        case "certificates":
+          setCertificates(applyItem);
+          break;
+        case "awards":
+          setAwards(applyItem);
+          break;
+      }
+    } else {
+      return false;
+    }
+
+    setPendingApproval({
+      operationId: target.reviewOperationId,
+      draftHash: response.draftHash as string,
+    });
+    if (
+      response.reviewMetadata &&
+      typeof setPendingReviewMetadata === "function"
+    )
+      setPendingReviewMetadata(response.reviewMetadata);
+    setGenerationWarnings(response.warnings || []);
+    setGenerationStatus(
+      response.status === "DEGRADED" ? "DEGRADED" : "COMPLETE",
+    );
+    setGenerationError(null);
+    setDraftRevision((revision) => revision + 1);
+    return true;
   };
 
   const clearGenerationTimer = () => {
@@ -1117,7 +1358,10 @@ export default function CVEditorPage() {
     const next = new URLSearchParams(searchParams);
     next.delete("generation");
     navigate(
-      { pathname: location.pathname, search: next.toString() ? `?${next}` : "" },
+      {
+        pathname: location.pathname,
+        search: next.toString() ? `?${next}` : "",
+      },
       { replace: true },
     );
   };
@@ -1148,6 +1392,45 @@ export default function CVEditorPage() {
     }
     let draftFetchFailed = false;
     const rawResult = asRecord(result);
+    const regenerationTarget = asRecord(rawResult.regenerationTarget);
+    if (
+      typeof regenerationTarget.reviewOperationId === "string" &&
+      typeof regenerationTarget.expectedDraftHash === "string" &&
+      typeof regenerationTarget.targetPath === "string"
+    ) {
+      if (!pendingApproval) {
+        applyGeneratedDraft({
+          ...result,
+          operationId: regenerationTarget.reviewOperationId,
+        });
+        return;
+      }
+      applySelectedRegenerationResult(result, {
+        reviewOperationId: regenerationTarget.reviewOperationId,
+        expectedDraftHash: regenerationTarget.expectedDraftHash,
+        targetPath: regenerationTarget.targetPath,
+      });
+      setGenerationStatus(
+        result.status === "DEGRADED" ? "DEGRADED" : "COMPLETE",
+      );
+      setGenerationError(null);
+      return;
+    }
+    const pendingDraft = asRecord(rawResult.draft);
+    if (
+      rawResult.reviewStatus === "PENDING" &&
+      (Array.isArray(rawResult.draft) ||
+        Object.keys(pendingDraft).length === 0 ||
+        rawResult.operationId !== result.operationId ||
+        typeof rawResult.draftHash !== "string" ||
+        !/^[a-f0-9]{64}$/i.test(rawResult.draftHash))
+    ) {
+      setHasPendingGeneration(true);
+      setPendingApproval(null);
+      setGenerationStatus("FAILED");
+      setGenerationError("FAILED");
+      return;
+    }
     const currentPayload =
       result.current ||
       rawResult.currentGeneration ||
@@ -1155,9 +1438,9 @@ export default function CVEditorPage() {
       rawResult.result;
     const hasResultPayload = Boolean(
       result.draft ||
-        currentPayload ||
-        rawResult.fullName ||
-        rawResult.full_name,
+      currentPayload ||
+      rawResult.fullName ||
+      rawResult.full_name,
     );
     if (hasResultPayload) {
       applyGeneratedDraft({
@@ -1181,24 +1464,64 @@ export default function CVEditorPage() {
           cv: current,
         } as GenerateOnlineCVJobStatusResponse);
       } catch {
-        if (signal?.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== result.operationId) return;
+        if (
+          signal?.aborted ||
+          !generationContextIsCurrent() ||
+          pollingOperationRef.current !== result.operationId
+        )
+          return;
         draftFetchFailed = true;
       }
     }
     setGenerationStatus(result.status === "DEGRADED" ? "DEGRADED" : "COMPLETE");
-    setGenerationError(
-      draftFetchFailed ? "FAILED" : null,
+    setGenerationError(draftFetchFailed ? "FAILED" : null);
+  };
+
+  const handleDiscardPendingDraft = async () => {
+    if (!editorCvId || !pendingApproval || isDiscardingDraft) return;
+    setIsDiscardingDraft(true);
+    try {
+      await onlineCvApi.discardGenerationDraft(
+        editorCvId,
+        pendingApproval.operationId,
+        accessToken,
+      );
+      setHasPendingGeneration(false);
+      setPendingApproval(null);
+      setPendingReviewMetadata(null);
+      setIsDirty(false);
+      setGenerationError(null);
+      toast.success(uiVi ? "Đã từ chối bản nháp CV." : "CV draft discarded.");
+      window.location.reload();
+    } catch {
+      toast.error(
+        uiVi
+          ? "Không thể từ chối bản nháp. Hãy tải lại trạng thái CV."
+          : "Could not discard this draft. Reload the CV status.",
+      );
+    } finally {
+      setIsDiscardingDraft(false);
+    }
+  };
+
+  const scheduleGenerationPoll = (
+    cvId: string,
+    operationId: string,
+    delaySeconds: number,
+  ) => {
+    clearGenerationTimer();
+    generationTimerRef.current = window.setTimeout(
+      () => {
+        void pollGenerationJob(cvId, operationId);
+      },
+      Math.max(1, Math.min(delaySeconds || 5, 60)) * 1000,
     );
   };
 
-  const scheduleGenerationPoll = (cvId: string, operationId: string, delaySeconds: number) => {
-    clearGenerationTimer();
-    generationTimerRef.current = window.setTimeout(() => {
-      void pollGenerationJob(cvId, operationId);
-    }, Math.max(1, Math.min(delaySeconds || 5, 60)) * 1000);
-  };
-
-  const pollGenerationJob = async (cvId: string, operationId: string): Promise<void> => {
+  const pollGenerationJob = async (
+    cvId: string,
+    operationId: string,
+  ): Promise<void> => {
     const signal = generationAbortRef.current?.signal;
     if (
       pollingStoppedRef.current ||
@@ -1244,22 +1567,37 @@ export default function CVEditorPage() {
       clearGenerationTimer();
       if (status === "COMPLETE" || status === "DEGRADED") {
         await applyTerminalGenerationResult(result, cvId);
-        if (signal?.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+        if (
+          signal?.aborted ||
+          !generationContextIsCurrent() ||
+          pollingOperationRef.current !== operationId
+        )
+          return;
         setGenerationJobStatus(status);
         pollingOperationRef.current = null;
         clearGenerationQuery();
         return;
       }
 
-      const terminalStatus = status === "CANCELLED" || status === "STALE" ? status : "FAILED";
+      const terminalStatus =
+        status === "CANCELLED" || status === "STALE" ? status : "FAILED";
       setGenerationJobStatus(terminalStatus);
       setGenerationStatus(terminalStatus);
       setGenerationError(terminalStatus);
       pollingOperationRef.current = null;
       clearGenerationQuery();
     } catch (error) {
-      if (pollingStoppedRef.current || signal?.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
-      if (error instanceof ApiError && [401, 403, 404, 409].includes(error.status)) {
+      if (
+        pollingStoppedRef.current ||
+        signal?.aborted ||
+        !generationContextIsCurrent() ||
+        pollingOperationRef.current !== operationId
+      )
+        return;
+      if (
+        error instanceof ApiError &&
+        [401, 403, 404, 409].includes(error.status)
+      ) {
         const terminalStatus: CVGenerationJobStatus =
           error.status === 404 || error.status === 409 ? "STALE" : "FAILED";
         setGenerationJobStatus(terminalStatus);
@@ -1272,7 +1610,8 @@ export default function CVEditorPage() {
         scheduleGenerationPoll(cvId, operationId, 5);
       }
     } finally {
-      if (generationAbortRef.current?.signal === signal) pollingInFlightRef.current = false;
+      if (generationAbortRef.current?.signal === signal)
+        pollingInFlightRef.current = false;
     }
   };
 
@@ -1312,10 +1651,20 @@ export default function CVEditorPage() {
         accessToken,
         signal,
       );
-      if (signal.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+      if (
+        signal.aborted ||
+        !generationContextIsCurrent() ||
+        pollingOperationRef.current !== operationId
+      )
+        return;
       if (result.status === "COMPLETE" || result.status === "DEGRADED") {
         await applyTerminalGenerationResult(result, cvId);
-        if (signal.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+        if (
+          signal.aborted ||
+          !generationContextIsCurrent() ||
+          pollingOperationRef.current !== operationId
+        )
+          return;
         setGenerationJobStatus(result.status);
         pollingOperationRef.current = null;
         clearGenerationQuery();
@@ -1326,11 +1675,7 @@ export default function CVEditorPage() {
         result.status === "QUEUED" ||
         result.status === "PROCESSING"
       ) {
-        startGenerationPolling(
-          cvId,
-          operationId,
-          result.pollAfterSeconds || 5,
-        );
+        startGenerationPolling(cvId, operationId, result.pollAfterSeconds || 5);
         setGenerationJobStatus(result.status);
         return;
       }
@@ -1344,8 +1689,16 @@ export default function CVEditorPage() {
       pollingOperationRef.current = null;
       clearGenerationQuery();
     } catch (error) {
-      if (signal.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
-      if (error instanceof ApiError && [401, 403, 404, 409].includes(error.status)) {
+      if (
+        signal.aborted ||
+        !generationContextIsCurrent() ||
+        pollingOperationRef.current !== operationId
+      )
+        return;
+      if (
+        error instanceof ApiError &&
+        [401, 403, 404, 409].includes(error.status)
+      ) {
         const terminalStatus: CVGenerationJobStatus =
           error.status === 404 || error.status === 409 ? "STALE" : "FAILED";
         setGenerationJobStatus(terminalStatus);
@@ -1361,16 +1714,24 @@ export default function CVEditorPage() {
     }
   };
 
-  useEffect(() => () => {
-    pollingStoppedRef.current = true;
-    pollingOperationRef.current = null;
-    generationAbortRef.current?.abort();
-    generationAbortRef.current = null;
-    clearGenerationTimer();
-  }, []);
+  useEffect(
+    () => () => {
+      pollingStoppedRef.current = true;
+      pollingOperationRef.current = null;
+      generationAbortRef.current?.abort();
+      generationAbortRef.current = null;
+      clearGenerationTimer();
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (!accessToken || !editorCvId || !generationQueryOperationId) {
+    if (
+      !accessToken ||
+      !editorCvId ||
+      !generationQueryOperationId ||
+      isLoadingExistingCv
+    ) {
       return () => {
         if (pollingOperationRef.current) {
           pollingOperationRef.current = null;
@@ -1391,7 +1752,12 @@ export default function CVEditorPage() {
     };
     // Polling is fenced by operationId and cleaned up on unmount or route changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, editorCvId, generationQueryOperationId]);
+  }, [
+    accessToken,
+    editorCvId,
+    generationQueryOperationId,
+    isLoadingExistingCv,
+  ]);
 
   useEffect(() => {
     if (generationIsActive && document.activeElement instanceof HTMLElement) {
@@ -1403,12 +1769,22 @@ export default function CVEditorPage() {
     redirectAfterSave: boolean,
     payloadGenerationMode: CVGenerationMode = generationMode,
   ): Promise<string | null> => {
+    if (hasPendingGeneration && (!redirectAfterSave || !pendingApproval))
+      return null;
     if (!salaryValid) {
-      toast.error(!uiVi ? 'Enter a whole-number salary from 0 to 2,147,483,647 VND/month.' : 'Nhập lương nguyên từ 0 đến 2.147.483.647 VND/tháng.');
+      toast.error(
+        !uiVi
+          ? "Enter a whole-number salary from 0 to 2,147,483,647 VND/month."
+          : "Nhập lương nguyên từ 0 đến 2.147.483.647 VND/tháng.",
+      );
       return null;
     }
     if (!fullName.trim()) {
-      toast.error(uiVi ? "Vui lòng nhập họ tên trong CV." : "Enter a full name in the CV.");
+      toast.error(
+        uiVi
+          ? "Vui lòng nhập họ tên trong CV."
+          : "Enter a full name in the CV.",
+      );
       return null;
     }
 
@@ -1420,18 +1796,25 @@ export default function CVEditorPage() {
         payloadGenerationMode,
         !activeCvId || payloadGenerationMode !== "EDITOR_ONLY",
       );
+      const updatePayload: UpdateOnlineCVDto = {
+        ...payload,
+        expectedContentVersion: contentVersionRef.current,
+        ...(pendingApproval ? { generationApproval: pendingApproval } : {}),
+      };
       const saved = activeCvId
-        ? await onlineCvApi.update(activeCvId, {
-            ...payload,
-            expectedContentVersion: contentVersionRef.current,
-          }, accessToken)
+        ? await onlineCvApi.update(activeCvId, updatePayload, accessToken)
         : await onlineCvApi.create(payload, accessToken);
       if (!generationRequestContextIsCurrent()) return null;
       setEditorCvId(saved._id);
-      contentVersionRef.current = saved.contentVersion || contentVersionRef.current;
+      contentVersionRef.current =
+        saved.contentVersion || contentVersionRef.current;
       setContentVersion(contentVersionRef.current);
       setGenerationMode(saved.generationMode || generationMode);
       setIsDirty(false);
+      setPendingApproval(null);
+      setHasPendingGeneration(false);
+      if (typeof setPendingReviewMetadata === "function")
+        setPendingReviewMetadata(null);
 
       if (!redirectAfterSave) return saved._id;
 
@@ -1457,7 +1840,10 @@ export default function CVEditorPage() {
     } catch {
       toast.error(
         saveCopy("Lỗi khi lưu CV", "Could not save CV"),
-        saveCopy("Không thể lưu CV. Vui lòng thử lại.", "The CV could not be saved. Please try again."),
+        saveCopy(
+          "Không thể lưu CV. Vui lòng thử lại.",
+          "The CV could not be saved. Please try again.",
+        ),
       );
       return null;
     } finally {
@@ -1469,14 +1855,19 @@ export default function CVEditorPage() {
     void persistCv(true);
   };
 
-  const handleGenerateWithAi = async () => {
+  const handleGenerateWithAi = async (regenerationTarget?: {
+    reviewOperationId: string;
+    expectedDraftHash: string;
+    targetPath: string;
+  }) => {
+    if (hasPendingGeneration && !regenerationTarget) return;
     setGenerationError(null);
     setGenerationWarnings([]);
     setGenerationStatus("GENERATING");
     setGenerationJobStatus("QUEUED");
 
     try {
-      if (isDirty) {
+      if (isDirty && !regenerationTarget) {
         const savedId = await persistCv(false, generationMode);
         if (!generationRequestContextIsCurrent()) return;
         if (!savedId) throw new Error("cv_save_failed");
@@ -1498,6 +1889,9 @@ export default function CVEditorPage() {
         {
           ...(generationJobId.trim() ? { jobId: generationJobId.trim() } : {}),
           expectedContentVersion: contentVersionRef.current,
+          ...(regenerationTarget
+            ? { regenerationTarget: regenerationTarget }
+            : {}),
         },
         createIdempotencyKey(),
         accessToken,
@@ -1646,7 +2040,11 @@ export default function CVEditorPage() {
           </div>
         )}
         {/* SIDEBAR TOOLBAR (Icons Column - 64px) */}
-        <aside inert={generationIsActive} aria-hidden={generationIsActive} className="w-16 shrink-0 border-r border-slate-200/80 bg-white py-4 flex flex-col items-center justify-between dark:border-slate-800 dark:bg-slate-900 z-20 print:hidden">
+        <aside
+          inert={generationIsActive}
+          aria-hidden={generationIsActive}
+          className="w-16 shrink-0 border-r border-slate-200/80 bg-white py-4 flex flex-col items-center justify-between dark:border-slate-800 dark:bg-slate-900 z-20 print:hidden"
+        >
           <div className="flex flex-col items-center gap-2">
             {/* Tool 1: Design & Font */}
             <button
@@ -1791,23 +2189,55 @@ export default function CVEditorPage() {
                 </button>
               </div>
 
-              <fieldset disabled={generationIsActive || isLoadingExistingCv} className="mb-5 space-y-3 border-b border-slate-200 pb-5 text-xs dark:border-slate-700">
+              <fieldset
+                disabled={generationIsActive || isLoadingExistingCv}
+                className="mb-5 space-y-3 border-b border-slate-200 pb-5 text-xs dark:border-slate-700"
+              >
                 <label className="block font-bold" htmlFor="cv-expected-salary">
-                  {cvLanguage === 'en' ? 'Expected salary (optional, VND/month)' : 'Lương mong muốn (không bắt buộc, VND/tháng)'}
+                  {cvLanguage === "en"
+                    ? "Expected salary (optional, VND/month)"
+                    : "Lương mong muốn (không bắt buộc, VND/tháng)"}
                 </label>
-                <input id="cv-expected-salary" type="number" min="0" max="2147483647" step="1"
-                  value={expectedSalary} aria-invalid={!salaryValid} aria-describedby="cv-salary-help"
-                  onChange={(e) => { setExpectedSalary(e.target.value); markDirty(); }}
-                  className="w-full rounded-xl border border-slate-300 bg-transparent p-3 dark:border-slate-700" />
-                {!salaryValid && <p role="alert" className="text-red-600">{cvLanguage === 'en' ? 'Use a whole number from 0 to 2,147,483,647.' : 'Nhập số nguyên từ 0 đến 2.147.483.647.'}</p>}
+                <input
+                  id="cv-expected-salary"
+                  type="number"
+                  min="0"
+                  max="2147483647"
+                  step="1"
+                  value={expectedSalary}
+                  aria-invalid={!salaryValid}
+                  aria-describedby="cv-salary-help"
+                  onChange={(e) => {
+                    setExpectedSalary(e.target.value);
+                    markDirty();
+                  }}
+                  className="w-full rounded-xl border border-slate-300 bg-transparent p-3 dark:border-slate-700"
+                />
+                {!salaryValid && (
+                  <p role="alert" className="text-red-600">
+                    {cvLanguage === "en"
+                      ? "Use a whole number from 0 to 2,147,483,647."
+                      : "Nhập số nguyên từ 0 đến 2.147.483.647."}
+                  </p>
+                )}
                 <label className="flex items-start gap-2">
-                  <input type="checkbox" checked={shareExpectedSalary}
-                    onChange={(e) => { setShareExpectedSalary(e.target.checked); markDirty(); }} />
-                  {cvLanguage === 'en' ? 'Allow recruiters to filter this searchable CV by my expected salary.' : 'Cho phép nhà tuyển dụng lọc CV có thể tìm kiếm này theo lương mong muốn của tôi.'}
+                  <input
+                    type="checkbox"
+                    checked={shareExpectedSalary}
+                    onChange={(e) => {
+                      setShareExpectedSalary(e.target.checked);
+                      markDirty();
+                    }}
+                  />
+                  {cvLanguage === "en"
+                    ? "Allow recruiters to filter this searchable CV by my expected salary."
+                    : "Cho phép nhà tuyển dụng lọc CV có thể tìm kiếm này theo lương mong muốn của tôi."}
                 </label>
-                <p id="cv-salary-help" className="text-slate-500">{cvLanguage === 'en'
-                  ? 'Sharing is off by default. Leave the amount blank to clear it. This applies to structured online CV data, not salary text in uploaded files.'
-                  : 'Mặc định không chia sẻ. Để trống để xóa mức lương. Chỉ áp dụng cho dữ liệu CV online có cấu trúc, không phải nội dung lương trong file tải lên.'}</p>
+                <p id="cv-salary-help" className="text-slate-500">
+                  {cvLanguage === "en"
+                    ? "Sharing is off by default. Leave the amount blank to clear it. This applies to structured online CV data, not salary text in uploaded files."
+                    : "Mặc định không chia sẻ. Để trống để xóa mức lương. Chỉ áp dụng cho dữ liệu CV online có cấu trúc, không phải nội dung lương trong file tải lên."}
+                </p>
               </fieldset>
               {/* TOOL 1: Design & Font */}
               {activeSidebarTool === "design" && (
@@ -1942,8 +2372,8 @@ export default function CVEditorPage() {
               {activeSidebarTool === "sections" && (
                 <div className="space-y-2 text-xs">
                   <p className="text-slate-500 text-[11px] mb-2">
-                    Bật tắt &amp; sắp xếp thứ tự hiển thị các khối thông tin trên
-                    CV:
+                    Bật tắt &amp; sắp xếp thứ tự hiển thị các khối thông tin
+                    trên CV:
                   </p>
 
                   {sectionOrder.map((secId, idx) => {
@@ -2187,7 +2617,11 @@ export default function CVEditorPage() {
         </AnimatePresence>
 
         {/* 3. CENTER WYSIWYG A4 CANVAS (Interactive In-Place Editing) */}
-        <div inert={generationIsActive} aria-hidden={generationIsActive} className="flex-1 overflow-auto flex flex-col items-center py-6 px-4 sm:px-8 relative select-none">
+        <div
+          inert={generationIsActive}
+          aria-hidden={generationIsActive}
+          className="flex-1 overflow-auto flex flex-col items-center py-6 px-4 sm:px-8 relative select-none"
+        >
           {/* Zoom & Canvas Floating Controls */}
           <div className="sticky top-2 z-20 mb-6 flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/90 px-4 py-1.5 shadow-lg shadow-slate-900/10 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/90 print:hidden select-none">
             <button
@@ -2256,16 +2690,30 @@ export default function CVEditorPage() {
             >
               <div className="flex items-start gap-3">
                 {hasGenerationBannerWarning ? (
-                  <AlertTriangle aria-hidden="true" className="mt-1 h-5 w-5 shrink-0" />
+                  <AlertTriangle
+                    aria-hidden="true"
+                    className="mt-1 h-5 w-5 shrink-0"
+                  />
                 ) : (
                   <Info aria-hidden="true" className="mt-1 h-5 w-5 shrink-0" />
                 )}
                 <div className="min-w-0 flex-1">
                   <h2 id="cv-generation-notice-title" className="font-semibold">
                     {uiVi
-                      ? hasGenerationBannerWarning ? "Bản nháp CV cần rà soát" : "Bản nháp CV từ AI"
-                      : hasGenerationBannerWarning ? "CV draft needs review" : "AI CV draft"}
+                      ? hasGenerationBannerWarning
+                        ? "Bản nháp CV cần rà soát"
+                        : "Bản nháp CV từ AI"
+                      : hasGenerationBannerWarning
+                        ? "CV draft needs review"
+                        : "AI CV draft"}
                   </h2>
+                  {hasPendingGeneration && (
+                    <p className="mt-1">
+                      {uiVi
+                        ? "Bản nháp chưa được lưu. Chỉnh sửa tại đây rồi nhấn Lưu để cập nhật CV. Hồ sơ nghề nghiệp không thay đổi."
+                        : "This draft is not saved. Review your edits, then select Save to update the CV. Your Career Profile stays unchanged."}
+                    </p>
+                  )}
                   <p className="mt-1">
                     {generationProvenance === "mixed"
                       ? uiVi
@@ -2279,6 +2727,39 @@ export default function CVEditorPage() {
                           ? "Hãy kiểm tra thông tin và cách diễn đạt trước khi sử dụng CV."
                           : "Check the facts and wording before using this CV."}
                   </p>
+                  {hasPendingGeneration && pendingReviewMetadata && (
+                    <div className="mt-3 space-y-3 border-t border-current/15 pt-3">
+                      {(pendingReviewMetadata.omissionsByPath || []).length >
+                        0 && (
+                        <ul className="list-disc space-y-1 pl-5">
+                          {(pendingReviewMetadata.omissionsByPath || []).map(
+                            (omission) => (
+                              <li
+                                key={`${omission.path}:${omission.reasonCode}`}
+                              >
+                                {localizedReviewPath(omission.path, uiVi)}:{" "}
+                                {omissionReasonLabel(omission.reasonCode, uiVi)}
+                              </li>
+                            ),
+                          )}
+                        </ul>
+                      )}
+                      <button
+                        type="button"
+                        disabled={isDiscardingDraft || generationIsActive}
+                        onClick={() => void handleDiscardPendingDraft()}
+                        className="min-h-10 rounded-md border border-current/25 px-3 font-medium disabled:opacity-50"
+                      >
+                        {isDiscardingDraft
+                          ? uiVi
+                            ? "Đang từ chối..."
+                            : "Discarding..."
+                          : uiVi
+                            ? "Từ chối bản nháp"
+                            : "Reject draft"}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
               {hasActionableGenerationWarnings && (
@@ -2293,9 +2774,16 @@ export default function CVEditorPage() {
                     {uiVi
                       ? `${showGenerationWarnings ? "Thu gọn" : "Xem"} ${visibleGenerationWarnings.length} lưu ý`
                       : `${showGenerationWarnings ? "Hide" : "View"} review notes (${visibleGenerationWarnings.length})`}
-                    <ChevronDown aria-hidden="true" className={`h-4 w-4 shrink-0 ${showGenerationWarnings ? "rotate-180" : ""}`} />
+                    <ChevronDown
+                      aria-hidden="true"
+                      className={`h-4 w-4 shrink-0 ${showGenerationWarnings ? "rotate-180" : ""}`}
+                    />
                   </button>
-                  <ul id="cv-generation-warning-details" hidden={!showGenerationWarnings} className="mt-2 list-disc space-y-2 break-words pl-5 pb-1">
+                  <ul
+                    id="cv-generation-warning-details"
+                    hidden={!showGenerationWarnings}
+                    className="mt-2 list-disc space-y-2 break-words pl-5 pb-1"
+                  >
                     {visibleGenerationWarnings.map((warning) => (
                       <li key={warning}>{warning}</li>
                     ))}
@@ -2411,9 +2899,7 @@ export default function CVEditorPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() =>
-                !generationIsActive && setShowAiModal(false)
-              }
+              onClick={() => !generationIsActive && setShowAiModal(false)}
               className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm"
             />
 
@@ -2447,7 +2933,9 @@ export default function CVEditorPage() {
                 </h3>
 
                 <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-                  {uiVi ? "AI sẽ dùng dữ liệu CV hiện tại để tạo một bản nháp có cấu trúc. Bạn có thể rà soát và chỉnh sửa trực tiếp trong trình biên tập." : "AI will use your current CV data to create a structured draft. You can review and edit it in the editor."}
+                  {uiVi
+                    ? "AI sẽ dùng dữ liệu CV hiện tại để tạo một bản nháp có cấu trúc. Bạn có thể rà soát và chỉnh sửa trực tiếp trong trình biên tập."
+                    : "AI will use your current CV data to create a structured draft. You can review and edit it in the editor."}
                 </p>
 
                 <div className="mt-5 text-left">
@@ -2465,7 +2953,11 @@ export default function CVEditorPage() {
                     type="text"
                     value={generationJobId}
                     onChange={(event) => setGenerationJobId(event.target.value)}
-                    placeholder={uiVi ? "Dán job ID nếu muốn tối ưu theo một vị trí cụ thể" : "Paste a job ID to tailor the draft to a role"}
+                    placeholder={
+                      uiVi
+                        ? "Dán job ID nếu muốn tối ưu theo một vị trí cụ thể"
+                        : "Paste a job ID to tailor the draft to a role"
+                    }
                     disabled={generationIsActive}
                     className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   />
@@ -2496,7 +2988,9 @@ export default function CVEditorPage() {
                     {generationIsActive ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>{uiVi ? "Đang tạo bản nháp..." : "Creating draft..."}</span>
+                        <span>
+                          {uiVi ? "Đang tạo bản nháp..." : "Creating draft..."}
+                        </span>
                       </>
                     ) : (
                       <>

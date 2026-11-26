@@ -40,6 +40,7 @@ import { authApi } from "../../lib/api";
 import type { OnlineCV, UserCV } from "../../lib/cvTypes";
 import AiCvConsentCard from "../../components/consent/AiCvConsentCard";
 import AiCvGenerationConsentCard from "../../components/consent/AiCvGenerationConsentCard";
+import AiCvMatchingConsentCard from "../../components/consent/AiCvMatchingConsentCard";
 
 function getUploadedCvParseStatus(status: UserCV['parseStatus']) {
   switch (status) {
@@ -1748,6 +1749,7 @@ export default function MyCVPage() {
 
               <AiCvConsentCard />
               <AiCvGenerationConsentCard />
+              <AiCvMatchingConsentCard />
 
               {/* 2. JOB SEARCHING STATUS WIDGET */}
               <div className="rounded-3xl border border-slate-200/80 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">

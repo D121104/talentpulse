@@ -340,6 +340,18 @@ class ProviderGeneration(StrictModel):
     referenced_job_ids: list[UuidValue] = Field(default_factory=list, max_length=20)
 
 
+class AgentAnswer(BaseModel):
+    """Minimal model-authored content; grounding metadata belongs to the application."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    answer_blocks: list[AnswerBlock] = Field(min_length=1, max_length=20)
+
+
+class AgentCvAnswer(AgentAnswer):
+    claims: list[TypedClaim] = Field(default_factory=list, max_length=50)
+
+
 FallbackReason = Literal[
     "provider_error", "validation_error", "locale_mismatch", "insufficient_evidence", "empty_answer"
 ]

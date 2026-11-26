@@ -45,6 +45,7 @@ def draft_payload(**overrides: Any) -> dict[str, Any]:
         "locale": "en",
         "source_version": "profile-v1",
         "content_version": 1,
+        "consent_version": "consent-v1",
     }
     payload.update(overrides)
     return payload

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from talentpulse_ai.agent_foundation.selector import CapabilityImplementationSelector
 from talentpulse_ai.core.config import Settings
 from talentpulse_ai.infrastructure.embeddings.model import DeterministicEmbeddingProvider
 from talentpulse_ai.infrastructure.llm.deterministic import DeterministicGenerationProvider
@@ -18,6 +19,13 @@ def _local_environment(settings: Settings) -> bool:
     return settings.environment.casefold() in {"local", "development", "test"}
 
 
+def _build_capability_selector(
+    settings: Settings,
+    registered_capabilities: frozenset[str] = frozenset(),
+) -> CapabilityImplementationSelector:
+    return CapabilityImplementationSelector(settings, registered_capabilities)
+
+
 def _build_services(
     settings: Settings,
     embedding_provider: EmbeddingProvider | None,
@@ -30,8 +38,8 @@ def _build_services(
         raise RuntimeError("Production requires the Cohere embedding provider.")
     if not local and settings.vector_store_provider != "qdrant":
         raise RuntimeError("Production requires the Qdrant vector provider.")
-    if not local and settings.generation_provider != "bedrock":
-        raise RuntimeError("Production requires the Bedrock generation provider.")
+    if not local and settings.generation_provider not in {"bedrock", "gemini"}:
+        raise RuntimeError("Production requires a Bedrock or Gemini generation provider.")
 
     provider_bundle = None
     if (
@@ -39,6 +47,7 @@ def _build_services(
         or (embedding_provider is None and settings.embedding_provider == "ollama")
         or (vector_retriever is None and settings.vector_store_provider == "qdrant")
         or (generation_provider is None and settings.generation_provider == "bedrock")
+        or (generation_provider is None and settings.generation_provider == "gemini")
         or (generation_provider is None and settings.generation_provider == "ollama")
     ):
         provider_bundle = create_provider_bundle(settings)
@@ -67,7 +76,7 @@ def _build_services(
             vector_retriever = InMemoryVectorRetriever(dimensions=settings.cohere_dimensions)
 
     if generation_provider is None:
-        if settings.generation_provider in {"bedrock", "ollama"}:
+        if settings.generation_provider in {"bedrock", "gemini", "ollama"}:
             assert provider_bundle is not None
             generation_provider = provider_bundle.generation
         else:

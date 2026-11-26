@@ -168,6 +168,49 @@ export interface CvDraftResponse {
   content_version: number;
 }
 
+export type CvDraftImplementation = 'agent';
+export type CvDraftFieldOrigin =
+  | 'SOURCE'
+  | 'LOCALIZED'
+  | 'AI_SUGGESTED'
+  | 'FALLBACK';
+export type CvDraftOmissionReason =
+  | 'SOURCE_UNAVAILABLE'
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'STRUCTURE_INVALID'
+  | 'LOCALIZATION_FAILED';
+
+export interface CvDraftReviewMetadata {
+  source_refs_by_path: Record<string, string[]>;
+  field_origins_by_path: Record<string, CvDraftFieldOrigin>;
+  omissions_by_path: Array<{
+    path: string;
+    reason_code: CvDraftOmissionReason;
+  }>;
+}
+
+export interface CvDraftReviewResponse {
+  implementation: CvDraftImplementation;
+  draft: CvDraftResponse;
+  review_metadata: CvDraftReviewMetadata;
+}
+
+const REVIEW_FIELD_PATH =
+  /^\/(?:position|career_objective|education\/\d+\/(?:school_name|degree|major|start_date|end_date|description)|projects\/\d+\/(?:project_name|role|start_date|end_date|description|technologies(?:\/\d+)?|bullets(?:\/\d+)?)|work_experience\/\d+\/(?:company_name|position|start_date|end_date|description|bullets(?:\/\d+)?)|skills\/\d+\/(?:name|description)|activities\/\d+|certificates\/\d+|awards\/\d+)$/;
+const SOURCE_REFERENCE_PATH = /^\/(?:candidate|job)\/[A-Za-z0-9_/-]{1,188}$/;
+const REVIEW_FIELD_ORIGINS = new Set<CvDraftFieldOrigin>([
+  'SOURCE',
+  'LOCALIZED',
+  'AI_SUGGESTED',
+  'FALLBACK',
+]);
+const REVIEW_OMISSION_REASONS = new Set<CvDraftOmissionReason>([
+  'SOURCE_UNAVAILABLE',
+  'INSUFFICIENT_EVIDENCE',
+  'STRUCTURE_INVALID',
+  'LOCALIZATION_FAILED',
+]);
+
 export function validateCvDraftRequest(request: CvDraftRequest): void {
   if (
     !isRecord(request) ||
@@ -480,21 +523,17 @@ export function validateCvDraftResponse(
       ),
       experience: (value.work_experience as unknown[]).map((experience) => {
         if (!isRecord(experience)) return experience;
-        const {
-          bullets: _bullets,
-          source_index: _sourceIndex,
-          ...source
-        } = experience;
+        const source = { ...experience };
+        delete source.bullets;
+        delete source.source_index;
         return source;
       }),
       education: value.education,
       projects: (value.projects as unknown[]).map((project) => {
         if (!isRecord(project)) return project;
-        const {
-          bullets: _bullets,
-          source_index: _sourceIndex,
-          ...source
-        } = project;
+        const source = { ...project };
+        delete source.bullets;
+        delete source.source_index;
         return source;
       }),
       certificates: value.certificates,
@@ -514,25 +553,6 @@ export function validateCvDraftResponse(
         'Invalid CV draft response',
       );
     assertExactKeys(skill, ['name', 'description']);
-    if (skill.description) {
-      if (
-        !matchOwnedSkillMembers(
-          skill.description as string,
-          ownedSkillLiterals(request.candidate),
-          request.candidate.skills,
-        )
-      ) {
-        throw new AiServiceError(
-          'AI_INVALID_RESPONSE',
-          'Invalid CV draft skill membership',
-        );
-      }
-    } else if (ownedSkillLiterals(request.candidate).length) {
-      throw new AiServiceError(
-        'AI_INVALID_RESPONSE',
-        'Invalid CV draft skill membership',
-      );
-    }
   }
   for (const [entries, sourceCount] of [
     [value.work_experience, request.candidate.experience.length],
@@ -604,4 +624,124 @@ export function validateCvDraftResponse(
     ]);
   }
   return value as unknown as CvDraftResponse;
+}
+
+export function validateCvDraftReviewResponse(
+  value: unknown,
+  request: CvDraftRequest,
+): CvDraftReviewResponse {
+  if (!isRecord(value)) {
+    throw new AiServiceError(
+      'AI_INVALID_RESPONSE',
+      'Invalid CV review response',
+    );
+  }
+  assertExactKeys(value, ['implementation', 'draft', 'review_metadata']);
+  if (value.implementation !== 'agent') {
+    throw new AiServiceError(
+      'AI_INVALID_RESPONSE',
+      'Invalid CV review implementation',
+    );
+  }
+  const draft = validateCvDraftResponse(value.draft, request);
+  const metadata = value.review_metadata;
+  if (!isRecord(metadata)) {
+    throw new AiServiceError(
+      'AI_INVALID_RESPONSE',
+      'Invalid CV review metadata',
+    );
+  }
+  assertExactKeys(metadata, [
+    'source_refs_by_path',
+    'field_origins_by_path',
+    'omissions_by_path',
+  ]);
+  const sourceRefs = metadata.source_refs_by_path;
+  const fieldOrigins = metadata.field_origins_by_path;
+  const omissions = metadata.omissions_by_path;
+  if (
+    !isRecord(sourceRefs) ||
+    !isRecord(fieldOrigins) ||
+    !Array.isArray(omissions) ||
+    Object.keys(sourceRefs).length > 1000 ||
+    Object.keys(fieldOrigins).length > 1000 ||
+    omissions.length > 200
+  ) {
+    throw new AiServiceError(
+      'AI_INVALID_RESPONSE',
+      'Invalid CV review metadata',
+    );
+  }
+  for (const [path, references] of Object.entries(sourceRefs)) {
+    if (
+      !REVIEW_FIELD_PATH.test(path) ||
+      !Array.isArray(references) ||
+      references.length < 1 ||
+      references.length > 100 ||
+      references.some(
+        (reference) =>
+          !isString(reference) || !SOURCE_REFERENCE_PATH.test(reference),
+      )
+    ) {
+      throw new AiServiceError(
+        'AI_INVALID_RESPONSE',
+        'Invalid CV source references',
+      );
+    }
+  }
+  for (const [path, origin] of Object.entries(fieldOrigins)) {
+    if (
+      !REVIEW_FIELD_PATH.test(path) ||
+      !REVIEW_FIELD_ORIGINS.has(origin as CvDraftFieldOrigin)
+    ) {
+      throw new AiServiceError(
+        'AI_INVALID_RESPONSE',
+        'Invalid CV field origin',
+      );
+    }
+  }
+  const omissionPaths = new Set<string>();
+  for (const omission of omissions) {
+    if (!isRecord(omission)) {
+      throw new AiServiceError('AI_INVALID_RESPONSE', 'Invalid CV omission');
+    }
+    assertExactKeys(omission, ['path', 'reason_code']);
+    if (
+      !isString(omission.path) ||
+      !REVIEW_FIELD_PATH.test(omission.path) ||
+      !isString(omission.reason_code) ||
+      !REVIEW_OMISSION_REASONS.has(
+        omission.reason_code as CvDraftOmissionReason,
+      ) ||
+      omissionPaths.has(omission.path) ||
+      Object.prototype.hasOwnProperty.call(fieldOrigins, omission.path)
+    ) {
+      throw new AiServiceError('AI_INVALID_RESPONSE', 'Invalid CV omission');
+    }
+    omissionPaths.add(omission.path);
+  }
+  const reviewedPaths = new Set([
+    ...Object.keys(fieldOrigins),
+    ...omissionPaths,
+  ]);
+  if (
+    [...reviewedPaths].some(
+      (path) => !Object.prototype.hasOwnProperty.call(sourceRefs, path),
+    )
+  ) {
+    throw new AiServiceError(
+      'AI_INVALID_RESPONSE',
+      'Invalid CV source mapping',
+    );
+  }
+  return {
+    implementation: value.implementation,
+    draft,
+    review_metadata: {
+      source_refs_by_path: sourceRefs as Record<string, string[]>,
+      field_origins_by_path: fieldOrigins as Record<string, CvDraftFieldOrigin>,
+      omissions_by_path:
+        omissions as CvDraftReviewResponse['review_metadata']['omissions_by_path'],
+    },
+  };
 }

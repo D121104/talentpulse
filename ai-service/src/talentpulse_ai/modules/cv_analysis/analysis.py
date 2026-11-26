@@ -1,11 +1,20 @@
 import json
 import logging
 import re
+import time
+from collections.abc import Callable
+from typing import cast
 
 from pydantic import ValidationError
 
-from talentpulse_ai.core.exceptions import ProviderFailure, ServiceError
-from talentpulse_ai.infrastructure.llm.ollama import OllamaGenerationAdapter
+from talentpulse_ai.core.exceptions import (
+    ProviderFailure,
+    ProviderFailureDetails,
+    ProviderName,
+    ServiceError,
+)
+from talentpulse_ai.core.logging import log_ai_provider_failure
+from talentpulse_ai.infrastructure.llm.deterministic import DeterministicGenerationProvider
 from talentpulse_ai.modules.cv_analysis.schemas import (
     MatchAnalysisRequest,
     MatchAnalysisResponse,
@@ -20,9 +29,13 @@ class MatchAnalysisService:
         self.provider = provider
 
     def analyze(self, request: MatchAnalysisRequest) -> MatchAnalysisResponse:
-        if not isinstance(self.provider, OllamaGenerationAdapter):
+        structured_generate = getattr(self.provider, "generate_structured", None)
+        generate = getattr(self.provider, "generate", None)
+        if isinstance(self.provider, DeterministicGenerationProvider) or (
+            not callable(structured_generate) and not callable(generate)
+        ):
             raise ServiceError(
-                "analysis_provider_unavailable", "Local analysis provider unavailable.", 503
+                "analysis_provider_unavailable", "Analysis provider unavailable.", 503
             )
         scores = self._scores(request)
         prepared = {
@@ -98,25 +111,47 @@ class MatchAnalysisService:
             "the not-evidenced skill, not a recorded match. Write naturally in "
             + ("Vietnamese." if request.locale == "vi" else "English.")
         )
+        provider_started_at = time.perf_counter()
         try:
-            raw = self.provider.generate_structured(
-                prompt, self._generation_schema(request), timeout=20, num_predict=1000
+            schema = self._generation_schema(request)
+            if callable(structured_generate):
+                raw = structured_generate(prompt, schema, timeout=20, num_predict=1000)
+            else:
+                schema_prompt = f"{prompt}\nRequired JSON schema: {json.dumps(schema)}"
+                raw = cast(Callable[[str], object], generate)(schema_prompt)
+        except ProviderFailure as exc:
+            provider_name = self._provider_name()
+            model_name = getattr(self.provider, "model_name", None)
+            details = exc.details or ProviderFailureDetails(
+                provider=provider_name,
+                model=model_name if isinstance(model_name, str) else None,
+                category="provider_error",
+                exception_type="ProviderFailure",
             )
-        except ProviderFailure:
-            logger.warning("match_analysis_rejected category=provider code=generation_failed")
+            log_ai_provider_failure(
+                details=details,
+                capability="cv_analysis",
+                operation="analyze",
+                attempt="single",
+                request_id=request.identity.request_id,
+                trace_id=request.identity.trace_id,
+            )
             raise ServiceError(
-                "analysis_provider_failed", "Local analysis generation failed.", 502
+                "analysis_provider_failed", "Analysis generation failed.", 502
             ) from None
+        provider_duration_ms = round((time.perf_counter() - provider_started_at) * 1000)
         try:
             narrative = MatchNarrative.model_validate(raw)
             self._validate_evidence(request, narrative)
-        except ValidationError:
+        except ValidationError as exc:
+            self._log_invalid_output(request, exc, provider_duration_ms)
             logger.warning("match_analysis_rejected category=schema code=invalid_structure")
             raise ServiceError(
                 "invalid_analysis_output", "Analysis output failed validation.", 502
             ) from None
         except ValueError as exc:
             # Only application-owned fixed reason strings; never log model output or labels.
+            self._log_invalid_output(request, exc, provider_duration_ms)
             category = "language" if str(exc) == "wrong locale" else "evidence"
             code = {
                 "wrong locale": "wrong_locale",
@@ -143,6 +178,32 @@ class MatchAnalysisService:
             locale=request.locale,
             narrative_version=request.narrative_version,
         )
+
+    def _log_invalid_output(
+        self, request: MatchAnalysisRequest, exc: Exception, duration_ms: int
+    ) -> None:
+        model_name = getattr(self.provider, "model_name", None)
+        details = ProviderFailureDetails(
+            provider=self._provider_name(),
+            model=model_name if isinstance(model_name, str) else None,
+            category="invalid_output",
+            exception_type=type(exc).__name__,
+            duration_ms=max(0, duration_ms),
+        )
+        log_ai_provider_failure(
+            details=details,
+            capability="cv_analysis",
+            operation="analyze",
+            attempt="single",
+            request_id=request.identity.request_id,
+            trace_id=request.identity.trace_id,
+        )
+
+    def _provider_name(self) -> ProviderName:
+        provider = getattr(self.provider, "provider_name", None)
+        if provider in {"bedrock", "gemini", "ollama"}:
+            return cast(ProviderName, provider)
+        return "ollama"
 
     @staticmethod
     def _scores(request: MatchAnalysisRequest) -> dict[str, float]:

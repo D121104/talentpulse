@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -16,7 +18,7 @@ from tests.indexing_fixtures import (
 )
 
 from talentpulse_ai.core.config import Settings
-from talentpulse_ai.core.exceptions import ServiceError
+from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails, ServiceError
 from talentpulse_ai.infrastructure.embeddings.model import CohereEmbeddingAdapter
 from talentpulse_ai.infrastructure.vectorstore.qdrant import QdrantVectorRetriever
 from talentpulse_ai.main import create_app
@@ -45,6 +47,147 @@ class FakeQdrant:
     def delete(self, **kwargs: object) -> object:
         self.deletes.append(kwargs)
         return None
+
+
+@pytest.mark.parametrize(
+    ("boundary", "provider", "operation", "category"),
+    [
+        ("embedding", "cohere", "embed_document", "rate_limited"),
+        ("upsert", "qdrant", "index_upsert", "connectivity"),
+        ("delete", "qdrant", "index_delete", "timeout"),
+        ("inactive_delete", "qdrant", "index_delete", "authentication"),
+    ],
+)
+def test_indexing_provider_failure_logs_boundary_and_preserves_503(
+    boundary: str,
+    provider: str,
+    operation: str,
+    category: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embedding = FakeEmbedding()
+    vector = FakeVector()
+    service = JobIndexingService(embedding, vector)
+    job = make_job().model_copy(
+        update={
+            "description": "PRIVATE-JOB-DESCRIPTION",
+            "is_active": boundary != "inactive_delete",
+        }
+    )
+    request = (
+        make_delete(job.job_id, key="PRIVATE-IDEMPOTENCY-KEY")
+        if boundary == "delete"
+        else make_upsert(job=job, key="PRIVATE-IDEMPOTENCY-KEY")
+    )
+    failure = ProviderFailure(
+        f"PRIVATE-PROVIDER-KEY {job.model_dump_json()} vector=[0.1, 0.2, 0.3, 0.4]",
+        details=ProviderFailureDetails(provider=provider, model=None, category=category),
+    )
+    target, method = (
+        (embedding, "embed_document")
+        if boundary == "embedding"
+        else (vector, "upsert_point" if boundary == "upsert" else "delete_point")
+    )
+    call = Mock(side_effect=failure)
+    monkeypatch.setattr(target, method, call)
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(ServiceError) as error:
+            if boundary == "delete":
+                service.delete(request)
+            else:
+                service.upsert(request)
+
+    assert error.value.code == "index_unavailable"
+    assert error.value.status_code == 503
+    assert error.value.message == "Job indexing is temporarily unavailable."
+    assert error.value.__cause__ is failure
+    call.assert_called_once()
+    events = [
+        record.getMessage()
+        for record in caplog.records
+        if "ai_provider_failure" in record.getMessage()
+    ]
+    assert len(events) == 1
+    fields = dict(item.split("=", 1) for item in events[0].split() if "=" in item)
+    assert (
+        fields.items()
+        >= {
+            "capability": "job_indexing",
+            "provider": provider,
+            "operation": operation,
+            "category": category,
+            "request_id": str(request.identity.request_id),
+            "trace_id": str(request.identity.trace_id),
+        }.items()
+    )
+    for sensitive in (
+        job.model_dump_json(),
+        job.description,
+        build_job_document(job),
+        "[0.1, 0.2, 0.3, 0.4]",
+        request.idempotency_key,
+        "PRIVATE-PROVIDER-KEY",
+    ):
+        assert sensitive not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.parametrize("invalid", ["content_hash", "vector_dimensions", "vector_values"])
+def test_indexing_local_validation_emits_no_provider_failure(
+    invalid: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    embedding = FakeEmbedding()
+    vector = FakeVector()
+    request = make_upsert()
+    if invalid == "content_hash":
+        request = request.model_copy(update={"content_hash": "0" * 64})
+    elif invalid == "vector_dimensions":
+        embedding.vector = [0.1]
+    else:
+        embedding.vector = [True, 0.2, 0.3, 0.4]
+    service = JobIndexingService(embedding, vector)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(ServiceError) as error:
+        service.upsert(request)
+
+    assert error.value.code == (
+        "invalid_index_request" if invalid == "content_hash" else "index_unavailable"
+    )
+    assert error.value.status_code == (422 if invalid == "content_hash" else 503)
+    assert len(embedding.calls) == (0 if invalid == "content_hash" else 1)
+    assert vector.upserts == []
+    assert "ai_provider_failure" not in caplog.text
+
+
+@pytest.mark.parametrize("operation", ["upsert", "delete", "inactive_delete"])
+def test_indexing_cached_replay_emits_no_extra_event(
+    operation: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embedding = FakeEmbedding()
+    vector = FakeVector()
+    service = JobIndexingService(embedding, vector)
+    job = make_job().model_copy(update={"is_active": operation != "inactive_delete"})
+    request = make_delete(job.job_id) if operation == "delete" else make_upsert(job=job)
+    execute = service.delete if operation == "delete" else service.upsert
+    with caplog.at_level(logging.DEBUG):
+        first = execute(request)
+        before = list(caplog.records)
+        fail = Mock(side_effect=AssertionError("cached replay must not call a provider"))
+        monkeypatch.setattr(embedding, "embed_document", fail)
+        monkeypatch.setattr(vector, "upsert_point", fail)
+        monkeypatch.setattr(vector, "delete_point", fail)
+        identity = make_identity()
+        replay = execute(request.model_copy(update={"identity": identity}))
+
+    assert replay == first.model_copy(update=identity.model_dump())
+    fail.assert_not_called()
+    assert caplog.records == before
+    assert "ai_provider_failure" not in caplog.text
 
 
 def test_create_app_wires_indexing_service_and_routes() -> None:

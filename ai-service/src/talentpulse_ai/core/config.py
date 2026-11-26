@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 OcrLanguage = Literal["eng", "vie"]
@@ -32,10 +32,16 @@ class Settings(BaseSettings):
     rag_retrieve_scope: Annotated[str, Field(min_length=1)] = "rag:retrieve"
     rag_generate_scope: Annotated[str, Field(min_length=1)] = "rag:generate"
     job_index_scope: Annotated[str, Field(min_length=1)] = "jobs:index"
+    # RAG uses the Agent by default; set [] in the server environment to roll back to legacy.
+    agent_enabled_capabilities: frozenset[str] = Field(
+        default_factory=lambda: frozenset({"rag.generate"})
+    )
+    agent_resume_scope: Annotated[str, Field(min_length=1)] = "agent:resume"
+    agent_checkpoint_database_url: SecretStr | None = Field(default=None, repr=False)
     # Provider selection is explicit. Deterministic providers are intended for local/test only.
     embedding_provider: Literal["deterministic", "cohere", "ollama"] = "deterministic"
     vector_store_provider: Literal["memory", "qdrant"] = "memory"
-    generation_provider: Literal["deterministic", "bedrock", "ollama"] = "deterministic"
+    generation_provider: Literal["deterministic", "bedrock", "ollama", "gemini"] = "deterministic"
     # Bedrock identifies Cohere Embed Multilingual v3 as cohere.embed-multilingual-v3.
     cohere_model: str = "cohere.embed-multilingual-v3"
     cohere_dimensions: int = Field(default=1024, ge=1, le=4096)
@@ -56,6 +62,14 @@ class Settings(BaseSettings):
     qdrant_admin_enabled: bool = False
     bedrock_region: str | None = None
     bedrock_model: str | None = None
+    gemini_api_key: SecretStr | None = Field(default=None, repr=False)
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_timeout_seconds: float = Field(default=25.0, gt=0, le=120)
+
+    @field_validator("agent_checkpoint_database_url", mode="before")
+    @classmethod
+    def empty_checkpoint_url_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
 
     max_upload_bytes: int = Field(default=5 * 1024 * 1024, ge=1, le=50 * 1024 * 1024)
     max_encoded_upload_chars: int = Field(default=7_000_000, ge=4, le=70_000_000)

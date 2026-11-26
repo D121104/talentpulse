@@ -67,6 +67,11 @@ import {
 import { CreateNotificationDto } from 'src/notifications/dto/create-notification.dto';
 import { ApplicationAiConsentEvent } from './entities/application-ai-consent-event.entity';
 import { getApplicationAiRankingConsentPolicy } from './application-ai-consent.policy';
+import { AiCvConsentsService } from 'src/ai-consents/ai-cv-consents.service';
+import {
+  AiCvConsentScope,
+  AI_CV_CONSENT_ERROR_MESSAGES,
+} from 'src/ai-consents/ai-cv-consent.policy';
 
 @Injectable()
 export class ApplicationsService implements OnModuleInit {
@@ -96,6 +101,7 @@ export class ApplicationsService implements OnModuleInit {
 
     @InjectQueue('mail-queue')
     private readonly mailQueue: Queue,
+    private readonly aiCvConsentsService: AiCvConsentsService,
 
     @Optional()
     private readonly onlineCVsService?: OnlineCVsService,
@@ -1224,6 +1230,21 @@ export class ApplicationsService implements OnModuleInit {
       return result;
     };
     const result = await snapshot();
+    const policy = this.aiCvConsentsService.getPolicyMetadata(
+      AiCvConsentScope.CV_MATCHING,
+    );
+    if (
+      !(await this.aiCvConsentsService.hasValidConsent(
+        result.userId,
+        policy.scope,
+        policy.consentVersion,
+        policy.policyHash,
+      ))
+    ) {
+      throw new ForbiddenException(
+        AI_CV_CONSENT_ERROR_MESSAGES.INVALID_CONSENT,
+      );
+    }
     const request: NarrativeRequest = {
       identity: {
         request_id: randomUUID(),

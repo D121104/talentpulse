@@ -116,6 +116,7 @@ export interface CandidateAssistantAiRequest {
 export interface CandidateAssistantAiClient {
   generate(
     request: CandidateAssistantAiRequest,
+    options?: { signal?: AbortSignal },
   ): Promise<CandidateAssistantResponse>;
 }
 

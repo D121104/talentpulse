@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping, Sequence
 from typing import Protocol, cast
 from uuid import UUID
 
 from qdrant_client.models import PointIdsList, PointStruct
 
-from talentpulse_ai.core.exceptions import ProviderFailure
+from talentpulse_ai.core.exceptions import ProviderFailure, provider_failure_details
 from talentpulse_ai.modules.rag_chatbot.schemas import RetrievedChunk
 
 
@@ -75,20 +76,21 @@ class QdrantVectorRetriever:
     def search(
         self, vector: list[float], query_filter: dict[str, object], limit: int
     ) -> list[RetrievedChunk]:
+        search_filter = query_filter
+        if self.index_version is not None:
+            existing_must = query_filter.get("must", [])
+            if not isinstance(existing_must, list):
+                raise ValueError("vector provider filter is invalid")
+            search_filter = {
+                **query_filter,
+                "must": [
+                    *existing_must,
+                    {"key": "index_version", "match": {"value": self.index_version}},
+                ],
+            }
+        started_at = time.perf_counter()
         try:
             client = cast(_QdrantClient, self._client)
-            search_filter = query_filter
-            if self.index_version is not None:
-                existing_must = query_filter.get("must", [])
-                if not isinstance(existing_must, list):
-                    raise ValueError("vector provider filter is invalid")
-                search_filter = {
-                    **query_filter,
-                    "must": [
-                        *existing_must,
-                        {"key": "index_version", "match": {"value": self.index_version}},
-                    ],
-                }
             if hasattr(client, "query_points"):
                 response = client.query_points(
                     collection_name=self.collection_alias,
@@ -97,19 +99,31 @@ class QdrantVectorRetriever:
                     limit=limit,
                     with_payload=True,
                 )
-                points: object = (
-                    response.get("points", response)
-                    if isinstance(response, Mapping)
-                    else getattr(response, "points", response)
-                )
             else:
-                points = client.search(
+                response = client.search(
                     collection_name=self.collection_alias,
                     query_vector=vector,
                     query_filter=search_filter,
                     limit=limit,
                     with_payload=True,
                 )
+        except Exception as exc:
+            raise ProviderFailure(
+                "vector provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="qdrant",
+                    model=None,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                ),
+            ) from exc
+
+        try:
+            points: object = (
+                response.get("points", response)
+                if isinstance(response, Mapping)
+                else getattr(response, "points", response)
+            )
             if not isinstance(points, Sequence) or isinstance(points, (str, bytes)):
                 raise ValueError("vector provider returned invalid points")
             results: list[RetrievedChunk] = []
@@ -146,33 +160,60 @@ class QdrantVectorRetriever:
                 results.append(RetrievedChunk(job_id, score, metadata))
             return results
         except Exception as exc:
-            raise ProviderFailure("vector provider failed") from exc
+            raise ProviderFailure(
+                "vector provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="qdrant",
+                    model=None,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                    category="invalid_response",
+                ),
+            ) from exc
 
     def upsert_point(
         self, point_id: str, vector: Sequence[float], payload: Mapping[str, object]
     ) -> None:
+        if len(vector) != self.dimensions:
+            raise ValueError("vector dimensions do not match configuration")
+        if not all(
+            isinstance(item, (int, float))
+            and not isinstance(item, bool)
+            and math.isfinite(float(item))
+            for item in vector
+        ):
+            raise ValueError("vector values are invalid")
+        safe_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in self._payload_allowlist
+            and (
+                value is None
+                or isinstance(value, (str, int, float, bool))
+                or (isinstance(value, list) and all(isinstance(item, str) for item in value))
+            )
+        }
+        point = PointStruct(id=point_id, vector=list(vector), payload=safe_payload)
+        started_at = time.perf_counter()
         try:
-            if len(vector) != self.dimensions:
-                raise ValueError("vector dimensions do not match configuration")
-            safe_payload = {
-                key: value
-                for key, value in payload.items()
-                if key in self._payload_allowlist
-                and (
-                    value is None
-                    or isinstance(value, (str, int, float, bool))
-                    or (isinstance(value, list) and all(isinstance(item, str) for item in value))
-                )
-            }
             cast(_QdrantClient, self._client).upsert(
                 collection_name=self.collection_alias,
-                points=[PointStruct(id=point_id, vector=list(vector), payload=safe_payload)],
+                points=[point],
                 wait=True,
             )
         except Exception as exc:
-            raise ProviderFailure("vector provider failed") from exc
+            raise ProviderFailure(
+                "vector provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="qdrant",
+                    model=None,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                ),
+            ) from exc
 
     def delete_point(self, point_id: str) -> None:
+        started_at = time.perf_counter()
         try:
             cast(_QdrantClient, self._client).delete(
                 collection_name=self.collection_alias,
@@ -180,4 +221,12 @@ class QdrantVectorRetriever:
                 wait=True,
             )
         except Exception as exc:
-            raise ProviderFailure("vector provider failed") from exc
+            raise ProviderFailure(
+                "vector provider failed",
+                details=provider_failure_details(
+                    exc,
+                    provider="qdrant",
+                    model=None,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                ),
+            ) from exc

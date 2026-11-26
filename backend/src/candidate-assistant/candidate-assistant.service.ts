@@ -5,6 +5,9 @@ import {
   HttpException,
   Inject,
   Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
@@ -48,8 +51,16 @@ const MAX_FILTER_KEYS = 24;
 const MAX_HISTORY_ENTRIES = 8;
 const MAX_HISTORY_ENTRY_CHARS = 4000;
 const MAX_HISTORY_TOTAL_CHARS = 6000;
+const LEASE_RENEWAL_INTERVAL_MS = 10_000;
+const LEASE_RECONCILIATION_INTERVAL_MS = 15_000;
+
 @Injectable()
-export class CandidateAssistantService {
+export class CandidateAssistantService
+  implements OnModuleInit, OnModuleDestroy
+{
+  private readonly logger = new Logger(CandidateAssistantService.name);
+  private reconciliationTimer?: NodeJS.Timeout;
+
   constructor(
     @InjectRepository(AiChatSession)
     private readonly sessionRepo: Repository<AiChatSession>,
@@ -64,6 +75,23 @@ export class CandidateAssistantService {
     @Inject(CANDIDATE_ASSISTANT_AI_CLIENT)
     private readonly aiClient: CandidateAssistantAiClient,
   ) {}
+
+  onModuleInit(): void {
+    this.reconciliationTimer = setInterval(() => {
+      void this.reconcileInterruptedRequests().catch((error: unknown) => {
+        this.logger.error(
+          `Candidate assistant lease reconciliation failed (${
+            error instanceof Error ? error.name : 'unknown'
+          })`,
+        );
+      });
+    }, LEASE_RECONCILIATION_INTERVAL_MS);
+    this.reconciliationTimer.unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
+  }
 
   private assertActor(user: IUser) {
     if (!user || ![Role.USER, Role.ADMIN].includes(user.role as Role))
@@ -144,6 +172,7 @@ export class CandidateAssistantService {
     dto: SendAiChatMessageDto,
     user: IUser,
     acceptLanguage?: string,
+    callerSignal?: AbortSignal,
   ) {
     const session = await this.getOwnedSession(id, user);
     const locale = this.resolveLocale(dto.locale, acceptLanguage);
@@ -161,6 +190,13 @@ export class CandidateAssistantService {
       where: { sessionId: id, clientMessageId: dto.clientMessageId },
     });
     let failedAssistant: AiChatMessage | null = null;
+    let processingAssistant: AiChatMessage | null = null;
+    let leaseClaimed = false;
+    let leaseLost = false;
+    let leaseOwner: string | undefined;
+    let leaseHeartbeat: NodeJS.Timeout | undefined;
+    let abortController: AbortController | undefined;
+    let abortFromCaller: (() => void) | undefined;
     if (existing) {
       failedAssistant = await this.messageRepo.findOne({
         where: {
@@ -180,6 +216,15 @@ export class CandidateAssistantService {
       `${session._id}:${dto.clientMessageId}`,
     );
     if (existing && reservation.reused) return this.idempotentResult(existing);
+    if (reservation.reused) {
+      const raced = await this.messageRepo.findOne({
+        where: { sessionId: id, clientMessageId: dto.clientMessageId },
+      });
+      if (raced) return this.idempotentResult(raced);
+      throw new ConflictException(
+        'Candidate assistant request is already active',
+      );
+    }
     let userMessage: AiChatMessage;
     try {
       userMessage =
@@ -206,6 +251,71 @@ export class CandidateAssistantService {
       throw error;
     }
     try {
+      processingAssistant = await this.messageRepo.save(
+        failedAssistant
+          ? Object.assign(failedAssistant, {
+              status: AiChatMessageStatus.PROCESSING,
+              content: null,
+              blocks: null,
+              generationMetadata: null,
+              citations: null,
+              filterState: null,
+              errorCode: null,
+            })
+          : this.messageRepo.create({
+              sessionId: id,
+              parentMessageId: userMessage._id,
+              role: AiChatMessageRole.ASSISTANT,
+              status: AiChatMessageStatus.PROCESSING,
+              content: null,
+              clientMessageId: null,
+              blocks: null,
+              generationMetadata: null,
+              citations: null,
+              filterState: null,
+              errorCode: null,
+            }),
+      );
+      leaseOwner = randomUUID();
+      const lease = await this.quotaService.acquireLease(
+        reservation,
+        leaseOwner,
+        {
+          sessionId: session._id,
+          userMessageId: userMessage._id,
+          assistantMessageId: processingAssistant._id,
+        },
+      );
+      if (!lease) {
+        throw new ConflictException(
+          'Candidate assistant request is already active',
+        );
+      }
+      leaseClaimed = true;
+      leaseOwner = lease.owner;
+      reservation.executionOwner = lease.owner;
+      abortController = new AbortController();
+      abortFromCaller = () => abortController?.abort();
+      if (callerSignal?.aborted) abortController.abort();
+      else
+        callerSignal?.addEventListener('abort', abortFromCaller, {
+          once: true,
+        });
+      leaseHeartbeat = setInterval(() => {
+        void this.quotaService
+          .renewLease(reservation, leaseOwner as string)
+          .then((renewed) => {
+            if (!renewed) {
+              leaseLost = true;
+              abortController?.abort();
+            }
+          })
+          .catch(() => {
+            leaseLost = true;
+            abortController?.abort();
+          });
+      }, LEASE_RENEWAL_INTERVAL_MS);
+      leaseHeartbeat.unref?.();
       if (dto.cvSource && !dto.cvId) {
         throw new BadRequestException('cvSource requires cvId');
       }
@@ -249,93 +359,171 @@ export class CandidateAssistantService {
         take: 12,
       });
       const response = this.boundResponse(
-        await this.aiClient.generate({
-          requestId: randomUUID(),
-          traceId: randomUUID(),
-          operationAttemptId: randomUUID(),
-          clientMessageId: isUUID(dto.clientMessageId)
-            ? dto.clientMessageId
-            : randomUUID(),
-          userId: user._id,
-          sessionId: session._id,
-          mode: session.mode,
-          locale,
-          message: userMessage.content,
-          history: this.normalizeHistory(history),
-          jobs,
-          cv,
-          filters: this.boundFilters(dto.filters),
-          consentVersion: dto.cvId
-            ? this.consentService.getActivePolicy().consentVersion
-            : undefined,
-        }),
+        await this.generateWithCancellation(
+          {
+            requestId: randomUUID(),
+            traceId: randomUUID(),
+            operationAttemptId: randomUUID(),
+            clientMessageId: isUUID(dto.clientMessageId)
+              ? dto.clientMessageId
+              : randomUUID(),
+            userId: user._id,
+            sessionId: session._id,
+            mode: session.mode,
+            locale,
+            message: userMessage.content,
+            history: this.normalizeHistory(history),
+            jobs,
+            cv,
+            filters: this.boundFilters(dto.filters),
+            consentVersion: dto.cvId
+              ? this.consentService.getActivePolicy().consentVersion
+              : undefined,
+          },
+          abortController.signal,
+        ),
       );
-      const assistant = await this.messageRepo.save(
-        failedAssistant
-          ? Object.assign(failedAssistant, {
-              status: AiChatMessageStatus.COMPLETED,
-              content: this.assistantText(response),
-              blocks: response.blocks,
-              generationMetadata: generationMetadata(
-                response.source,
-                response.fallbackReason,
-              ),
-              citations: response.citations,
-              filterState: response.filterState || null,
-              errorCode: null,
-            })
-          : this.messageRepo.create({
-              sessionId: id,
-              parentMessageId: userMessage._id,
-              role: AiChatMessageRole.ASSISTANT,
-              status: AiChatMessageStatus.COMPLETED,
-              content: this.assistantText(response),
-              clientMessageId: null,
-              blocks: response.blocks,
-              generationMetadata: generationMetadata(
-                response.source,
-                response.fallbackReason,
-              ),
-              citations: response.citations,
-              filterState: response.filterState || null,
-            }),
+      if (abortController.signal.aborted) {
+        throw new ConflictException({
+          code: 'AI_REQUEST_INTERRUPTED',
+          message: 'Candidate assistant request was interrupted',
+        });
+      }
+      if (!(await this.quotaService.renewLease(reservation, lease.owner))) {
+        leaseLost = true;
+        throw new ConflictException({
+          code: 'AI_REQUEST_INTERRUPTED',
+          message: 'Candidate assistant request was interrupted',
+        });
+      }
+      const completedAssistant = Object.assign(processingAssistant, {
+        status: AiChatMessageStatus.COMPLETED,
+        content: this.assistantText(response),
+        blocks: response.blocks,
+        generationMetadata: generationMetadata(
+          response.source,
+          response.fallbackReason,
+        ),
+        citations: response.citations,
+        filterState: response.filterState || null,
+        errorCode: null,
+      });
+      const committed = await this.quotaService.commit(
+        reservation,
+        completedAssistant._id,
+        completedAssistant,
       );
-      await this.quotaService.commit(reservation, assistant._id);
+      if (committed === false) {
+        throw new ConflictException({
+          code: 'AI_REQUEST_INTERRUPTED',
+          message: 'Candidate assistant request was interrupted',
+        });
+      }
+      if (committed !== true) await this.messageRepo.save(completedAssistant);
       session.updatedAt = new Date();
       await this.sessionRepo.save(session);
-      return { userMessage, assistantMessage: assistant };
+      return { userMessage, assistantMessage: completedAssistant };
     } catch (error) {
-      await this.quotaService.release(
-        reservation,
-        error instanceof Error ? error.name.slice(0, 64) : 'AI_REQUEST_FAILED',
-      );
-      await this.messageRepo.save(
-        failedAssistant
-          ? Object.assign(failedAssistant, {
-              status: AiChatMessageStatus.FAILED,
-              content: null,
-              blocks: null,
-              generationMetadata: null,
-              citations: null,
-              filterState: null,
-              errorCode: this.failureCode(error),
-            })
-          : this.messageRepo.create({
-              sessionId: id,
-              parentMessageId: userMessage._id,
-              role: AiChatMessageRole.ASSISTANT,
-              status: AiChatMessageStatus.FAILED,
-              content: null,
-              clientMessageId: null,
-              blocks: null,
-              generationMetadata: null,
-              citations: null,
-              filterState: null,
-              errorCode: this.failureCode(error),
-            }),
-      );
+      const failed = processingAssistant
+        ? Object.assign(processingAssistant, {
+            status: AiChatMessageStatus.FAILED,
+            content: null,
+            blocks: null,
+            generationMetadata: null,
+            citations: null,
+            filterState: null,
+            errorCode: this.failureCode(error),
+          })
+        : null;
+      const mayRelease = leaseClaimed ? !leaseLost : !reservation.reused;
+      const released = mayRelease
+        ? await this.quotaService.release(
+            reservation,
+            this.failureCode(error),
+            failed || undefined,
+          )
+        : false;
+      if (failed && released !== false && released !== true) {
+        await this.messageRepo.save(failed);
+      }
       if (error instanceof HttpException) throw error;
       throw mapCandidateAssistantProviderError(error);
+    } finally {
+      if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+      if (callerSignal && abortFromCaller)
+        callerSignal.removeEventListener('abort', abortFromCaller);
+    }
+  }
+
+  async reconcileInterruptedRequests(now = new Date()): Promise<void> {
+    const expired = await this.quotaService.findExpiredLeases(now);
+    for (const lease of expired) {
+      if (lease.expiresAt.getTime() >= now.getTime() - lease.graceMs) continue;
+      if (!(await this.quotaService.terminalizeLease(lease, now))) continue;
+      const assistant = await this.messageRepo.findOne({
+        where: {
+          _id: lease.assistantMessageId,
+          sessionId: lease.sessionId,
+          parentMessageId: lease.userMessageId,
+          role: AiChatMessageRole.ASSISTANT,
+          status: AiChatMessageStatus.PROCESSING,
+        },
+      });
+      if (!assistant) {
+        await this.quotaService.release(
+          lease.reservation,
+          'REQUEST_INTERRUPTED',
+        );
+        continue;
+      }
+      const failed = Object.assign(assistant, {
+        status: AiChatMessageStatus.FAILED,
+        content: null,
+        blocks: null,
+        generationMetadata: null,
+        citations: null,
+        filterState: null,
+        errorCode: 'REQUEST_INTERRUPTED',
+      });
+      const released = await this.quotaService.release(
+        lease.reservation,
+        'REQUEST_INTERRUPTED',
+        failed,
+      );
+      if (released !== false && released !== true) {
+        await this.messageRepo.save(failed);
+      }
+    }
+  }
+
+  private async generateWithCancellation(
+    request: Parameters<CandidateAssistantAiClient['generate']>[0],
+    signal: AbortSignal,
+  ): Promise<CandidateAssistantResponse> {
+    if (signal.aborted) {
+      throw new ConflictException({
+        code: 'AI_REQUEST_INTERRUPTED',
+        message: 'Candidate assistant request was interrupted',
+      });
+    }
+    let abortListener: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      abortListener = () =>
+        reject(
+          new ConflictException({
+            code: 'AI_REQUEST_INTERRUPTED',
+            message: 'Candidate assistant request was interrupted',
+          }),
+        );
+      signal.addEventListener('abort', abortListener, { once: true });
+    });
+    try {
+      return await Promise.race([
+        this.aiClient.generate(request, { signal }),
+        aborted,
+      ]);
+    } finally {
+      if (abortListener) signal.removeEventListener('abort', abortListener);
     }
   }
   /** Keep persisted messages inside FastAPI's recent_history contract. */

@@ -61,19 +61,6 @@ _LANGUAGE_INSTRUCTIONS: Final[dict[OutputLocale, str]] = {
         "never dump technical identifiers into answer text."
     ),
 }
-_JOB_COMPARISON_INSTRUCTIONS: Final = (
-    "Write natural, concise prose rather than filling a fixed template. For CV_JOB_COMPARISON, "
-    "explain the canonical CV/job facts and matching_evidence in your own words. "
-    "Never recalculate or invent the overall_score, matched_skills, missing_required_skills, "
-    "strengths or gaps. A missing skill means not evidenced in this CV, not inability. "
-    "If quoting the score, use its supplied decimal or rounded percentage unchanged. "
-    "Keep the compared job's citation_key and job_id in citation_keys and referenced_job_ids. "
-    "Return the comparison explanation in INFERENCE blocks, not REFUSAL blocks when evidence "
-    "is supplied. Return claims as an empty array for comparison: the application supplies "
-    "canonical job and immutable matching claims. "
-    "Distinguish suggestions from facts. Do not expose raw JSON, scoring components, internal "
-    "metadata or unsupported facts in answer text."
-)
 _JOB_SEARCH_INSTRUCTIONS: Final = (
     "For JOB_SEARCH, write a short natural answer recommending only relevant supplied jobs. "
     "Treat title, company_name, location, level, skills, salary amount/currency and dates as "
@@ -178,7 +165,6 @@ def render_generation_prompt(
     return _QA_TEMPLATE.format(
         language_instructions=_LANGUAGE_INSTRUCTIONS[locale],
         locale=locale,
-        comparison_instructions=_JOB_COMPARISON_INSTRUCTIONS,
         encoded=encoded,
     )
 
@@ -232,10 +218,6 @@ def render_repair_prompt(
         f"{diagnostic}\n"
         "</repair_diagnostic_data>"
     )
-
-
-def render_job_search_selection_prompt(prompt: str) -> str:
-    return f"{prompt}\n{_JOB_SEARCH_SELECTION_INSTRUCTIONS}"
 
 
 def render_job_search_review_prompt(

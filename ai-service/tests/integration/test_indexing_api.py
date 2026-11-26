@@ -11,6 +11,77 @@ from talentpulse_ai.core.config import Settings, get_settings
 from talentpulse_ai.main import create_app
 
 
+@pytest.mark.parametrize("boundary", ["embed_document", "upsert_point", "delete_point"])
+def test_indexing_provider_failure_preserves_error_and_retry_contract(boundary, monkeypatch):
+    from tests.indexing_fixtures import make_delete
+
+    from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails
+
+    embedding, vector = FakeEmbedding(), FakeVector()
+    application = create_app(
+        Settings(environment="test", auth_required=False),
+        embedding_provider=embedding,
+        vector_retriever=vector,
+        generation_provider=FakeGeneration(),
+    )
+    application.dependency_overrides[get_settings] = lambda: Settings(
+        environment="test", auth_required=False
+    )
+    target = embedding if boundary == "embed_document" else vector
+    original = getattr(target, boundary)
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise ProviderFailure(
+            "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+            details=ProviderFailureDetails(
+                provider="cohere" if boundary == "embed_document" else "qdrant",
+                model="synthetic-model",
+                category="rate_limited",
+                provider_status=429,
+                provider_code="SyntheticQuotaExceeded",
+            ),
+        )
+
+    request = make_upsert()
+    if boundary == "delete_point":
+        request = make_delete(request.job.job_id)
+    path = "/internal/v1/index/jobs/" + ("delete" if boundary == "delete_point" else "upsert")
+    payload = request.model_dump(mode="json")
+    monkeypatch.setattr(target, boundary, fail)
+    with TestClient(application) as client:
+        failed = client.post(path, json=payload)
+        assert calls
+        assert failed.status_code == 503
+        assert failed.json() == {
+            "code": "index_unavailable",
+            "message": "Job indexing is temporarily unavailable.",
+        }
+        monkeypatch.setattr(target, boundary, original)
+        retried = client.post(path, json=payload)
+        replay = client.post(path, json=payload)
+
+    assert retried.status_code == replay.status_code == 200
+    assert retried.json() == replay.json()
+    body = retried.json()
+    for key, value in payload["identity"].items():
+        assert body[key] == value
+    assert "idempotency_key" not in body
+    assert len(vector.deletes if boundary == "delete_point" else vector.upserts) == 1
+    for internal in (
+        "ai_provider_failure",
+        "SYNTHETIC_PRIVATE_PROVIDER_MESSAGE",
+        "category",
+        "provider_status",
+        "provider_code",
+        "provider_message",
+        "SyntheticQuotaExceeded",
+        "synthetic-model",
+    ):
+        assert internal not in retried.text
+
+
 def test_jobs_index_scope_allows_valid_token_and_rejects_wrong_scope() -> None:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     settings = Settings(

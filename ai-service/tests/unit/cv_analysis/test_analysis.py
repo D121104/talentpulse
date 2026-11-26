@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from talentpulse_ai.core.config import Settings, get_settings
-from talentpulse_ai.core.exceptions import ProviderFailure, ServiceError
+from talentpulse_ai.core.exceptions import ProviderFailure, ProviderFailureDetails, ServiceError
 from talentpulse_ai.infrastructure.llm.ollama import OllamaGenerationAdapter
 from talentpulse_ai.main import create_app
 from talentpulse_ai.modules.cv_analysis.analysis import MatchAnalysisService
@@ -87,6 +87,30 @@ def test_valid_generation_and_private_prompt():
     provider.generate_structured.assert_called_once()
 
 
+def test_local_ollama_analysis_keeps_schema_and_bounded_request(monkeypatch):
+    calls = []
+
+    def generate(base_url, path, request, timeout):
+        calls.append((base_url, path, request, timeout))
+        return {"response": json.dumps(output())}
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.llm.ollama._ollama_json_request", generate)
+    provider = OllamaGenerationAdapter("http://ollama", "qwen3:8b", 30)
+
+    response = MatchAnalysisService(provider).analyze(
+        MatchAnalysisRequest.model_validate(payload())
+    )
+
+    assert response.source == "llm"
+    _, path, request, timeout = calls[0]
+    assert path == "/api/generate"
+    assert request["stream"] is False
+    assert request["options"] == {"temperature": 0, "num_predict": 1000}
+    assert request["think"] is False
+    assert request["format"]["properties"]["summary"]["type"] == "object"
+    assert timeout == 20
+
+
 def test_generation_schema_constrains_refs_before_decoding():
     request = MatchAnalysisRequest.model_validate(payload())
     schema = MatchAnalysisService._generation_schema(request)
@@ -143,6 +167,80 @@ def test_provider_failure_no_retry():
     assert exc.value.code == "analysis_provider_failed"
     assert "private" not in str(exc.value)
     provider.generate_structured.assert_called_once()
+
+
+def test_provider_failure_emits_safe_correlated_diagnostic(caplog):
+    raw = payload()
+    raw["facts"]["skill_context"] = [{"ref": "m0", "label": "PrivateProfileSkill"}]
+    request = MatchAnalysisRequest.model_validate(raw)
+    provider = Mock(spec=OllamaGenerationAdapter)
+    provider.generate_structured.side_effect = ProviderFailure(
+        "private exception containing PrivateProfileSkill and CV text",
+        details=ProviderFailureDetails(
+            provider="ollama",
+            model="qwen3:8b",
+            category="timeout",
+            exception_type="TimeoutError",
+            duration_ms=123,
+        ),
+    )
+    with caplog.at_level("WARNING"), pytest.raises(ServiceError) as exc:
+        MatchAnalysisService(provider).analyze(request)
+
+    assert (exc.value.code, exc.value.message, exc.value.status_code) == (
+        "analysis_provider_failed",
+        "Analysis generation failed.",
+        502,
+    )
+    provider.generate_structured.assert_called_once()
+    events = [r for r in caplog.records if r.getMessage().startswith("ai_provider_failure ")]
+    assert len(events) == 1
+    fields = dict(item.split("=", 1) for item in events[0].getMessage().split()[1:])
+    assert (
+        fields.items()
+        >= {
+            "capability": "cv_analysis",
+            "operation": "analyze",
+            "attempt": "single",
+            "provider": "ollama",
+            "model": "qwen3:8b",
+            "category": "timeout",
+            "request_id": str(request.identity.request_id),
+            "trace_id": str(request.identity.trace_id),
+            "exception_type": "TimeoutError",
+            "duration_ms": "123",
+        }.items()
+    )
+    assert "PrivateProfileSkill" not in caplog.text
+    assert "private exception" not in caplog.text
+    assert "CV text" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.parametrize("failure", ["grounding", "programming"])
+def test_local_analysis_errors_are_not_provider_failures(failure, caplog):
+    provider = Mock(spec=OllamaGenerationAdapter)
+    if failure == "programming":
+        provider.generate_structured.side_effect = TypeError("private programming message")
+        expected = TypeError
+    else:
+        generated = output()
+        generated["strengths"][0]["text"] = "Private unsupported claim with 99 years."
+        provider.generate_structured.return_value = generated
+        expected = ServiceError
+    with caplog.at_level("WARNING"), pytest.raises(expected) as exc:
+        MatchAnalysisService(provider).analyze(MatchAnalysisRequest.model_validate(payload()))
+    if failure == "grounding":
+        assert exc.value.code != "analysis_provider_failed"
+    if failure == "grounding":
+        assert "ai_provider_failure capability=cv_analysis" in caplog.text
+        assert "category=invalid_output" in caplog.text
+        assert "Private unsupported claim" not in caplog.text
+    else:
+        assert "ai_provider_failure" not in caplog.text
+        assert "category=provider" not in caplog.text
+    assert "private programming message" not in caplog.text
+    assert "Private unsupported claim" not in caplog.text
 
 
 @pytest.mark.parametrize("locale", ["vi", "en"])

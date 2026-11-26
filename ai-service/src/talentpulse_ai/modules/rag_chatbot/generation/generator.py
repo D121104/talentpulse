@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Final, cast
+from time import monotonic
+from typing import Final, Literal, cast
 from uuid import UUID
 
 from pydantic import ValidationError
 
-from talentpulse_ai.core.exceptions import ServiceError
+from talentpulse_ai.core.exceptions import (
+    ProviderFailure,
+    ProviderName,
+    ServiceError,
+    provider_failure_details,
+)
+from talentpulse_ai.core.logging import (
+    log_ai_agent_validation_failure,
+    log_ai_provider_failure,
+    validation_error_summary,
+)
 from talentpulse_ai.modules.rag_chatbot.generation import rendering
 from talentpulse_ai.modules.rag_chatbot.generation.citations import (
     parse_and_validate,
@@ -17,31 +28,10 @@ from talentpulse_ai.modules.rag_chatbot.generation.locale import (
     OutputLocale as OutputLocale,
 )
 from talentpulse_ai.modules.rag_chatbot.generation.locale import (
-    _canonical_answer_terms as _canonical_answer_terms,
-)
-from talentpulse_ai.modules.rag_chatbot.generation.locale import (
-    _detected_message_locale as _detected_message_locale,
-)
-from talentpulse_ai.modules.rag_chatbot.generation.locale import (
     _effective_locale as _effective_locale,
 )
 from talentpulse_ai.modules.rag_chatbot.generation.locale import (
-    _generated_answer_matches_locale,
-)
-from talentpulse_ai.modules.rag_chatbot.generation.locale import (
-    _has_unsupported_letters as _has_unsupported_letters,
-)
-from talentpulse_ai.modules.rag_chatbot.generation.locale import (
-    _language_scores as _language_scores,
-)
-from talentpulse_ai.modules.rag_chatbot.generation.locale import (
     _requested_locale as _requested_locale,
-)
-from talentpulse_ai.modules.rag_chatbot.generation.locale import (
-    _without_canonical_answer_terms as _without_canonical_answer_terms,
-)
-from talentpulse_ai.modules.rag_chatbot.generation.prompt_builder import (
-    _JOB_COMPARISON_INSTRUCTIONS as _JOB_COMPARISON_INSTRUCTIONS,
 )
 from talentpulse_ai.modules.rag_chatbot.generation.prompt_builder import (
     _JOB_SEARCH_INSTRUCTIONS as _JOB_SEARCH_INSTRUCTIONS,
@@ -68,7 +58,6 @@ from talentpulse_ai.modules.rag_chatbot.generation.prompt_builder import (
     JobSearchGroundingReview,
     render_comparison_review_prompt,
     render_job_search_review_prompt,
-    render_job_search_selection_prompt,
     render_repair_prompt,
     render_schema_prompt,
 )
@@ -79,6 +68,8 @@ from talentpulse_ai.modules.rag_chatbot.generation.prompt_builder import (
     render_generation_prompt as render_generation_prompt,
 )
 from talentpulse_ai.modules.rag_chatbot.schemas import (
+    AgentAnswer,
+    AgentCvAnswer,
     AnswerBlock,
     FallbackReason,
     GenerationProvider,
@@ -89,6 +80,18 @@ from talentpulse_ai.modules.rag_chatbot.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TECHNICAL_METADATA_RE = re.compile(
+    r"(?:\b(?:job_ids?|referenced_job_ids|answer_blocks|claims|components)\b|"
+    r"\bcitation(?:_keys?| keys?)?\b|\bretrieval_evidence\b|"
+    r"\bjob:[0-9a-f]{8}-[0-9a-f-]{27,}\b)",
+    re.IGNORECASE,
+)
+
+
+def _contains_technical_metadata(generated: ProviderGeneration) -> bool:
+    return any(_TECHNICAL_METADATA_RE.search(block.text) for block in generated.answer_blocks)
+
 
 _REJECTION_CODES: Final = {
     "job search answer is missing evidence references": "missing_evidence_references",
@@ -117,6 +120,8 @@ def _rejection_code(error: ValueError) -> str:
 def _generation_event(request: RagGenerateRequest, attempt: str, code: str) -> None:
     if code == "provider_error":
         stage = "provider"
+    elif code == "generation_error":
+        stage = "internal"
     elif code == "accepted":
         stage = "complete"
     elif code.startswith("unsupported_"):
@@ -130,6 +135,58 @@ def _generation_event(request: RagGenerateRequest, attempt: str, code: str) -> N
         code,
         request.identity.request_id,
         request.identity.trace_id,
+    )
+
+
+def _provider_failure_event(
+    request: RagGenerateRequest, attempt: Literal["initial", "repair"], failure: ProviderFailure
+) -> None:
+    if failure.details is None:
+        return
+    log_ai_provider_failure(
+        details=failure.details,
+        capability="rag_chat",
+        operation="generate",
+        attempt=attempt,
+        request_id=request.identity.request_id,
+        trace_id=request.identity.trace_id,
+    )
+
+
+def _invalid_output_event(
+    provider: GenerationProvider,
+    request: RagGenerateRequest,
+    attempt: Literal["initial", "repair"],
+    error: ValueError,
+    duration_ms: int,
+) -> None:
+    provider_name = getattr(provider, "provider_name", None)
+    if not isinstance(provider_name, str) or provider_name not in {
+        "gemini",
+        "bedrock",
+        "ollama",
+        "cohere",
+        "qdrant",
+    }:
+        return
+    model = getattr(provider, "model_name", None)
+    details = provider_failure_details(
+        error,
+        provider=cast(ProviderName, provider_name),
+        model=model if isinstance(model, str) else None,
+        duration_ms=duration_ms,
+        category="invalid_output",
+    )
+    log_ai_provider_failure(
+        details=details,
+        capability="rag_chat",
+        operation="generate",
+        attempt=attempt,
+        request_id=request.identity.request_id,
+        trace_id=request.identity.trace_id,
+        validation_errors=(
+            validation_error_summary(error) if isinstance(error, ValidationError) else None
+        ),
     )
 
 
@@ -151,40 +208,147 @@ class GenerationService:
         degraded = False
         generated: ProviderGeneration | None = None
         fallback_reason: FallbackReason = "validation_error"
+        initial_started_at = monotonic()
         try:
             generated = self._generate_validated(prompt, request)
         except ValueError as error:
             # A single repair call is allowed when structured output cannot be parsed or validated.
+            _invalid_output_event(
+                self._provider,
+                request,
+                "initial",
+                error,
+                round((monotonic() - initial_started_at) * 1000),
+            )
             code = _rejection_code(error)
             _generation_event(request, "initial", code)
             repair_prompt = render_repair_prompt(
                 prompt, request, code, search_selection_contract=selection_contract
             )
+            repair_started_at = monotonic()
             try:
                 generated = self._generate_validated(repair_prompt, request)
                 _generation_event(request, "repair", "accepted")
                 degraded = True
             except ValueError as error:
+                _invalid_output_event(
+                    self._provider,
+                    request,
+                    "repair",
+                    error,
+                    round((monotonic() - repair_started_at) * 1000),
+                )
                 _generation_event(request, "repair", _rejection_code(error))
                 generated = None
                 degraded = True
-            except Exception:
+            except ProviderFailure as error:
+                _provider_failure_event(request, "repair", error)
                 _generation_event(request, "repair", "provider_error")
                 generated = None
                 degraded = True
                 fallback_reason = "provider_error"
-        except Exception:
+            except Exception:
+                _generation_event(request, "repair", "generation_error")
+                generated = None
+                degraded = True
+                fallback_reason = "provider_error"
+        except ProviderFailure as error:
+            _provider_failure_event(request, "initial", error)
             _generation_event(request, "initial", "provider_error")
+            generated = None
+            degraded = True
+            fallback_reason = "provider_error"
+        except Exception:
+            _generation_event(request, "initial", "generation_error")
             generated = None
             degraded = True
             fallback_reason = "provider_error"
 
         if generated is None:
             return self._fallback(request, degraded=True, reason=fallback_reason)
-        if not _generated_answer_matches_locale(request, generated):
-            _generation_event(request, "final", "locale_mismatch")
-            return self._fallback(request, degraded=True, reason="locale_mismatch")
+        if _contains_technical_metadata(generated):
+            _generation_event(request, "final", "invalid_output")
+            return self._fallback(request, degraded=True, reason="validation_error")
         return self._response(request, generated, degraded=degraded)
+
+    @staticmethod
+    def validate_agent_output(request: RagGenerateRequest, value: object) -> ProviderGeneration:
+        if request.intent == "CV_JOB_COMPARISON":
+            return GenerationService._parse_and_validate(value, request)
+
+        if request.intent == "CV_ANALYSIS":
+            cv_answer = AgentCvAnswer.model_validate(value)
+            return GenerationService._parse_and_validate(
+                ProviderGeneration(
+                    answer_blocks=cv_answer.answer_blocks,
+                    claims=cv_answer.claims,
+                    citation_keys=[],
+                    referenced_job_ids=[],
+                ).model_dump(mode="python"),
+                request,
+            )
+
+        answer = AgentAnswer.model_validate(value)
+        citation_jobs = retrieval_citation_jobs(request)
+        mentioned_jobs = [
+            job
+            for job in request.canonical_active_job_context
+            if job.job_id in citation_jobs.values()
+            and re.search(
+                r"(?<!\w)" + re.escape(job.title.casefold()) + r"(?!\w)",
+                "\n".join(block.text for block in answer.answer_blocks).casefold(),
+            )
+            and sum(
+                other.title.casefold() == job.title.casefold()
+                for other in request.canonical_active_job_context
+            )
+            == 1
+        ]
+        citations = [
+            next(key for key, job_id in citation_jobs.items() if job_id == job.job_id)
+            for job in mentioned_jobs
+        ]
+        candidate = ProviderGeneration(
+            answer_blocks=answer.answer_blocks,
+            claims=[
+                claim
+                for job, citation in zip(mentioned_jobs, citations, strict=True)
+                for claim in GenerationService._canonical_job_claims(job, citation)
+            ],
+            citation_keys=citations,
+            referenced_job_ids=[job.job_id for job in mentioned_jobs],
+        )
+        return GenerationService._parse_and_validate(candidate.model_dump(mode="python"), request)
+
+    @staticmethod
+    def finalize_agent_output(request: RagGenerateRequest, value: object) -> RagGenerateResponse:
+        if request.intent == "JOB_SEARCH" and not request.retrieval_evidence:
+            return GenerationService._fallback(request, reason="insufficient_evidence")
+        try:
+            generated = GenerationService.validate_agent_output(request, value)
+        except (ValidationError, TypeError, ValueError) as error:
+            log_ai_agent_validation_failure(
+                stage="final_output",
+                request_id=request.identity.request_id,
+                trace_id=request.identity.trace_id,
+                validation_errors=(
+                    validation_error_summary(error)
+                    if isinstance(error, ValidationError)
+                    else "contract:rejected"
+                ),
+            )
+            return GenerationService._fallback(request, degraded=True, reason="validation_error")
+        if _contains_technical_metadata(generated):
+            log_ai_agent_validation_failure(
+                stage="final_output",
+                request_id=request.identity.request_id,
+                trace_id=request.identity.trace_id,
+                validation_errors="technical_metadata:present",
+            )
+            return GenerationService._fallback(request, degraded=True, reason="validation_error")
+        if GenerationService._job_search_needs_fallback(request, generated):
+            return GenerationService._fallback(request, degraded=True)
+        return GenerationService._response(request, generated, degraded=False)
 
     def _generate_validated(self, prompt: str, request: RagGenerateRequest) -> ProviderGeneration:
         if request.intent == "CV_JOB_COMPARISON" and callable(
@@ -209,7 +373,7 @@ class GenerationService:
             selection_value = cast(
                 StructuredGenerationProvider, self._provider
             ).generate_structured(
-                render_job_search_selection_prompt(prompt),
+                prompt,
                 schema,
                 timeout=60,
                 num_predict=1536,
@@ -235,7 +399,21 @@ class GenerationService:
                 ],
             ).model_dump(mode="json")
         else:
-            value = self._provider.generate(prompt)
+            structured_generate = getattr(self._provider, "generate_structured", None)
+            if callable(structured_generate):
+                value = cast(StructuredGenerationProvider, self._provider).generate_structured(
+                    prompt,
+                    ProviderGeneration.model_json_schema(),
+                    timeout=60,
+                    num_predict=1536,
+                )
+            else:
+                schema = (
+                    ComparisonExplanation.model_json_schema()
+                    if request.intent == "CV_JOB_COMPARISON"
+                    else ProviderGeneration.model_json_schema()
+                )
+                value = self._provider.generate(render_schema_prompt(prompt, schema))
         if request.intent == "JOB_SEARCH":
             candidate = ProviderGeneration.model_validate(value)
             has_references = bool(candidate.citation_keys or candidate.referenced_job_ids)

@@ -66,6 +66,7 @@ graphify-out/
 *PLAN*.md
 *plan*.md
 plans/
+!specs/002-career-chat-agent/plan.md
 
 # TypeScript and lint caches
 *.tsbuildinfo
@@ -110,6 +111,7 @@ temp/
 .cache/
 
 # Model, dataset and serialized local artifacts
+ai-service/src/talentpulse_ai/modules/rag_chatbot/onet_skill_framework_v31.json
 *.bin
 *.ckpt
 *.gguf
@@ -152,4 +154,7 @@ secrets/
 *.p12
 *.pfx
 
-/docs
+/docs/*
+!/docs/architecture/
+/docs/architecture/*
+!/docs/architecture/agent-foundation-integration.md

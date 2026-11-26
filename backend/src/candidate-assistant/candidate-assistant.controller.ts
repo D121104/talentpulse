@@ -8,9 +8,11 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { RolesGuard } from 'src/guards/roles.guard';
 import { Role, Roles, User } from 'src/decorator/customize';
@@ -53,12 +55,28 @@ export class CandidateAssistantController {
   ) {
     return this.service.listMessages(id, dto, user);
   }
-  @Post('sessions/:id/messages') send(
+  @Post('sessions/:id/messages') async send(
     @Param('id') id: string,
     @Body() dto: SendAiChatMessageDto,
     @User() user: IUser,
     @Headers('accept-language') acceptLanguage?: string,
+    @Res({ passthrough: true }) response?: Response,
   ) {
-    return this.service.sendMessage(id, dto, user, acceptLanguage);
+    const controller = new AbortController();
+    const onClose = () => {
+      if (response && !response.writableEnded) controller.abort();
+    };
+    response?.once('close', onClose);
+    try {
+      return await this.service.sendMessage(
+        id,
+        dto,
+        user,
+        acceptLanguage,
+        controller.signal,
+      );
+    } finally {
+      response?.removeListener('close', onClose);
+    }
   }
 }

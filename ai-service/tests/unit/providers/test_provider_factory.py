@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import json
+import logging
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
-from pydantic import ValidationError
+from botocore.config import Config
+from pydantic import SecretStr, ValidationError
 
+from talentpulse_ai.agent_foundation.model import AgentModelAdapter
 from talentpulse_ai.core.config import Settings
 from talentpulse_ai.core.exceptions import ProviderFailure
+from talentpulse_ai.core.logging import log_ai_provider_failure
 from talentpulse_ai.infrastructure.embeddings.model import (
     CohereEmbeddingAdapter,
     OllamaEmbeddingAdapter,
 )
 from talentpulse_ai.infrastructure.llm.bedrock import BedrockNovaGenerationAdapter
+from talentpulse_ai.infrastructure.llm.gemini import GeminiGenerationAdapter
 from talentpulse_ai.infrastructure.llm.ollama import OllamaGenerationAdapter
 from talentpulse_ai.infrastructure.provider_factory import create_provider_bundle
 from talentpulse_ai.infrastructure.vectorstore.qdrant import QdrantVectorRetriever
@@ -203,6 +210,243 @@ def test_local_factory_builds_ollama_qdrant_tuple_without_provider_calls() -> No
     assert bundle.embedding.dimensions == 2560
     assert bundle.retriever.dimensions == 2560
     assert qdrant.calls == []
+
+
+def test_local_factory_supports_gemini_generation_with_ollama_embeddings() -> None:
+    settings = local_ollama_settings()
+    settings.generation_provider = "gemini"
+    settings.gemini_api_key = SecretStr("gemini-secret")
+    qdrant = FakeQdrant()
+
+    bundle = create_provider_bundle(settings, qdrant_client=qdrant)
+
+    assert isinstance(bundle.embedding, OllamaEmbeddingAdapter)
+    assert isinstance(bundle.retriever, QdrantVectorRetriever)
+    assert isinstance(bundle.generation, GeminiGenerationAdapter)
+    assert bundle.generation.supports_structured_outputs is True
+    assert (
+        AgentModelAdapter(bundle.generation, direct_output=True).supports_structured_outputs is True
+    )
+    assert bundle.retriever.dimensions == settings.ollama_embedding_dimensions
+    assert qdrant.calls == []
+
+
+def test_local_factory_supports_bedrock_generation_with_ollama_embeddings() -> None:
+    settings = local_ollama_settings()
+    settings.generation_provider = "bedrock"
+    settings.bedrock_region = "ap-southeast-2"
+    settings.bedrock_model = "global.moonshotai.kimi-k3.1"
+    bedrock = FakeBedrock()
+    qdrant = FakeQdrant()
+
+    bundle = create_provider_bundle(settings, bedrock_client=bedrock, qdrant_client=qdrant)
+
+    assert isinstance(bundle.embedding, OllamaEmbeddingAdapter)
+    assert isinstance(bundle.retriever, QdrantVectorRetriever)
+    assert isinstance(bundle.generation, BedrockNovaGenerationAdapter)
+    assert bundle.generation.model_name == settings.bedrock_model
+    assert bundle.generation.supports_structured_outputs is True
+    assert bundle.retriever.dimensions == settings.ollama_embedding_dimensions
+    assert bedrock.converse_calls == []
+    assert qdrant.calls == []
+
+
+def test_factory_builds_gemini_generation_with_cohere_embedding(monkeypatch) -> None:
+    settings = production_settings()
+    settings.generation_provider = "gemini"
+    settings.gemini_api_key = SecretStr("gemini-secret")
+    bedrock = FakeBedrock()
+    qdrant = FakeQdrant()
+
+    bundle = create_provider_bundle(settings, bedrock_client=bedrock, qdrant_client=qdrant)
+
+    assert isinstance(bundle.generation, GeminiGenerationAdapter)
+    assert isinstance(bundle.embedding, CohereEmbeddingAdapter)
+    assert bundle.generation._model == settings.gemini_model
+    assert bedrock.converse_calls == []
+
+
+def test_gemini_adapter_sends_json_request_and_parses_response(monkeypatch) -> None:
+    requests: list[tuple[object, float]] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"candidates": [{"content": {"parts": [{"text": '{"answer_blocks": []}'}]}}]}
+            ).encode()
+
+    def fake_urlopen(request: object, timeout: float) -> Response:
+        requests.append((request, timeout))
+        return Response()
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.llm.gemini.urlopen", fake_urlopen)
+    provider = GeminiGenerationAdapter("test-key", "gemini-2.5-flash")
+
+    assert provider.generate_with_timeout("prompt", timeout=3.5) == {"answer_blocks": []}
+    request, timeout = requests[0]
+    assert timeout == 3.5
+    assert request.get_header("X-goog-api-key") == "test-key"
+    assert json.loads(request.data)["generationConfig"]["responseMimeType"] == "application/json"
+
+
+def test_gemini_adapter_sends_json_schema_for_structured_generation(monkeypatch) -> None:
+    requests: list[object] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"candidates": [{"content": {"parts": [{"text": '{"answer_blocks": []}'}]}}]}
+            ).encode()
+
+    def fake_urlopen(request: object, timeout: float) -> Response:
+        del timeout
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.llm.gemini.urlopen", fake_urlopen)
+    provider = GeminiGenerationAdapter("test-key", "gemini-2.5-flash")
+    schema = {
+        "type": "object",
+        "properties": {"answer_blocks": {"type": "array", "items": {"type": "object"}}},
+        "required": ["answer_blocks"],
+    }
+
+    provider.generate_structured("prompt", schema, timeout=4.0)
+
+    payload = json.loads(requests[0].data)
+    assert payload["generationConfig"]["responseMimeType"] == "application/json"
+    assert payload["generationConfig"]["responseJsonSchema"] == schema
+
+
+def test_gemini_adapter_logs_only_sanitized_structured_request_error(monkeypatch) -> None:
+    private = "PRIVATE_CV_CONTENT"
+    body = json.dumps(
+        {
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": (
+                    "Invalid responseJsonSchema at generationConfig.responseJsonSchema. "
+                    f"Unexpected text {private}"
+                ),
+            }
+        }
+    ).encode()
+
+    def failed_urlopen(request: object, timeout: float) -> object:
+        del request, timeout
+        raise HTTPError("https://example.invalid", 400, "Bad Request", None, BytesIO(body))
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.llm.gemini.urlopen", failed_urlopen)
+    provider = GeminiGenerationAdapter("test-key", "gemini-3.5-flash-lite")
+
+    with pytest.raises(ProviderFailure) as caught:
+        provider.generate_structured("prompt", {"type": "object"})
+
+    assert caught.value.details is not None
+    assert caught.value.details.provider_code == "INVALID_ARGUMENT"
+    assert caught.value.details.provider_message == "response_json_schema_rejected"
+    assert private not in repr(caught.value.details)
+
+
+@pytest.mark.parametrize(
+    ("http_status", "provider_status", "provider_message", "safe_message", "category"),
+    [
+        (
+            503,
+            "UNAVAILABLE",
+            "backend temporarily unavailable PRIVATE_CV",
+            "service_unavailable",
+            "connectivity",
+        ),
+        (
+            429,
+            "RESOURCE_EXHAUSTED",
+            "request quota exceeded PRIVATE_CV",
+            "rate_limited",
+            "rate_limited",
+        ),
+    ],
+)
+def test_gemini_adapter_extracts_safe_transient_error_metadata(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+    http_status: int,
+    provider_status: str,
+    provider_message: str,
+    safe_message: str,
+    category: str,
+) -> None:
+    body = json.dumps(
+        {
+            "error": {
+                "code": http_status,
+                "status": provider_status,
+                "message": provider_message,
+            }
+        }
+    ).encode()
+
+    def failed_urlopen(request: object, timeout: float) -> object:
+        del request, timeout
+        raise HTTPError(
+            "https://example.invalid",
+            http_status,
+            "provider failure",
+            {"Retry-After": "30"},
+            BytesIO(body),
+        )
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.llm.gemini.urlopen", failed_urlopen)
+    provider = GeminiGenerationAdapter("test-key", "gemini-3.5-flash-lite")
+
+    with pytest.raises(ProviderFailure) as caught:
+        provider.generate_structured("prompt", {"type": "object"})
+
+    assert caught.value.details is not None
+    assert caught.value.details.provider_status == http_status
+    assert caught.value.details.provider_code == provider_status
+    assert caught.value.details.provider_message == safe_message
+    assert caught.value.details.category == category
+    assert caught.value.details.retry_after_seconds == 30
+    assert "PRIVATE_CV" not in repr(caught.value.details)
+    with caplog.at_level(logging.WARNING):
+        log_ai_provider_failure(
+            details=caught.value.details,
+            capability="cv_generation",
+            operation="agent_model",
+            attempt="agent_model",
+        )
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"provider_code={provider_status}" in log
+    assert "retry_after_seconds=30" in log
+    assert "PRIVATE_CV" not in log
+
+
+def test_gemini_adapter_sanitizes_provider_failures(monkeypatch) -> None:
+    def failed_urlopen(request: object, timeout: float) -> object:
+        del request, timeout
+        raise TimeoutError("sensitive provider details")
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.llm.gemini.urlopen", failed_urlopen)
+    provider = GeminiGenerationAdapter("test-key", "gemini-2.5-flash")
+
+    with pytest.raises(ProviderFailure, match="generation provider failed"):
+        provider.generate("prompt")
 
 
 def test_factory_rejects_ollama_outside_local_environments() -> None:
@@ -402,6 +646,89 @@ def test_factory_builds_clients_without_calling_paid_operations() -> None:
 
     assert bedrock.embedding_calls == []
     assert bedrock.converse_calls == []
+
+
+def test_factory_keeps_legacy_bedrock_client_configuration_and_shared_use(monkeypatch) -> None:
+    constructions: list[tuple[str, dict[str, object]]] = []
+    bedrock = FakeBedrock()
+
+    def fake_client(service_name: str, **kwargs: object) -> FakeBedrock:
+        constructions.append((service_name, kwargs))
+        return bedrock
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.provider_factory.boto3.client", fake_client)
+
+    bundle = create_provider_bundle(production_settings(), qdrant_client=FakeQdrant())
+
+    assert constructions == [("bedrock-runtime", {"region_name": "ap-southeast-2"})]
+    assert bedrock.embedding_calls == []
+    assert bedrock.converse_calls == []
+
+    assert bundle.embedding.embed_query("synthetic query") == [0.1] * 1024
+    assert bundle.generation.generate("synthetic legacy prompt") == {
+        "answer_blocks": [],
+        "claims": [],
+        "citation_keys": [],
+        "referenced_job_ids": [],
+    }
+    assert len(bedrock.embedding_calls) == 1
+    assert len(bedrock.converse_calls) == 1
+    assert len(constructions) == 1
+
+
+@pytest.mark.parametrize("remaining_timeout", [0.25, 7.5, 24.0])
+def test_factory_builds_agent_bedrock_clients_with_remaining_timeout_without_changing_legacy(
+    monkeypatch, remaining_timeout: float
+) -> None:
+    constructions: list[tuple[str, dict[str, object]]] = []
+    clients: list[FakeBedrock] = []
+
+    def fake_client(service_name: str, **kwargs: object) -> FakeBedrock:
+        constructions.append((service_name, kwargs))
+        client = FakeBedrock()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("talentpulse_ai.infrastructure.provider_factory.boto3.client", fake_client)
+    bundle = create_provider_bundle(production_settings(), qdrant_client=FakeQdrant())
+    legacy = clients[0]
+    assert constructions == [("bedrock-runtime", {"region_name": "ap-southeast-2"})]
+
+    generate_with_timeout = getattr(bundle.generation, "generate_with_timeout", None)
+    assert callable(generate_with_timeout), "Bedrock agent calls require a timeout-aware method"
+
+    # A later model decision must use its smaller budget, not reuse the first call's timeout.
+    for timeout in (remaining_timeout, remaining_timeout / 2):
+        result = generate_with_timeout("synthetic agent prompt", timeout=timeout)
+
+        assert result == {
+            "answer_blocks": [],
+            "claims": [],
+            "citation_keys": [],
+            "referenced_job_ids": [],
+        }
+        service_name, options = constructions[-1]
+        assert service_name == "bedrock-runtime"
+        assert options["region_name"] == "ap-southeast-2"
+        config = options["config"]
+        assert isinstance(config, Config)
+        assert 0 < config.connect_timeout <= timeout
+        assert 0 < config.read_timeout <= timeout
+        assert config.retries["total_max_attempts"] == 1
+        assert clients[-1] is not legacy
+        assert clients[-1].embedding_calls == []
+        assert len(clients[-1].converse_calls) == 1
+        assert clients[-1].converse_calls[0]["modelId"] == "amazon.nova-lite-v1:0"
+
+    assert len(constructions) == 3
+    assert legacy.embedding_calls == []
+    assert legacy.converse_calls == []
+    bundle.generation.generate("synthetic legacy prompt")
+    assert len(legacy.converse_calls) == 1
+    assert bundle.embedding.embed_query("synthetic query") == [0.1] * 1024
+    assert len(legacy.embedding_calls) == 1
+    assert len(constructions) == 3
+    assert constructions[0] == ("bedrock-runtime", {"region_name": "ap-southeast-2"})
 
 
 def test_factory_rejects_missing_qdrant_endpoint_before_client_construction() -> None:

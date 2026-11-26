@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite, sqrt
-from typing import Protocol
+from typing import Protocol, cast
 
+from talentpulse_ai.core.exceptions import (
+    ProviderFailure,
+    ProviderName,
+    provider_failure_details,
+)
+from talentpulse_ai.core.logging import log_ai_provider_failure
 from talentpulse_ai.modules.cv_analysis.schemas import (
     CVProfile,
     JobProfile,
@@ -44,8 +50,14 @@ class EmbeddingSemanticScorer:
 
     def score(self, candidate: CVProfile, job: JobProfile) -> float | None:
         try:
-            candidate_vector = self.provider.embed_query(_profile_text(candidate))
-            job_vector = self.provider.embed_query(_profile_text(job))
+            try:
+                candidate_vector = self.provider.embed_query(_profile_text(candidate))
+            except ProviderFailure as exc:
+                raise ProviderFailure(str(exc), details=exc.details, attempt_index=1) from exc
+            try:
+                job_vector = self.provider.embed_query(_profile_text(job))
+            except ProviderFailure as exc:
+                raise ProviderFailure(str(exc), details=exc.details, attempt_index=2) from exc
             if not candidate_vector or len(candidate_vector) != len(job_vector):
                 return None
             values = [*candidate_vector, *job_vector]
@@ -66,6 +78,8 @@ class EmbeddingSemanticScorer:
             ) / (candidate_norm * job_norm)
             # MatchResponse uses [0, 1], while cosine similarity is [-1, 1].
             return min(1.0, max(0.0, (cosine + 1.0) / 2.0))
+        except ProviderFailure:
+            raise
         except Exception:
             # Provider failures degrade matching without exposing provider details.
             return None
@@ -130,7 +144,37 @@ class MatchService:
         matched_skills = self._merge_unique(matched_required, matched_preferred)
 
         components: dict[str, tuple[float, list[str]]] = {}
-        semantic = self._semantic.score(candidate, job)
+        try:
+            semantic = self._semantic.score(candidate, job)
+        except ProviderFailure as exc:
+            details = exc.details
+            if details is None and isinstance(self._semantic, EmbeddingSemanticScorer):
+                provider_name = getattr(self._semantic.provider, "provider_name", None)
+                model_name = getattr(self._semantic.provider, "model_name", None)
+                if isinstance(provider_name, str) and provider_name in {
+                    "cohere",
+                    "bedrock",
+                    "ollama",
+                }:
+                    details = provider_failure_details(
+                        exc,
+                        provider=cast(ProviderName, provider_name),
+                        model=model_name if isinstance(model_name, str) else None,
+                        duration_ms=0,
+                    )
+            if details is not None:
+                log_ai_provider_failure(
+                    details=details,
+                    capability="cv_analysis",
+                    operation="embed_query",
+                    attempt="single",
+                    request_id=request.identity.request_id,
+                    trace_id=request.identity.trace_id,
+                    attempt_index=exc.attempt_index,
+                )
+            semantic = None
+        except Exception:
+            semantic = None
         if semantic is not None:
             if not isfinite(semantic) or not 0 <= semantic <= 1:
                 raise ValueError("semantic scorer must return a score between 0 and 1")
