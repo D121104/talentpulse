@@ -1,0 +1,1727 @@
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
+import * as crypto from 'crypto';
+import {
+  PaymentOrder,
+  PaymentStatus,
+  PaymentBillingCycle,
+} from './entities/payment-order.entity';
+import { PremiumPackage } from './entities/premium-package.entity';
+import {
+  CreatePremiumPackageDto,
+  UpdatePremiumPackageDto,
+} from './dto/premium-package.dto';
+import { UsersService } from '../users/users.service';
+import { RedisService } from '../redis/redis.service';
+import { PaymentsGateway } from './payments.gateway';
+import { PremiumPlan, User } from '../users/entities/user.entity';
+import { Company } from 'src/companies/entities/company.entity';
+import { Role } from '../decorator/customize';
+import { IUser } from '../users/users.interface';
+import {
+  IsEnum,
+  IsOptional,
+  IsUUID,
+  IsBoolean,
+  IsString,
+  isUUID,
+} from 'class-validator';
+
+export class CreatePaymentOrderDto {
+  @IsEnum(PremiumPlan)
+  planType: PremiumPlan;
+  @IsEnum(PaymentBillingCycle)
+  billingCycle: PaymentBillingCycle;
+  @IsOptional()
+  @IsUUID()
+  packageId?: string;
+  @IsOptional()
+  @IsBoolean()
+  vatInvoiceRequested?: boolean;
+  @IsOptional()
+  @IsString()
+  vatCompanyName?: string;
+  @IsOptional()
+  @IsString()
+  vatTaxCode?: string;
+  @IsOptional()
+  @IsString()
+  vatAddress?: string;
+}
+
+export interface PricingPlanConfig {
+  price: number;
+  durationDays: number;
+  title: string;
+}
+
+@Injectable()
+export class PaymentsService implements OnModuleInit {
+  private readonly logger = new Logger(PaymentsService.name);
+  private static readonly FETCH_TIMEOUT_MS = 15000;
+
+  // Standard fallback pricing table configuration
+  private readonly pricingPlans: Record<
+    PremiumPlan,
+    Record<PaymentBillingCycle, PricingPlanConfig>
+  > = {
+    [PremiumPlan.FREE]: {
+      [PaymentBillingCycle.MONTHLY]: {
+        price: 0,
+        durationDays: 0,
+        title: 'Miễn phí',
+      },
+      [PaymentBillingCycle.SEMI_ANNUAL]: {
+        price: 0,
+        durationDays: 0,
+        title: 'Miễn phí',
+      },
+      [PaymentBillingCycle.ANNUAL]: {
+        price: 0,
+        durationDays: 0,
+        title: 'Miễn phí',
+      },
+    },
+    [PremiumPlan.CANDIDATE_PREMIUM]: {
+      [PaymentBillingCycle.MONTHLY]: {
+        price: 49000,
+        durationDays: 30,
+        title: 'Candidate Premium (1 Tháng)',
+      },
+      [PaymentBillingCycle.SEMI_ANNUAL]: {
+        price: 249000,
+        durationDays: 180,
+        title: 'Candidate Premium (6 Tháng)',
+      },
+      [PaymentBillingCycle.ANNUAL]: {
+        price: 399000,
+        durationDays: 365,
+        title: 'Candidate Premium (1 Năm)',
+      },
+    },
+    [PremiumPlan.HR_PREMIUM]: {
+      [PaymentBillingCycle.MONTHLY]: {
+        price: 299000,
+        durationDays: 30,
+        title: 'HR Premium Enterprise (1 Tháng)',
+      },
+      [PaymentBillingCycle.SEMI_ANNUAL]: {
+        price: 1490000,
+        durationDays: 180,
+        title: 'HR Premium Enterprise (6 Tháng)',
+      },
+      [PaymentBillingCycle.ANNUAL]: {
+        price: 2390000,
+        durationDays: 365,
+        title: 'HR Premium Enterprise (1 Năm)',
+      },
+    },
+  };
+
+  constructor(
+    @InjectRepository(PaymentOrder)
+    private readonly paymentOrderRepo: Repository<PaymentOrder>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+    @InjectRepository(PremiumPackage)
+    private readonly packageRepo: Repository<PremiumPackage>,
+    private readonly usersService: UsersService,
+    private readonly redisService: RedisService,
+    private readonly paymentsGateway: PaymentsGateway,
+    private readonly configService: ConfigService,
+    private readonly dataSource: DataSource,
+    @InjectQueue('mail-queue')
+    private readonly mailQueue: Queue,
+  ) {}
+
+  /**
+   * Khởi động service: quét đơn hết hạn và lập lịch timeout chính xác cho các đơn đang PENDING
+   */
+  async onModuleInit() {
+    try {
+      await this.seedDefaultPackagesIfEmpty();
+    } catch (err: any) {
+      this.logger.warn(
+        `seedDefaultPackagesIfEmpty warning: ${err?.message || err}`,
+      );
+    }
+
+    if (!areQueueWorkersEnabled()) {
+      return;
+    }
+
+    try {
+      await this.expirePendingOrders();
+
+      const pendingOrders = await this.paymentOrderRepo.find({
+        where: { status: PaymentStatus.PENDING },
+      });
+
+      const now = Date.now();
+      for (const order of pendingOrders) {
+        const remainingMs = Math.max(
+          1000,
+          new Date(order.expiresAt).getTime() - now + 1000,
+        );
+        setTimeout(() => {
+          this.expireSpecificOrder(order.orderCode).catch((err) => {
+            this.logger.warn(
+              `Auto-expire timeout failed for #${order.orderCode}: ${
+                err?.message || err
+              }`,
+            );
+          });
+        }, remainingMs);
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `onModuleInit pending orders schedule warning: ${err?.message || err}`,
+      );
+    }
+  }
+
+  /**
+   * Sinh mã đơn hàng 9 chữ số sử dụng crypto-safe random
+   * Retry nếu trùng unique constraint trong DB
+   */
+  private async generateUniqueOrderCode(maxRetries = 5): Promise<number> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const code = crypto.randomInt(100_000_000, 999_999_999);
+      const exists = await this.paymentOrderRepo.findOne({
+        where: { orderCode: code },
+        select: ['_id'],
+      });
+      if (!exists) return code;
+    }
+    throw new BadRequestException(
+      'Không thể tạo mã đơn hàng duy nhất. Vui lòng thử lại.',
+    );
+  }
+
+  /**
+   * Tạo chữ ký HMAC-SHA256 cho yêu cầu PayOS
+   */
+  private createSignature(data: string): string {
+    const checksumKey = this.configService.get<string>(
+      'PAYOS_CHECKSUM_KEY',
+      '',
+    );
+    return crypto.createHmac('sha256', checksumKey).update(data).digest('hex');
+  }
+
+  /**
+   * Xác thực chữ ký webhook từ PayOS
+   */
+  private verifyWebhookSignature(
+    data: Record<string, any>,
+    signature: string,
+  ): boolean {
+    const checksumKey = this.configService.get<string>(
+      'PAYOS_CHECKSUM_KEY',
+      '',
+    );
+    if (!checksumKey || checksumKey === 'your_payos_checksum_key') {
+      // Chỉ bypass trong dev mode khi chạy placeholder
+      const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+      if (nodeEnv === 'production') {
+        this.logger.error(
+          'PAYOS_CHECKSUM_KEY is missing in production! Rejecting webhook.',
+        );
+        return false;
+      }
+      this.logger.warn(
+        'PAYOS_CHECKSUM_KEY is placeholder — bypassing webhook signature in dev mode.',
+      );
+      return true;
+    }
+
+    const sortedKeys = Object.keys(data).sort();
+    const dataStr = sortedKeys
+      .filter((key) => data[key] !== undefined)
+      .map((key) => {
+        let value = data[key];
+        if (
+          value === null ||
+          value === undefined ||
+          value === 'undefined' ||
+          value === 'null'
+        ) {
+          value = '';
+        }
+        if (Array.isArray(value)) {
+          value = JSON.stringify(
+            value.map((val: any) => {
+              if (typeof val === 'object' && val !== null) {
+                return Object.keys(val)
+                  .sort()
+                  .reduce((obj: Record<string, any>, k: string) => {
+                    obj[k] = val[k];
+                    return obj;
+                  }, {});
+              }
+              return val;
+            }),
+          );
+        }
+        return `${key}=${value}`;
+      })
+      .join('&');
+
+    const computedSignature = crypto
+      .createHmac('sha256', checksumKey)
+      .update(dataStr)
+      .digest('hex');
+
+    return computedSignature === signature;
+  }
+
+  /**
+   * Gọi HTTP request có AbortController timeout
+   */
+  private fetchWithTimeout(
+    url: string,
+    options: RequestInit,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      PaymentsService.FETCH_TIMEOUT_MS,
+    );
+
+    return fetch(url, { ...options, signal: controller.signal }).finally(() =>
+      clearTimeout(timeoutId),
+    );
+  }
+
+  /**
+   * Lấy chi tiết đơn hàng từ PayOS API
+   */
+  private async fetchPayosPaymentRequest(orderCode: number): Promise<any> {
+    const payosUrl = this.configService.get<string>(
+      'PAYOS_URL',
+      'https://api-merchant.payos.vn',
+    );
+    const apiKey = this.configService.get<string>('PAYOS_API_KEY', '');
+    const clientId = this.configService.get<string>('PAYOS_CLIENT_ID', '');
+
+    if (!apiKey || apiKey === 'your_payos_api_key') {
+      this.logger.warn(
+        'PayOS API Key is placeholder. Skipping PayOS remote fetch.',
+      );
+      return null;
+    }
+
+    const res = await this.fetchWithTimeout(
+      `${payosUrl}/v2/payment-requests/${orderCode}`,
+      {
+        headers: {
+          'x-api-key': apiKey,
+          'x-client-id': clientId,
+          'Content-Type': 'application/json',
+        },
+        method: 'GET',
+      },
+    );
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => 'Unknown error');
+      this.logger.warn(
+        `PayOS fetch failed for order ${orderCode}: ${errorBody}`,
+      );
+      return null;
+    }
+
+    const resp = await res.json();
+    return resp.data;
+  }
+
+  /**
+   * Gửi API hủy link thanh toán đơn hàng tới PayOS khi hết hạn hoặc người dùng hủy
+   */
+  async cancelPayosPaymentRequest(
+    orderCode: number,
+    cancellationReason = 'Đơn hàng hết hạn thanh toán theo TTL',
+  ): Promise<boolean> {
+    const payosUrl = this.configService.get<string>(
+      'PAYOS_URL',
+      'https://api-merchant.payos.vn',
+    );
+    const apiKey = this.configService.get<string>('PAYOS_API_KEY', '');
+    const clientId = this.configService.get<string>('PAYOS_CLIENT_ID', '');
+
+    if (
+      !apiKey ||
+      apiKey === 'your_payos_api_key' ||
+      !clientId ||
+      clientId === 'your_payos_client_id'
+    ) {
+      return false;
+    }
+
+    try {
+      const res = await this.fetchWithTimeout(
+        `${payosUrl}/v2/payment-requests/${orderCode}/cancel`,
+        {
+          headers: {
+            'x-api-key': apiKey,
+            'x-client-id': clientId,
+            'Content-Type': 'application/json',
+          },
+          method: 'POST',
+          body: JSON.stringify({ cancellationReason }),
+        },
+      );
+
+      if (!res.ok) {
+        const errorBody = await res.text().catch(() => 'Unknown error');
+        this.logger.warn(
+          `PayOS cancel request failed for #${orderCode} (${res.status}): ${errorBody}`,
+        );
+        return false;
+      }
+
+      this.logger.log(
+        `PayOS payment link for #${orderCode} cancelled successfully on PayOS gateway.`,
+      );
+      return true;
+    } catch (err: any) {
+      this.logger.warn(
+        `PayOS cancel request error for #${orderCode}: ${err.message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Tạo đơn thanh toán Premium Subscription và Payment Link từ PayOS
+   */
+  async createPaymentOrder(
+    userId: string,
+    dto: CreatePaymentOrderDto,
+  ): Promise<{
+    checkoutUrl: string;
+    orderCode: number;
+    amount: number;
+    planType: PremiumPlan;
+    billingCycle: PaymentBillingCycle;
+    expiresAt: Date;
+  }> {
+    if (dto.packageId !== undefined && !isUUID(dto.packageId))
+      throw new BadRequestException('Invalid subscription package ID');
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) {
+      throw new NotFoundException('Không tìm thấy người dùng');
+    }
+
+    // Role-based validation
+    if (
+      dto.planType === PremiumPlan.HR_PREMIUM &&
+      user.role !== Role.HR &&
+      user.role !== Role.ADMIN
+    ) {
+      throw new ForbiddenException(
+        'Chỉ tài khoản Nhà tuyển dụng (HR) mới được mua gói HR Premium',
+      );
+    }
+    if (
+      dto.planType === PremiumPlan.CANDIDATE_PREMIUM &&
+      user.role === Role.HR
+    ) {
+      throw new ForbiddenException(
+        'Tài khoản HR vui lòng chọn gói HR Premium Enterprise',
+      );
+    }
+
+    if (dto.planType === PremiumPlan.FREE)
+      throw new BadRequestException('Free policy is not sellable');
+    const packages = await this.packageRepo.find({
+      where: {
+        ...(dto.packageId ? { _id: dto.packageId } : {}),
+        planType: dto.planType,
+        billingCycle: dto.billingCycle,
+        isActive: true,
+        isDeleted: false,
+      },
+    });
+
+    if (packages.length !== 1)
+      throw new BadRequestException(
+        'Select an exact active subscription package',
+      );
+    const dynamicPkg = packages[0];
+    const amount = Number(dynamicPkg.price);
+    const durationDays = dynamicPkg.durationDays;
+
+    const orderCode = await this.generateUniqueOrderCode();
+    const description = `TP ${orderCode}`.slice(0, 25);
+
+    const ttlSeconds = Number(
+      this.configService.get<number>('PAYMENT_ORDER_TTL_SECONDS', 900),
+    );
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+
+    // Cancel existing PENDING orders of this user to avoid multiple open bills
+    const existingPendingOrders = await this.paymentOrderRepo.find({
+      where: { userId, status: PaymentStatus.PENDING },
+    });
+    for (const pending of existingPendingOrders) {
+      await this.cancelPayosPaymentRequest(
+        pending.orderCode,
+        'Tạo đơn hàng mới thay thế đơn cũ',
+      );
+      await this.paymentOrderRepo.update(pending._id, {
+        status: PaymentStatus.CANCELLED,
+      });
+      await this.redisService.deleteValue(
+        `payment:pending:${pending.orderCode}`,
+      );
+    }
+
+    const backendPort = this.configService.get<string>('PORT', '8000');
+    const frontendUrl = this.configService.get<string>(
+      'URL_FRONTEND',
+      'http://localhost:5173',
+    );
+
+    // Callbacks
+    const returnUrl = `http://localhost:${backendPort}/api/v1/payments/verify/${orderCode}`;
+    const cancelUrl = `http://localhost:${backendPort}/api/v1/payments/verify/${orderCode}`;
+
+    const payosUrl = this.configService.get<string>(
+      'PAYOS_URL',
+      'https://api-merchant.payos.vn',
+    );
+    const apiKey = this.configService.get<string>('PAYOS_API_KEY', '');
+    const clientId = this.configService.get<string>('PAYOS_CLIENT_ID', '');
+
+    let checkoutUrl = `${frontendUrl}/payment/verify/${orderCode}?mock=true`;
+    let paymentLinkId: string | null = null;
+
+    // Call PayOS API if credentials are provided
+    if (
+      apiKey &&
+      apiKey !== 'your_payos_api_key' &&
+      clientId &&
+      clientId !== 'your_payos_client_id'
+    ) {
+      const signatureData = `amount=${amount}&cancelUrl=${cancelUrl}&description=${description}&orderCode=${orderCode}&returnUrl=${returnUrl}`;
+      const signature = this.createSignature(signatureData);
+      const expiredAt = Math.floor(expiresAt.getTime() / 1000);
+
+      const body = JSON.stringify({
+        orderCode,
+        amount: +amount,
+        description,
+        cancelUrl,
+        returnUrl,
+        expiredAt,
+        signature,
+      });
+
+      const res = await this.fetchWithTimeout(
+        `${payosUrl}/v2/payment-requests`,
+        {
+          headers: {
+            'x-api-key': apiKey,
+            'x-client-id': clientId,
+            'Content-Type': 'application/json',
+          },
+          method: 'POST',
+          body,
+        },
+      );
+
+      if (!res.ok) {
+        const errorBody = await res.text();
+        this.logger.error(`PayOS API error: ${errorBody}`);
+        throw new BadRequestException(
+          `Tạo link thanh toán PayOS thất bại: ${errorBody}`,
+        );
+      }
+
+      const resp = await res.json();
+      checkoutUrl = resp.data.checkoutUrl;
+      paymentLinkId = resp.data.paymentLinkId;
+    } else {
+      this.logger.log(
+        `PayOS placeholder mode: Order #${orderCode} created with local mock checkout URL.`,
+      );
+    }
+
+    // Save order in database
+    const paymentOrder = this.paymentOrderRepo.create({
+      userId,
+      orderCode,
+      planType: dto.planType,
+      billingCycle: dto.billingCycle,
+      durationDays,
+      amount,
+      status: PaymentStatus.PENDING,
+      checkoutUrl,
+      paymentLinkId,
+      description,
+      expiresAt,
+      packageId: dynamicPkg._id,
+      vatInvoiceRequested: dto.vatInvoiceRequested || false,
+      vatCompanyName: dto.vatCompanyName || null,
+      vatTaxCode: dto.vatTaxCode || null,
+      vatAddress: dto.vatAddress || null,
+    });
+
+    await this.paymentOrderRepo.save(paymentOrder);
+
+    // Save to Redis with TTL for fast caching & tracking
+    await this.redisService.setValue(
+      `payment:pending:${orderCode}`,
+      {
+        userId,
+        orderCode,
+        amount,
+        planType: dto.planType,
+        billingCycle: dto.billingCycle,
+        durationDays,
+        expiresAt: expiresAt.toISOString(),
+      },
+      ttlSeconds,
+    );
+
+    // Track user active pending order
+    await this.redisService.setValue(
+      `payment:user_pending:${userId}`,
+      orderCode,
+      ttlSeconds,
+    );
+
+    // Schedule exact timeout to cancel & expire on PayOS the exact second TTL is reached
+    const delayMs = Math.max(1000, (ttlSeconds + 1) * 1000);
+    setTimeout(() => {
+      this.expireSpecificOrder(orderCode).catch((err) => {
+        this.logger.warn(
+          `Failed to auto-expire order #${orderCode}: ${err?.message || err}`,
+        );
+      });
+    }, delayMs);
+
+    return {
+      checkoutUrl,
+      orderCode,
+      amount,
+      planType: dto.planType,
+      billingCycle: dto.billingCycle,
+      expiresAt,
+    };
+  }
+
+  /**
+   * Xử lý webhook từ PayOS với cơ chế Idempotent chặt chẽ
+   */
+  async handleWebhook(webhookData: any): Promise<void> {
+    const { data, signature } = webhookData;
+    if (!data || !data.orderCode) return;
+
+    if (signature && !this.verifyWebhookSignature(data, signature)) {
+      this.logger.warn(
+        `Invalid webhook signature for orderCode=${data.orderCode}`,
+      );
+      return;
+    }
+
+    const orderCode = Number(data.orderCode);
+    const order = await this.paymentOrderRepo.findOne({
+      where: { orderCode },
+      relations: ['user'],
+    });
+
+    if (!order) {
+      this.logger.warn(
+        `PaymentOrder not found for webhook orderCode=${orderCode}`,
+      );
+      return;
+    }
+
+    // Idempotency check: Nếu đơn đã hoàn thành thì bỏ qua
+    if (order.status === PaymentStatus.PAID) {
+      this.logger.log(
+        `PaymentOrder ${orderCode} is already PAID. Webhook idempotency skip.`,
+      );
+      return;
+    }
+
+    const webhookCode = String(webhookData?.code ?? data?.code ?? '');
+    const webhookStatus = String(data?.status ?? '').toUpperCase();
+    const isPaymentSuccess = webhookCode === '00' || webhookStatus === 'PAID';
+
+    if (!isPaymentSuccess) {
+      this.logger.log(
+        `Webhook ignored for orderCode=${orderCode}: code=${webhookCode}, status=${webhookStatus}`,
+      );
+      if (webhookStatus === 'CANCELLED') {
+        await this.paymentOrderRepo.update(order._id, {
+          status: PaymentStatus.CANCELLED,
+        });
+        await this.redisService.deleteValue(`payment:pending:${orderCode}`);
+        this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
+          orderCode,
+          status: PaymentStatus.CANCELLED,
+        });
+      }
+      return;
+    }
+
+    if (Number(data.amount) !== Number(order.amount)) {
+      this.logger.error(
+        `Webhook amount mismatch: webhook=${data.amount}, local=${order.amount}, orderCode=${orderCode}`,
+      );
+      return;
+    }
+
+    // Execute atomic transaction for upgrade & status update
+    let wasUpdated = false;
+    await this.dataSource.transaction(async (manager) => {
+      const orderRepo = manager.getRepository(PaymentOrder);
+      const userRepo = manager.getRepository(User);
+
+      // Atomic conditional update to guarantee idempotency
+      const updateResult = await orderRepo
+        .createQueryBuilder()
+        .update(PaymentOrder)
+        .set({
+          status: PaymentStatus.PAID,
+          paidAt: new Date(),
+          transactionReference: data.reference || null,
+          counterAccountBankName: data.counterAccountBankName || null,
+          counterAccountName: data.counterAccountName || null,
+          counterAccountNumber: data.counterAccountNumber || null,
+        })
+        .where('orderCode = :orderCode AND status = :status', {
+          orderCode,
+          status: PaymentStatus.PENDING,
+        })
+        .execute();
+
+      if (!updateResult.affected || updateResult.affected === 0) {
+        this.logger.warn(
+          `Order ${orderCode} was already updated concurrently.`,
+        );
+        return;
+      }
+
+      // Upgrade user's premium plan INSIDE the same transaction
+      const user = await userRepo.findOne({
+        where: { _id: order.userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!user) throw new NotFoundException('Payment user not found');
+      if (user) {
+        const now = new Date();
+        const currentExpiry =
+          user.premiumExpiresAt && new Date(user.premiumExpiresAt) > now
+            ? new Date(user.premiumExpiresAt)
+            : now;
+        const newExpiry = new Date(
+          currentExpiry.getTime() + order.durationDays * 24 * 60 * 60 * 1000,
+        );
+        if (!order.packageId) {
+          throw new BadRequestException('PAYMENT_PACKAGE_REPAIR_REQUIRED');
+        }
+        const packages = await manager.getRepository(PremiumPackage).find({
+          where: { _id: order.packageId, planType: order.planType },
+          withDeleted: true,
+        });
+        if (packages.length !== 1 || order.planType === PremiumPlan.FREE) {
+          throw new BadRequestException('PAYMENT_PACKAGE_REPAIR_REQUIRED');
+        }
+        const pkg = packages[0];
+
+        await userRepo.update(user._id, {
+          isPremium: true,
+          premiumPlan: order.planType,
+          premiumExpiresAt: newExpiry,
+          premiumPackageId: pkg._id,
+        });
+
+        if (user.company?._id && order.planType === PremiumPlan.HR_PREMIUM) {
+          await manager.getRepository(Company).update(user.company._id, {
+            isPremium: true,
+            premiumExpiresAt: newExpiry,
+          });
+        }
+      }
+
+      wasUpdated = true;
+      this.logger.log(
+        `Premium upgrade successful: User ${order.userId} -> ${order.planType} for ${order.durationDays} days.`,
+      );
+    });
+
+    if (!wasUpdated) return;
+
+    // Cleanup Redis pending order
+    await this.redisService.deleteValue(`payment:pending:${orderCode}`);
+    await this.redisService.deleteValue(`payment:user_pending:${order.userId}`);
+
+    // Emit Realtime Socket.IO notification to client
+    this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
+      orderCode,
+      status: PaymentStatus.PAID,
+      planType: order.planType,
+      amount: order.amount,
+      paidAt: new Date().toISOString(),
+      message: 'Nâng cấp gói Premium thành công!',
+    });
+
+    // Push job to Bull Queue to send luxurious confirmation email
+    const updatedUser = await this.userRepo.findOne({
+      where: { _id: order.userId },
+    });
+    if (updatedUser) {
+      await this.mailQueue.add(
+        'send-premium-success-email',
+        {
+          userEmail: updatedUser.email,
+          userName: updatedUser.name || 'Quý khách hàng',
+          orderCode,
+          planType: order.planType,
+          billingCycle: order.billingCycle,
+          durationDays: order.durationDays,
+          amount: order.amount,
+          expiryDate: updatedUser.premiumExpiresAt
+            ? new Date(updatedUser.premiumExpiresAt).toLocaleDateString('vi-VN')
+            : 'Vĩnh viễn',
+          transactionReference: data.reference,
+        },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 3000 },
+          removeOnComplete: true,
+        },
+      );
+    }
+  }
+
+  /**
+   * Đồng bộ trạng thái đơn hàng từ PayOS API và nâng cấp nếu cần
+   */
+  async syncOrderFromPayos(order: PaymentOrder): Promise<PaymentStatus> {
+    if (
+      order.status === PaymentStatus.PAID ||
+      order.status === PaymentStatus.CANCELLED ||
+      order.status === PaymentStatus.EXPIRED
+    ) {
+      return order.status;
+    }
+
+    // Check expiration based on TTL
+    if (new Date() > new Date(order.expiresAt)) {
+      // Send cancel to PayOS gateway immediately
+      await this.cancelPayosPaymentRequest(
+        order.orderCode,
+        'Đơn hàng hết hạn thanh toán theo TTL',
+      );
+      await this.paymentOrderRepo.update(order._id, {
+        status: PaymentStatus.EXPIRED,
+      });
+      await this.redisService.deleteValue(`payment:pending:${order.orderCode}`);
+      this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
+        orderCode: order.orderCode,
+        status: PaymentStatus.EXPIRED,
+      });
+      return PaymentStatus.EXPIRED;
+    }
+
+    const payosData = await this.fetchPayosPaymentRequest(order.orderCode);
+    if (!payosData) return order.status;
+
+    const payosStatus = String(payosData.status || '').toUpperCase();
+
+    if (payosStatus === 'PAID') {
+      const transaction = payosData.transactions?.[0];
+      await this.handleWebhook({
+        data: {
+          orderCode: order.orderCode,
+          amount: payosData.amount,
+          status: 'PAID',
+          code: '00',
+          reference: transaction?.reference,
+          counterAccountBankName: transaction?.counterAccountBankName,
+          counterAccountName: transaction?.counterAccountName,
+          counterAccountNumber: transaction?.counterAccountNumber,
+          transactionDateTime: transaction?.transactionDateTime,
+        },
+      });
+      return PaymentStatus.PAID;
+    }
+
+    if (payosStatus === 'CANCELLED') {
+      await this.paymentOrderRepo.update(order._id, {
+        status: PaymentStatus.CANCELLED,
+      });
+      await this.redisService.deleteValue(`payment:pending:${order.orderCode}`);
+      this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
+        orderCode: order.orderCode,
+        status: PaymentStatus.CANCELLED,
+      });
+      return PaymentStatus.CANCELLED;
+    }
+
+    if (payosStatus === 'EXPIRED') {
+      await this.paymentOrderRepo.update(order._id, {
+        status: PaymentStatus.EXPIRED,
+      });
+      await this.redisService.deleteValue(`payment:pending:${order.orderCode}`);
+      this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
+        orderCode: order.orderCode,
+        status: PaymentStatus.EXPIRED,
+      });
+      return PaymentStatus.EXPIRED;
+    }
+
+    return PaymentStatus.PENDING;
+  }
+
+  /**
+   * Endpoint xác nhận sau khi user redirect về từ PayOS
+   */
+  async verifyPaymentOrder(orderCode: number): Promise<{
+    order: PaymentOrder;
+    redirectUrl: string;
+  }> {
+    const order = await this.paymentOrderRepo.findOne({
+      where: { orderCode },
+      relations: ['user'],
+    });
+
+    if (!order) {
+      throw new NotFoundException('Không tìm thấy đơn thanh toán');
+    }
+
+    const finalStatus = await this.syncOrderFromPayos(order);
+    const frontendUrl = this.configService.get<string>(
+      'URL_FRONTEND',
+      'http://localhost:5173',
+    );
+
+    const redirectUrl = `${frontendUrl}/payment-history?orderCode=${orderCode}&status=${finalStatus.toLowerCase()}`;
+    return { order, redirectUrl };
+  }
+
+  /**
+   * Lấy lịch sử giao dịch thanh toán của người dùng (tự động đồng bộ các đơn đang chờ)
+   */
+  async getPaymentHistory(userId: string): Promise<PaymentOrder[]> {
+    const orders = await this.paymentOrderRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
+
+    const pendingOrders = orders.filter(
+      (o) => o.status === PaymentStatus.PENDING,
+    );
+    if (pendingOrders.length === 0) return orders;
+
+    // Sync pending orders concurrently with a 10s per-request timeout via Promise.allSettled
+    const syncResults = await Promise.allSettled(
+      pendingOrders.map((pending) => this.syncOrderFromPayos(pending)),
+    );
+
+    const hasChanged = syncResults.some(
+      (r) => r.status === 'fulfilled' && r.value !== PaymentStatus.PENDING,
+    );
+
+    // Log any sync failures
+    syncResults.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        this.logger.warn(
+          `Failed to sync order ${pendingOrders[i].orderCode}: ${
+            r.reason?.message || r.reason
+          }`,
+        );
+      }
+    });
+
+    if (!hasChanged) return orders;
+
+    return this.paymentOrderRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Hủy đơn hàng đang chờ thanh toán
+   */
+  async cancelPaymentOrder(orderCode: number, userId: string): Promise<void> {
+    const order = await this.paymentOrderRepo.findOne({
+      where: { orderCode, userId },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Không tìm thấy đơn hàng');
+    }
+
+    if (order.status !== PaymentStatus.PENDING) {
+      throw new BadRequestException(
+        'Chỉ có thể hủy đơn hàng đang chờ thanh toán',
+      );
+    }
+
+    // Call PayOS cancel API
+    await this.cancelPayosPaymentRequest(orderCode, 'Người dùng hủy đơn');
+
+    await this.paymentOrderRepo.update(order._id, {
+      status: PaymentStatus.CANCELLED,
+    });
+
+    await this.redisService.deleteValue(`payment:pending:${orderCode}`);
+    await this.redisService.deleteValue(`payment:user_pending:${userId}`);
+
+    this.paymentsGateway.emitPaymentStatusChanged(userId, {
+      orderCode,
+      status: PaymentStatus.CANCELLED,
+    });
+  }
+
+  /**
+   * Hủy và đánh dấu hết hạn ngay lập tức một đơn hàng cụ thể trên PayOS và hệ thống
+   */
+  async expireSpecificOrder(
+    orderCode: number,
+    userId?: string,
+  ): Promise<{ message: string; status: PaymentStatus }> {
+    const where: any = { orderCode };
+    if (userId) where.userId = userId;
+
+    const order = await this.paymentOrderRepo.findOne({ where });
+    if (!order) {
+      return {
+        message: 'Không tìm thấy đơn hàng',
+        status: PaymentStatus.EXPIRED,
+      };
+    }
+
+    if (order.status !== PaymentStatus.PENDING) {
+      return {
+        message: `Đơn hàng đã ở trạng thái ${order.status}`,
+        status: order.status,
+      };
+    }
+
+    this.logger.log(
+      `Immediately expiring pending order #${orderCode} and sending cancel request to PayOS...`,
+    );
+
+    // 1. Send cancel request to PayOS gateway immediately
+    await this.cancelPayosPaymentRequest(
+      orderCode,
+      'Đơn hàng hết hạn thanh toán theo TTL',
+    );
+
+    // 2. Update status to EXPIRED in database
+    await this.paymentOrderRepo.update(order._id, {
+      status: PaymentStatus.EXPIRED,
+    });
+
+    // 3. Cleanup Redis cache
+    await this.redisService.deleteValue(`payment:pending:${orderCode}`);
+    await this.redisService.deleteValue(`payment:user_pending:${order.userId}`);
+
+    // 4. Emit Realtime Socket.IO notification to client
+    this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
+      orderCode,
+      status: PaymentStatus.EXPIRED,
+      message: `Đơn hàng #${orderCode} đã hết hạn thanh toán`,
+    });
+
+    return {
+      message: 'Đã hủy đơn hàng hết hạn thành công',
+      status: PaymentStatus.EXPIRED,
+    };
+  }
+
+  /**
+   * Cron Job chạy mỗi 1 phút: Tự động quét, gọi API hủy tới PayOS và đánh dấu EXPIRED các đơn quá hạn TTL
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async expirePendingOrders(): Promise<void> {
+    const now = new Date();
+    const expiredOrders = await this.paymentOrderRepo
+      .createQueryBuilder('order')
+      .where('order.status = :status AND order.expiresAt < :now', {
+        status: PaymentStatus.PENDING,
+        now,
+      })
+      .getMany();
+
+    if (expiredOrders.length === 0) return;
+
+    this.logger.log(
+      `Found ${expiredOrders.length} expired pending payment orders. Cancelling on PayOS and marking EXPIRED...`,
+    );
+
+    // Batch update all expired orders in a single query
+    const expiredIds = expiredOrders.map((o) => o._id);
+    await this.paymentOrderRepo
+      .createQueryBuilder()
+      .update(PaymentOrder)
+      .set({ status: PaymentStatus.EXPIRED })
+      .where('_id IN (:...ids)', { ids: expiredIds })
+      .execute();
+
+    // Call PayOS cancel API, cleanup Redis and emit socket notifications
+    const cleanupPromises = expiredOrders.map(async (order) => {
+      await this.cancelPayosPaymentRequest(
+        order.orderCode,
+        'Đơn hàng hết hạn thanh toán theo TTL',
+      );
+      await this.redisService.deleteValue(`payment:pending:${order.orderCode}`);
+      await this.redisService.deleteValue(
+        `payment:user_pending:${order.userId}`,
+      );
+
+      this.paymentsGateway.emitPaymentStatusChanged(order.userId, {
+        orderCode: order.orderCode,
+        status: PaymentStatus.EXPIRED,
+      });
+    });
+    await Promise.allSettled(cleanupPromises);
+  }
+
+  // ==========================================
+  // PREMIUM PACKAGES & ADMIN MANAGEMENT
+  // ==========================================
+
+  /**
+   * Tự động khởi tạo 6 gói Premium chuẩn nếu bảng premium_packages đang trống
+   */
+  async seedDefaultPackagesIfEmpty(): Promise<void> {
+    const count = await this.packageRepo.count({ where: { isDeleted: false } });
+    const free = await this.packageRepo.findOne({
+      where: { code: 'FREE_DEFAULT' },
+      withDeleted: true,
+    });
+    if (!free)
+      await this.packageRepo.save(
+        this.packageRepo.create({
+          code: 'FREE_DEFAULT',
+          planType: PremiumPlan.FREE,
+          billingCycle: PaymentBillingCycle.MONTHLY,
+          name: 'Free',
+          price: 0,
+          durationDays: 30,
+          chatbotDailyLimit: 10,
+          features: [],
+          isActive: true,
+        }),
+      );
+    if (count > (free ? 1 : 0)) return;
+
+    this.logger.log('Seeding default premium packages into database...');
+
+    const defaultPackages: Partial<PremiumPackage>[] = [
+      {
+        code: 'CANDIDATE_MONTHLY',
+        planType: PremiumPlan.CANDIDATE_PREMIUM,
+        billingCycle: PaymentBillingCycle.MONTHLY,
+        name: 'Candidate Premium (1 Tháng)',
+        description: 'Bứt phá sự nghiệp & tiếp cận NTD hàng đầu',
+        price: 49000,
+        originalPrice: 49000,
+        durationDays: 30,
+        chatbotDailyLimit: null,
+        badge: null,
+        features: [
+          'Không giới hạn tạo và tải CV chất lượng cao',
+          'Đẩy Top hồ sơ 24h mỗi ngày',
+          'Xem danh sách NTD đã ghé thăm hồ sơ',
+          'Huy hiệu Candidate Premium VIP nổi bật',
+          'AI Career Assistant theo hạn mức của gói',
+        ],
+        hotJobLimit: 0,
+        candidateSearchLimit: 0,
+        isActive: true,
+        displayOrder: 1,
+      },
+      {
+        code: 'CANDIDATE_SEMI_ANNUAL',
+        planType: PremiumPlan.CANDIDATE_PREMIUM,
+        billingCycle: PaymentBillingCycle.SEMI_ANNUAL,
+        name: 'Candidate Premium (6 Tháng)',
+        description: 'Tiết kiệm 15% - Lựa chọn hoàn hảo cho lộ trình đổi việc',
+        price: 249000,
+        originalPrice: 294000,
+        durationDays: 180,
+        chatbotDailyLimit: null,
+        badge: 'Tiết kiệm 15%',
+        features: [
+          'Toàn bộ quyền lợi gói Tháng',
+          'Đẩy Top hồ sơ mỗi ngày',
+          'Ưu tiên kết nối với chuyên viên tuyển dụng',
+          'AI Career Assistant theo hạn mức của gói',
+        ],
+        hotJobLimit: 0,
+        candidateSearchLimit: 0,
+        isActive: true,
+        displayOrder: 2,
+      },
+      {
+        code: 'CANDIDATE_ANNUAL',
+        planType: PremiumPlan.CANDIDATE_PREMIUM,
+        billingCycle: PaymentBillingCycle.ANNUAL,
+        name: 'Candidate Premium (1 Năm)',
+        description: 'Gói trọn gói 12 tháng - Tiết kiệm 32%',
+        price: 399000,
+        originalPrice: 588000,
+        durationDays: 365,
+        chatbotDailyLimit: null,
+        badge: 'Khuyên Dùng - Phổ Biến Nhất',
+        features: [
+          'Toàn bộ quyền lợi gói 6 Tháng',
+          'Đẩy Top hồ sơ 365 ngày',
+          'Tối ưu CV bởi chuyên gia AI',
+          'AI Career Assistant theo hạn mức của gói',
+        ],
+        hotJobLimit: 0,
+        candidateSearchLimit: 0,
+        isActive: true,
+        displayOrder: 3,
+      },
+      {
+        code: 'HR_MONTHLY',
+        planType: PremiumPlan.HR_PREMIUM,
+        billingCycle: PaymentBillingCycle.MONTHLY,
+        name: 'HR Premium Enterprise (1 Tháng)',
+        description: 'Tuyển dụng không giới hạn & AI Sourcing',
+        price: 299000,
+        originalPrice: 299000,
+        durationDays: 30,
+        chatbotDailyLimit: 0,
+        badge: null,
+        features: [
+          'Đăng tin tuyển dụng không giới hạn',
+          'Gắn nhãn HOT JOB cho 3 vị trí',
+          'Mở khóa tìm kiếm hồ sơ ứng viên nâng cao (50 CV/ngày)',
+          'Huy hiệu Nhà tuyển dụng Uy tín Premium',
+          'AI Matching phân tích độ phù hợp ứng viên',
+        ],
+        hotJobLimit: 3,
+        candidateSearchLimit: 50,
+        isActive: true,
+        displayOrder: 4,
+      },
+      {
+        code: 'HR_SEMI_ANNUAL',
+        planType: PremiumPlan.HR_PREMIUM,
+        billingCycle: PaymentBillingCycle.SEMI_ANNUAL,
+        name: 'HR Premium Enterprise (6 Tháng)',
+        description: 'Tiết kiệm 17% chi phí tuyển dụng cho doanh nghiệp',
+        price: 1490000,
+        originalPrice: 1794000,
+        durationDays: 180,
+        chatbotDailyLimit: 0,
+        badge: 'Tiết kiệm 17%',
+        features: [
+          'Đăng tin tuyển dụng không giới hạn',
+          'Gắn nhãn HOT JOB cho 5 vị trí',
+          'Mở khóa tìm kiếm 100 CV ứng viên/ngày',
+          'Ưu tiên hiển thị tin tuyển dụng đầu trang tìm kiếm',
+          'AI Matching phân tích độ phù hợp ứng viên',
+        ],
+        hotJobLimit: 5,
+        candidateSearchLimit: 100,
+        isActive: true,
+        displayOrder: 5,
+      },
+      {
+        code: 'HR_ANNUAL',
+        planType: PremiumPlan.HR_PREMIUM,
+        billingCycle: PaymentBillingCycle.ANNUAL,
+        name: 'HR Premium Enterprise (1 Năm)',
+        description:
+          'Giải pháp tuyển dụng toàn diện 365 ngày cho doanh nghiệp bứt phá',
+        price: 2390000,
+        originalPrice: 3588000,
+        durationDays: 365,
+        chatbotDailyLimit: 0,
+        badge: 'Lựa Chọn Hàng Đầu Của HR Pro',
+        features: [
+          'Đăng tin tuyển dụng không giới hạn 365 ngày',
+          'Gắn nhãn HOT JOB cho 10 vị trí',
+          'Không giới hạn mở khóa tìm kiếm CV ứng viên',
+          'Tài khoản chuyên biệt chăm sóc 24/7',
+          'AI Sourcing & Matching hỗ trợ tuyển dụng',
+        ],
+        hotJobLimit: 10,
+        candidateSearchLimit: 999999,
+        isActive: true,
+        displayOrder: 6,
+      },
+    ];
+
+    for (const pkg of defaultPackages) {
+      const entity = this.packageRepo.create(pkg);
+      await this.packageRepo.save(entity);
+    }
+    this.logger.log(
+      `✓ Seeded ${defaultPackages.length} default premium packages.`,
+    );
+  }
+
+  /**
+   * Lấy danh sách gói Premium đang kích hoạt (Public API cho Bảng giá)
+   */
+  async getPublicPackages(): Promise<PremiumPackage[]> {
+    return this.packageRepo.find({
+      where: { isActive: true, isDeleted: false },
+      order: { planType: 'ASC', displayOrder: 'ASC', createdAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Lấy toàn bộ gói Premium cho Admin (Bao gồm cả gói đã tắt)
+   */
+  async getAllPackagesForAdmin(): Promise<PremiumPackage[]> {
+    return this.packageRepo.find({
+      where: { isDeleted: false },
+      order: { planType: 'ASC', displayOrder: 'ASC', createdAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Tạo gói Premium mới (Admin)
+   */
+  async createPackage(
+    dto: CreatePremiumPackageDto,
+    admin: IUser,
+  ): Promise<PremiumPackage> {
+    if (
+      dto.planType === PremiumPlan.FREE ||
+      dto.code?.trim().toUpperCase() === 'FREE_DEFAULT'
+    ) {
+      throw new BadRequestException('Free policy already exists');
+    }
+    const code =
+      dto.code?.trim() ||
+      `${dto.planType}_${dto.billingCycle}_${Date.now()}`.toUpperCase();
+
+    const existing = await this.packageRepo.findOne({
+      where: { code, isDeleted: false },
+    });
+    if (existing) {
+      throw new BadRequestException(
+        `Mã gói "${code}" đã tồn tại trong hệ thống.`,
+      );
+    }
+
+    const pkg = this.packageRepo.create({
+      ...dto,
+      code,
+      createdBy: {
+        _id: admin._id,
+        email: admin.email,
+      },
+    });
+
+    return this.packageRepo.save(pkg);
+  }
+
+  /**
+   * Cập nhật thông tin gói Premium (Admin)
+   */
+  async updatePackage(
+    id: string,
+    dto: UpdatePremiumPackageDto,
+    admin: IUser,
+  ): Promise<PremiumPackage> {
+    const pkg = await this.packageRepo.findOne({
+      where: { _id: id, isDeleted: false },
+    });
+    if (!pkg) {
+      throw new NotFoundException('Không tìm thấy gói Premium');
+    }
+
+    const { code, planType, billingCycle, ...updateData } = dto;
+    if (
+      pkg.code === 'FREE_DEFAULT' &&
+      Object.keys(dto).some((key) => key !== 'chatbotDailyLimit')
+    ) {
+      throw new BadRequestException(
+        'Only the daily chatbot limit can be changed for Free',
+      );
+    }
+    if (
+      pkg.code !== 'FREE_DEFAULT' &&
+      code?.trim().toUpperCase() === 'FREE_DEFAULT'
+    )
+      throw new BadRequestException('Reserved package code');
+    Object.assign(pkg, updateData);
+
+    if (code && code.trim() && code.trim() !== pkg.code) {
+      const existing = await this.packageRepo.findOne({
+        where: { code: code.trim(), isDeleted: false },
+      });
+      if (existing && existing._id !== id) {
+        throw new BadRequestException(
+          `Mã gói "${code}" đã tồn tại trong hệ thống.`,
+        );
+      }
+      pkg.code = code.trim();
+    }
+
+    pkg.updatedBy = {
+      _id: admin._id,
+      email: admin.email,
+    };
+
+    return this.packageRepo.save(pkg);
+  }
+
+  /**
+   * Bật / Tắt kích hoạt gói Premium (Admin)
+   */
+  async togglePackageActive(id: string, admin: IUser): Promise<PremiumPackage> {
+    const pkg = await this.packageRepo.findOne({
+      where: { _id: id, isDeleted: false },
+    });
+    if (!pkg) {
+      throw new NotFoundException('Không tìm thấy gói Premium');
+    }
+
+    if (pkg.code === 'FREE_DEFAULT')
+      throw new BadRequestException('Free policy cannot be deactivated');
+    pkg.isActive = !pkg.isActive;
+    pkg.updatedBy = {
+      _id: admin._id,
+      email: admin.email,
+    };
+
+    return this.packageRepo.save(pkg);
+  }
+
+  /**
+   * Xóa mềm gói Premium (Admin)
+   */
+  async deletePackage(id: string, admin: IUser): Promise<{ message: string }> {
+    const pkg = await this.packageRepo.findOne({
+      where: { _id: id, isDeleted: false },
+    });
+    if (!pkg) {
+      throw new NotFoundException('Không tìm thấy gói Premium');
+    }
+
+    if (pkg.code === 'FREE_DEFAULT')
+      throw new BadRequestException('Free policy cannot be deleted');
+    pkg.isDeleted = true;
+    pkg.deletedAt = new Date();
+    await this.packageRepo.save(pkg);
+
+    return { message: 'Đã xóa gói Premium thành công' };
+  }
+
+  /**
+   * Lấy danh sách toàn bộ giao dịch PayOS cho Admin
+   */
+  async getAdminTransactions(qs: any) {
+    const page = qs?.current ? parseInt(qs.current, 10) : 1;
+    const limit = qs?.pageSize ? parseInt(qs.pageSize, 10) : 10;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.paymentOrderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.user', 'user')
+      .select([
+        'order._id',
+        'order.orderCode',
+        'order.planType',
+        'order.billingCycle',
+        'order.durationDays',
+        'order.amount',
+        'order.status',
+        'order.checkoutUrl',
+        'order.paidAt',
+        'order.expiresAt',
+        'order.vatInvoiceRequested',
+        'order.vatCompanyName',
+        'order.vatTaxCode',
+        'order.createdAt',
+        'user._id',
+        'user.name',
+        'user.email',
+        'user.avatar',
+        'user.role',
+      ]);
+
+    if (qs?.status) {
+      queryBuilder.andWhere('order.status = :status', { status: qs.status });
+    }
+    if (qs?.planType) {
+      queryBuilder.andWhere('order.planType = :planType', {
+        planType: qs.planType,
+      });
+    }
+    if (qs?.search) {
+      queryBuilder.andWhere(
+        '(CAST(order.orderCode AS TEXT) LIKE :search OR user.email ILIKE :search OR user.name ILIKE :search)',
+        { search: `%${qs.search}%` },
+      );
+    }
+
+    queryBuilder.orderBy('order.createdAt', 'DESC');
+    const [result, total] = await queryBuilder
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: Math.ceil(total / limit),
+        total,
+      },
+      result,
+    };
+  }
+
+  /**
+   * Lấy danh sách thuê bao người dùng cho Admin
+   */
+  async getAdminSubscriptions(qs: any) {
+    const page = qs?.current ? parseInt(qs.current, 10) : 1;
+    const limit = qs?.pageSize ? parseInt(qs.pageSize, 10) : 10;
+    const skip = (page - 1) * limit;
+
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .where(
+        '(user.isPremium = true OR (user.premiumPlan IS NOT NULL AND user.premiumPlan != :freePlan))',
+        {
+          freePlan: PremiumPlan.FREE,
+        },
+      );
+
+    if (qs?.role) {
+      qb.andWhere('user.role = :role', { role: qs.role });
+    }
+    if (qs?.status === 'ACTIVE') {
+      qb.andWhere(
+        '(user.premiumExpiresAt IS NULL OR user.premiumExpiresAt > :now)',
+        { now: new Date() },
+      );
+    } else if (qs?.status === 'EXPIRED') {
+      qb.andWhere('user.premiumExpiresAt <= :now', { now: new Date() });
+    }
+    if (qs?.search) {
+      qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
+        search: `%${qs.search}%`,
+      });
+    }
+
+    qb.orderBy('user.premiumExpiresAt', 'DESC');
+    const [users, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    const result = users.map((u) => {
+      const now = Date.now();
+      const expTime = u.premiumExpiresAt
+        ? new Date(u.premiumExpiresAt).getTime()
+        : null;
+      const daysRemaining = expTime
+        ? Math.max(0, Math.ceil((expTime - now) / (1000 * 60 * 60 * 24)))
+        : 9999;
+      const isExpired = expTime ? expTime <= now : false;
+
+      return {
+        _id: u._id,
+        name: u.name,
+        email: u.email,
+        avatar: u.avatar,
+        role: u.role,
+        companyName: u.company?.name || null,
+        premiumPlan: u.premiumPlan,
+        premiumPackageId: u.premiumPackageId,
+        isPremium: u.isPremium,
+        premiumExpiresAt: u.premiumExpiresAt,
+        daysRemaining,
+        isExpired,
+      };
+    });
+
+    return {
+      meta: {
+        current: page,
+        pageSize: limit,
+        pages: Math.ceil(total / limit),
+        total,
+      },
+      result,
+    };
+  }
+
+  /**
+   * Gia hạn thuê bao thủ công cho người dùng (Admin)
+   */
+  async manualExtendSubscription(
+    userId: string,
+    days: number,
+    admin: IUser,
+    packageId?: string,
+  ) {
+    if (packageId !== undefined && !isUUID(packageId))
+      throw new BadRequestException('Invalid subscription package ID');
+    const user = await this.userRepo.findOne({ where: { _id: userId } });
+    if (!user) throw new NotFoundException('Không tìm thấy người dùng');
+
+    const selectedPackage = packageId
+      ? await this.packageRepo.findOne({
+          where: { _id: packageId, isActive: true, isDeleted: false },
+        })
+      : null;
+    if (packageId && !selectedPackage)
+      throw new BadRequestException('Invalid subscription package');
+    const plan =
+      selectedPackage?.planType ??
+      (user.premiumPlan && user.premiumPlan !== PremiumPlan.FREE
+        ? user.premiumPlan
+        : user.role === Role.HR
+        ? PremiumPlan.HR_PREMIUM
+        : PremiumPlan.CANDIDATE_PREMIUM);
+
+    await this.usersService.upgradePremiumPlan(userId, plan, days, packageId);
+    this.logger.log(
+      `Admin ${admin.email} manually extended subscription for user ${user.email} by ${days} days.`,
+    );
+
+    return {
+      message: `Gia hạn thành công thêm ${days} ngày cho tài khoản ${user.name}`,
+    };
+  }
+
+  /**
+   * Hủy thuê bao thủ công của người dùng (Admin)
+   */
+  async manualCancelSubscription(userId: string, admin: IUser) {
+    const user = await this.userRepo.findOne({
+      where: { _id: userId },
+    });
+    if (!user) throw new NotFoundException('Không tìm thấy người dùng');
+
+    user.isPremium = false;
+    user.premiumPlan = PremiumPlan.FREE;
+    user.premiumExpiresAt = new Date();
+    user.premiumPackageId = null as any;
+    await this.userRepo.save(user);
+
+    if (user.company) {
+      await this.dataSource
+        .getRepository('companies')
+        .update(user.company._id, {
+          isPremium: false,
+          premiumExpiresAt: new Date(),
+        });
+    }
+
+    this.logger.log(
+      `Admin ${admin.email} cancelled subscription for user ${user.email}.`,
+    );
+
+    return {
+      message: `Đã hủy gói Premium của người dùng ${user.name}`,
+    };
+  }
+
+  /**
+   * Thống kê doanh thu và chỉ số tài chính cho Admin Dashboard
+   */
+  async getAdminRevenueStats() {
+    const paidOrders = await this.paymentOrderRepo.find({
+      where: { status: PaymentStatus.PAID },
+      order: { paidAt: 'ASC' },
+    });
+
+    let totalRevenue = 0;
+    let candidateRevenue = 0;
+    let hrRevenue = 0;
+
+    const now = new Date();
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    let todayRevenue = 0;
+    let thisMonthRevenue = 0;
+
+    // Timeline 14 ngày gần nhất
+    const dailyStats: Record<string, number> = {};
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const key = `${d.getDate()}/${d.getMonth() + 1}`;
+      dailyStats[key] = 0;
+    }
+
+    for (const order of paidOrders) {
+      const amount = Number(order.amount) || 0;
+      totalRevenue += amount;
+      if (order.planType === PremiumPlan.CANDIDATE_PREMIUM) {
+        candidateRevenue += amount;
+      }
+      if (order.planType === PremiumPlan.HR_PREMIUM) {
+        hrRevenue += amount;
+      }
+
+      const paidTime = order.paidAt
+        ? new Date(order.paidAt)
+        : new Date(order.createdAt);
+
+      if (paidTime >= startOfToday) todayRevenue += amount;
+      if (paidTime >= startOfMonth) thisMonthRevenue += amount;
+
+      const dayKey = `${paidTime.getDate()}/${paidTime.getMonth() + 1}`;
+      if (dailyStats[dayKey] !== undefined) {
+        dailyStats[dayKey] += amount;
+      }
+    }
+
+    const totalOrdersCount = await this.paymentOrderRepo.count();
+    const paidOrdersCount = paidOrders.length;
+    const pendingOrdersCount = await this.paymentOrderRepo.count({
+      where: { status: PaymentStatus.PENDING },
+    });
+    const failedOrExpiredCount = await this.paymentOrderRepo.count({
+      where: [
+        { status: PaymentStatus.EXPIRED },
+        { status: PaymentStatus.CANCELLED },
+        { status: PaymentStatus.FAILED },
+      ],
+    });
+
+    return {
+      totalRevenue,
+      candidateRevenue,
+      hrRevenue,
+      todayRevenue,
+      thisMonthRevenue,
+      totalOrdersCount,
+      paidOrdersCount,
+      pendingOrdersCount,
+      failedOrExpiredCount,
+      dailyTimeline: Object.entries(dailyStats).map(([date, revenue]) => ({
+        date,
+        revenue,
+      })),
+    };
+  }
+}

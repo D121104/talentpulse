@@ -32,9 +32,12 @@ dist-ssr
 
 # Environment variables
 .env
+.env.*
 .env.local
 .env.*.local
+*.env
 !*.env.example
+!*.env.test
 
 # Temporary / Cache
 .eslintcache

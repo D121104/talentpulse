@@ -11,6 +11,10 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
 import { Job } from 'src/jobs/entities/job.entity';
+import {
+  Application,
+  ApplicationStatus,
+} from 'src/applications/entities/application.entity';
 import { IUser } from 'src/users/users.interface';
 import aqp from 'api-query-params';
 import { FollowCompanyDto } from './dto/follow-company.dto';
@@ -23,6 +27,10 @@ import {
   NotificationTargetType,
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
+import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
+import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
+
+import { User, PremiumPlan } from 'src/users/entities/user.entity';
 
 @Injectable()
 export class CompaniesService {
@@ -33,12 +41,22 @@ export class CompaniesService {
     @InjectRepository(Job)
     private readonly jobRepo: Repository<Job>,
 
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+
+    @InjectRepository(Application)
+    private readonly applicationRepo: Repository<Application>,
+
     private readonly redisService: RedisService,
 
     private readonly notificationService: NotificationsService,
 
     @Inject(forwardRef(() => UsersService))
     private readonly usersService: UsersService,
+
+    private readonly activeJobQueryService: ActiveJobQueryService,
+
+    private readonly jobIndexingService: JobIndexingService,
   ) {}
 
   // Create a new company (Admin only), invalidate Redis cache
@@ -105,6 +123,32 @@ export class CompaniesService {
       .take(limit)
       .getManyAndCount();
 
+    const companyIds = companies.map((c) => c._id);
+    let jobCountMap: Record<string, number> = {};
+
+    if (companyIds.length > 0) {
+      const jobCounts = await this.jobRepo
+        .createQueryBuilder('job')
+        .select("job.company->>'_id'", 'companyId')
+        .addSelect('COUNT(job._id)', 'count')
+        .where("job.company->>'_id' IN (:...companyIds)", { companyIds })
+        .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+        .groupBy("job.company->>'_id'")
+        .getRawMany();
+
+      jobCountMap = jobCounts.reduce((acc, row) => {
+        if (row.companyId) {
+          acc[row.companyId] = parseInt(row.count, 10) || 0;
+        }
+        return acc;
+      }, {} as Record<string, number>);
+    }
+
+    const companiesWithJobCount = companies.map((c) => ({
+      ...c,
+      jobCount: jobCountMap[c._id] || 0,
+    }));
+
     const totalPage = Math.ceil(totalRecord / limit);
 
     return {
@@ -114,7 +158,7 @@ export class CompaniesService {
         pages: totalPage,
         total: totalRecord,
       },
-      result: companies,
+      result: companiesWithJobCount,
     };
   }
 
@@ -124,29 +168,96 @@ export class CompaniesService {
     delete filter.pageSize;
     delete filter.isActive;
 
-    const cacheKey = 'companies-' + JSON.stringify(qs);
-    const cacheData = await this.redisService.getValue<string>(cacheKey);
+    const limit = qs.pageSize ? parseInt(qs.pageSize, 10) : 9;
+    const current = qs.current ? parseInt(qs.current, 10) : 1;
+    const skip = Math.max(0, (current - 1) * limit);
 
     // Extract userId for checking follow status
-    const userId = filter.userId;
+    const userId = filter.userId || qs.userId;
     delete filter.userId;
 
-    const limit = qs.pageSize ? parseInt(qs.pageSize) : 10;
-    const current = qs.current ? parseInt(qs.current) : 1;
-    const skip = (current - 1) * limit;
+    const searchTerm = (
+      qs.search ||
+      qs.q ||
+      qs.name ||
+      filter.name ||
+      ''
+    ).trim();
 
     const queryBuilder = this.companyRepo
       .createQueryBuilder('company')
       .where('company.isActive = :isActive', { isActive: true })
       .andWhere('company.isDeleted = :isDeleted', { isDeleted: false });
 
-    if (filter.name) {
-      queryBuilder.andWhere('company.name ILIKE :name', {
-        name: `%${filter.name}%`,
-      });
+    // Search by both Name and Address / Location / Description
+    if (searchTerm) {
+      queryBuilder.andWhere(
+        '(company.name ILIKE :search OR company.address ILIKE :search OR company.description ILIKE :search)',
+        { search: `%${searchTerm}%` },
+      );
     }
 
-    if (sort) {
+    const rawScale = (filter.scale || qs.scale) as string | undefined;
+    if (rawScale && typeof rawScale === 'string' && rawScale.trim()) {
+      const scaleStr = rawScale.trim().toLowerCase();
+      if (scaleStr.includes('10-50') || scaleStr.includes('10 - 50')) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
+          { s1: '%10-50%', s2: '%10 - 50%', s3: '%dưới 50%' },
+        );
+      } else if (scaleStr.includes('50-100') || scaleStr.includes('50 - 100')) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
+          { s1: '%50-100%', s2: '%50 - 100%', s3: '%50-200%' },
+        );
+      } else if (
+        scaleStr.includes('100-500') ||
+        scaleStr.includes('100 - 500')
+      ) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3)',
+          { s1: '%100-500%', s2: '%100 - 500%', s3: '%50-200%' },
+        );
+      } else if (
+        scaleStr.includes('500+') ||
+        scaleStr.includes('500-1000') ||
+        scaleStr.includes('trên 500') ||
+        scaleStr.includes('tren 500') ||
+        scaleStr === '500+' ||
+        scaleStr === '500'
+      ) {
+        queryBuilder.andWhere(
+          '(company.scale ILIKE :s1 OR company.scale ILIKE :s2 OR company.scale ILIKE :s3 OR company.scale ILIKE :s4 OR company.scale ILIKE :s5)',
+          {
+            s1: '%500+%',
+            s2: '%500-1000%',
+            s3: '%1000+%',
+            s4: '%trên 500%',
+            s5: '%500%',
+          },
+        );
+      } else {
+        const clean = scaleStr.replace(/nhân viên|nhân sự|người/gi, '').trim();
+        if (clean) {
+          queryBuilder.andWhere(
+            '(company.scale ILIKE :cleanPattern OR company.scale = :rawScale)',
+            { cleanPattern: `%${clean}%`, rawScale: rawScale.trim() },
+          );
+        } else {
+          queryBuilder.andWhere('company.scale = :rawScale', {
+            rawScale: rawScale.trim(),
+          });
+        }
+      }
+    }
+
+    // Priority Ordering: Companies with active HR Premium come first, then createdAt DESC
+    queryBuilder.addOrderBy(
+      `CASE WHEN (company.isPremium = true AND (company.premiumExpiresAt IS NULL OR company.premiumExpiresAt > NOW())) THEN 1 ELSE 0 END`,
+      'DESC',
+    );
+
+    if (sort && Object.keys(sort).length > 0) {
       for (const [key, value] of Object.entries(sort)) {
         queryBuilder.addOrderBy(
           `company.${key}`,
@@ -154,7 +265,7 @@ export class CompaniesService {
         );
       }
     } else {
-      queryBuilder.orderBy('company.createdAt', 'DESC');
+      queryBuilder.addOrderBy('company.createdAt', 'DESC');
     }
 
     const [companies, totalRecord] = await queryBuilder
@@ -164,8 +275,8 @@ export class CompaniesService {
 
     const totalPage = Math.ceil(totalRecord / limit);
 
-    // Add isFollowed & jobCount field for each company
-    const companiesWithJobCount = await Promise.all(
+    // Fetch top 2 most recent active jobs (createdAt DESC) & jobCount & isFollowed & isPremium for each company
+    const companiesWithDetails = await Promise.all(
       companies.map(async (company) => {
         const isFollowed = userId
           ? (company.usersFollow || []).some(
@@ -173,33 +284,61 @@ export class CompaniesService {
             )
           : false;
 
-        const jobCount = await this.jobRepo
-          .createQueryBuilder('job')
-          .where("job.company->>'_id' = :companyId", { companyId: company._id })
-          .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-          .getCount();
+        const isPremium = Boolean(
+          company.isPremium &&
+            (!company.premiumExpiresAt ||
+              new Date(company.premiumExpiresAt) > new Date()),
+        );
+
+        const [topJobs, jobCount] = await Promise.all([
+          this.jobRepo
+            .createQueryBuilder('job')
+            .select([
+              'job._id',
+              'job.name',
+              'job.salary',
+              'job.level',
+              'job.location',
+              'job.workingModel',
+              'job.createdAt',
+            ])
+            .where("job.company->>'_id' = :companyId", {
+              companyId: company._id,
+            })
+            .andWhere('job.isActive = :isActive', { isActive: true })
+            .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+            .orderBy('job.createdAt', 'DESC')
+            .take(2)
+            .getMany(),
+          this.jobRepo
+            .createQueryBuilder('job')
+            .where("job.company->>'_id' = :companyId", {
+              companyId: company._id,
+            })
+            .andWhere('job.isActive = :isActive', { isActive: true })
+            .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+            .getCount(),
+        ]);
 
         return {
           ...company,
+          isPremium,
           isFollowed,
           jobCount,
+          topJobs,
         };
       }),
     );
 
-    const response = {
+    return {
       meta: {
         current: current,
         pageSize: limit,
         pages: totalPage,
         total: totalRecord,
       },
-      result: companiesWithJobCount,
+      result: companiesWithDetails,
     };
-
-    await this.redisService.setValue(cacheKey, JSON.stringify(response), 60);
-
-    return response;
   }
 
   // User follows a company. Adds userId to usersFollow array.
@@ -261,6 +400,7 @@ export class CompaniesService {
     for (const job of jobs) {
       const updatedCompany = { ...job.company, isActive: newActiveStatus };
       await this.jobRepo.update(job._id, { company: updatedCompany });
+      await this.jobIndexingService.enqueue(job._id);
     }
 
     await this.redisService.invalidateCompaniesCache();
@@ -303,7 +443,7 @@ export class CompaniesService {
 
     const newCompany = this.companyRepo.create({
       ...createCompanyDto,
-      isActive: false,
+      isActive: true,
       createdBy: {
         _id: user._id,
         email: user.email,
@@ -337,7 +477,7 @@ export class CompaniesService {
 
     if (!company) throw new NotFoundException('Company not found');
 
-    const hrsInCompany = await this.usersService.findAllByCompanyId(id);
+    const hrsInCompany = await this.getCompanyHrs(id);
 
     const jobCount = await this.jobRepo
       .createQueryBuilder('job')
@@ -359,7 +499,17 @@ export class CompaniesService {
     });
     if (!company) throw new NotFoundException('Company not found');
 
-    return await this.usersService.findAllByCompanyId(companyId);
+    const hrs = await this.usersService.findAllByCompanyId(companyId);
+    const creatorId = company.createdBy?._id?.toString();
+
+    return hrs.map((hr) => {
+      const isLead = Boolean(creatorId && hr._id?.toString() === creatorId);
+      return {
+        ...hr,
+        isLead,
+        hrRole: isLead ? 'LEAD' : 'MEMBER',
+      };
+    });
   }
 
   async findWithUserFollow(companyId: string) {
@@ -384,15 +534,48 @@ export class CompaniesService {
       );
     }
 
-    const result = await this.companyRepo.update(id, {
+    const updatePayload: any = {
       ...updateCompanyDto,
       updatedBy: {
         _id: user._id,
         email: user.email,
       },
-    });
+    };
+
+    if (
+      updateCompanyDto.lat != null &&
+      updateCompanyDto.lon != null &&
+      !isNaN(Number(updateCompanyDto.lat)) &&
+      !isNaN(Number(updateCompanyDto.lon))
+    ) {
+      const nextLat = Number(updateCompanyDto.lat);
+      const nextLon = Number(updateCompanyDto.lon);
+      updatePayload.lat = nextLat;
+      updatePayload.lon = nextLon;
+      updatePayload.location = {
+        type: 'Point',
+        coordinates: [nextLon, nextLat],
+      };
+    }
+
+    const result = await this.companyRepo.update(id, updatePayload);
+
+    if (updatePayload.location) {
+      await this.jobRepo
+        .createQueryBuilder()
+        .update(Job)
+        .set({
+          lat: updatePayload.lat,
+          lon: updatePayload.lon,
+          locationPoint: updatePayload.location,
+        })
+        .where("company->>'_id' = :companyId", { companyId: id })
+        .andWhere('isDeleted = false')
+        .execute();
+    }
 
     await this.redisService.invalidateCompaniesCache();
+    await this.enqueueCompanyJobs(id);
     return result;
   }
 
@@ -419,8 +602,18 @@ export class CompaniesService {
       },
     });
 
+    const result = await this.companyRepo.softDelete(id);
     await this.redisService.invalidateCompaniesCache();
-    return await this.companyRepo.softDelete(id);
+    await this.enqueueCompanyJobs(id);
+    return result;
+  }
+
+  private async enqueueCompanyJobs(companyId: string): Promise<void> {
+    const jobs = await this.jobRepo
+      .createQueryBuilder('job')
+      .where("job.company->>'_id' = :companyId", { companyId })
+      .getMany();
+    for (const job of jobs) await this.jobIndexingService.enqueue(job._id);
   }
 
   async countCompanies() {
@@ -483,7 +676,7 @@ export class CompaniesService {
 
     if (company.createdBy?._id?.toString() !== approver._id.toString()) {
       throw new BadRequestException(
-        'Chỉ người tạo công ty mới có quyền duyệt yêu cầu tham gia',
+        'Chỉ HR Trưởng (người tạo công ty) mới có quyền duyệt yêu cầu tham gia',
       );
     }
 
@@ -500,6 +693,7 @@ export class CompaniesService {
     await this.usersService.updateUserCompany(userId, {
       _id: companyId,
       name: company.name,
+      isActive: true,
     });
 
     // Notify the requesting user
@@ -527,7 +721,7 @@ export class CompaniesService {
 
     if (company.createdBy?._id?.toString() !== approver._id.toString()) {
       throw new BadRequestException(
-        'Chỉ người tạo công ty mới có quyền từ chối yêu cầu tham gia',
+        'Chỉ HR Trưởng (người tạo công ty) mới có quyền từ chối yêu cầu tham gia',
       );
     }
 
@@ -584,7 +778,7 @@ export class CompaniesService {
 
     const newCompany = this.companyRepo.create({
       ...createCompanyDto,
-      isActive: false,
+      isActive: true,
       createdBy: {
         _id: user._id,
         email: user.email,
@@ -597,6 +791,7 @@ export class CompaniesService {
     await this.usersService.updateUserCompany(user._id.toString(), {
       _id: savedCompany._id.toString(),
       name: savedCompany.name,
+      isActive: true,
     });
 
     await this.redisService.invalidateCompaniesCache();
@@ -619,5 +814,320 @@ export class CompaniesService {
     }
 
     return savedCompany;
+  }
+
+  // Get comprehensive HR dashboard statistics from PostgreSQL
+  async getHrDashboardStats(user: IUser) {
+    const userInDb = await this.usersService.findOneByEmail(user.email);
+    if (!userInDb || !userInDb.company || !userInDb.company._id) {
+      const isPrem = userInDb ? this.usersService.isHrPremium(userInDb) : false;
+      return {
+        hasCompany: false,
+        isProfileComplete: false,
+        isPremium: isPrem,
+        premiumPlan: userInDb?.premiumPlan || 'FREE',
+        premiumExpiresAt: userInDb?.premiumExpiresAt || null,
+        company: null,
+        stats: {
+          totalJobs: 0,
+          activeJobs: 0,
+          todayJobsPostedCount: 0,
+          maxActiveJobs: isPrem ? 999999 : 6,
+          maxDailyJobs: isPrem ? 999999 : 6,
+          totalApplications: 0,
+          pendingApplications: 0,
+          reviewingApplications: 0,
+          approvedApplications: 0,
+          rejectedApplications: 0,
+          followersCount: 0,
+          dailyApplicationStats: [],
+          topJobs: [],
+          recentApplications: [],
+        },
+      };
+    }
+
+    const companyId = userInDb.company._id;
+    const company = await this.companyRepo.findOne({
+      where: { _id: companyId, isDeleted: false },
+    });
+
+    if (!company) {
+      const isPrem = this.usersService.isHrPremium(userInDb);
+      return {
+        hasCompany: false,
+        isProfileComplete: false,
+        isPremium: isPrem,
+        premiumPlan: userInDb.premiumPlan || 'FREE',
+        premiumExpiresAt: userInDb.premiumExpiresAt || null,
+        company: null,
+        stats: {
+          totalJobs: 0,
+          activeJobs: 0,
+          todayJobsPostedCount: 0,
+          maxActiveJobs: isPrem ? 999999 : 6,
+          maxDailyJobs: isPrem ? 999999 : 6,
+          totalApplications: 0,
+          pendingApplications: 0,
+          reviewingApplications: 0,
+          approvedApplications: 0,
+          rejectedApplications: 0,
+          followersCount: 0,
+          dailyApplicationStats: [],
+          topJobs: [],
+          recentApplications: [],
+        },
+      };
+    }
+
+    const isProfileComplete = Boolean(
+      company.name &&
+        company.taxCode &&
+        company.scale &&
+        company.address &&
+        company.description &&
+        company.logo,
+    );
+
+    const now = new Date();
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+
+    // Total jobs & active jobs & today jobs
+    const allCompanyJobs = await this.jobRepo
+      .createQueryBuilder('job')
+      .where("job.company->>'_id' = :companyId", { companyId })
+      .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
+      .orderBy('job.createdAt', 'DESC')
+      .getMany();
+
+    const totalJobs = allCompanyJobs.length;
+    const activeJobs = await this.activeJobQueryService
+      .createActiveQuery(now)
+      .andWhere("job.company->>'_id' = :companyId", { companyId })
+      .getCount();
+    const todayJobsPostedCount = allCompanyJobs.filter(
+      (job) => new Date(job.createdAt) >= startOfToday,
+    ).length;
+
+    // Applications counts
+    const applications = await this.applicationRepo
+      .createQueryBuilder('app')
+      .leftJoinAndSelect('app.job', 'job')
+      .leftJoinAndSelect('app.user', 'user')
+      .leftJoinAndSelect('app.cv', 'cv')
+      .where('app.companyId = :companyId', { companyId })
+      .andWhere('app.isDeleted = :isDeleted', { isDeleted: false })
+      .orderBy('app.createdAt', 'DESC')
+      .getMany();
+
+    const totalApplications = applications.length;
+    const pendingApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.PENDING,
+    ).length;
+    const reviewingApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.REVIEWING,
+    ).length;
+    const consideringApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.CONSIDERING,
+    ).length;
+    const approvedApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.APPROVED,
+    ).length;
+    const rejectedApplications = applications.filter(
+      (app) => app.status === ApplicationStatus.REJECTED,
+    ).length;
+
+    // 7-day breakdown (from 6 days ago up to today)
+    const dailyApplicationStats: {
+      date: string;
+      label: string;
+      count: number;
+    }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const dayEnd = new Date(
+        d.getFullYear(),
+        d.getMonth(),
+        d.getDate(),
+        23,
+        59,
+        59,
+        999,
+      );
+
+      const count = applications.filter((app) => {
+        const appDate = new Date(app.createdAt);
+        return appDate >= dayStart && appDate <= dayEnd;
+      }).length;
+
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const dateStr = `${d.getFullYear()}-${month}-${day}`;
+
+      dailyApplicationStats.push({
+        date: dateStr,
+        label: `${day}/${month}`,
+        count,
+      });
+    }
+
+    // Top jobs with application counts
+    const jobAppCounts: Record<string, number> = {};
+    applications.forEach((app) => {
+      if (app.jobId) {
+        jobAppCounts[app.jobId] = (jobAppCounts[app.jobId] || 0) + 1;
+      }
+    });
+
+    const topJobs = allCompanyJobs
+      .map((job) => ({
+        _id: job._id,
+        name: job.name,
+        salary: job.salary,
+        level: job.level,
+        location: job.location,
+        createdAt: job.createdAt,
+        endDate: job.endDate,
+        isActive: job.isActive,
+        isHot: job.isHot || false,
+        boostedAt: job.boostedAt || null,
+        applicationsCount: jobAppCounts[job._id] || 0,
+      }))
+      .sort((a, b) => b.applicationsCount - a.applicationsCount)
+      .slice(0, 5);
+
+    // Recent 5 applications
+    const recentApplications = applications.slice(0, 5).map((app) => ({
+      _id: app._id,
+      status: app.status,
+      createdAt: app.createdAt,
+      job: app.job
+        ? { _id: app.job._id, name: app.job.name }
+        : { _id: app.jobId, name: 'Vị trí đã đóng' },
+      user: app.user
+        ? {
+            _id: app.user._id,
+            name: app.user.name,
+            email: app.user.email,
+            avatar: app.user.avatar,
+            address: app.user.address,
+          }
+        : null,
+      cv: app.cv
+        ? {
+            _id: app.cv._id,
+            title: app.cv.title,
+            url: app.cv.url,
+          }
+        : null,
+    }));
+
+    const isPremium = this.usersService.isHrPremium(userInDb);
+    const maxActiveJobs = this.usersService.getUserMaxActiveJobs(userInDb);
+    const maxDailyJobs = maxActiveJobs;
+    const hotJobLimit = await this.usersService.getUserHotJobLimit(userInDb);
+    const candidateSearchLimit =
+      await this.usersService.getUserCandidateSearchLimit(userInDb);
+    const userPackage = await this.usersService.getUserPackage(userInDb);
+
+    return {
+      hasCompany: true,
+      isProfileComplete,
+      isPremium,
+      premiumPlan: userInDb.premiumPlan || 'FREE',
+      premiumExpiresAt: userInDb.premiumExpiresAt || null,
+      company: {
+        _id: company._id,
+        name: company.name,
+        description: company.description,
+        address: company.address,
+        logo: company.logo,
+        taxCode: company.taxCode,
+        scale: company.scale,
+        isActive: company.isActive,
+        usersFollow: company.usersFollow || [],
+        createdAt: company.createdAt,
+      },
+      stats: {
+        totalJobs,
+        activeJobs,
+        maxActiveJobs,
+        todayJobsPostedCount,
+        maxDailyJobs,
+        hotJobLimit,
+        candidateSearchLimit,
+        packageName: userPackage
+          ? userPackage.name
+          : isPremium
+          ? 'HR Premium'
+          : 'HR Standard',
+        totalApplications,
+        pendingApplications,
+        reviewingApplications,
+        consideringApplications,
+        approvedApplications,
+        rejectedApplications,
+        followersCount: company.usersFollow?.length || 0,
+        dailyApplicationStats,
+        topJobs,
+        recentApplications,
+      },
+    };
+  }
+
+  async getTopHiringCompanies(limit = 10) {
+    const now = new Date();
+
+    const rawResults = await this.companyRepo
+      .createQueryBuilder('c')
+      .leftJoin(
+        Job,
+        'j',
+        `j.company->>'_id' = c._id::text AND j.isDeleted = false AND j.isActive = true AND (j.startDate IS NULL OR j.startDate <= :now) AND (j.endDate IS NULL OR j.endDate >= :now)`,
+        { now },
+      )
+      .where('c.isActive = :isActive AND c.isDeleted = :isDeleted', {
+        isActive: true,
+        isDeleted: false,
+      })
+      .select([
+        'c._id as "_id"',
+        'c.name as "name"',
+        'c.logo as "logo"',
+        'c.address as "address"',
+        'c.scale as "scale"',
+        'c.taxCode as "taxCode"',
+        'c.isPremium as "isPremium"',
+        'COUNT(j._id) as "openJobs"',
+      ])
+      .groupBy('c._id')
+      .addGroupBy('c.name')
+      .addGroupBy('c.logo')
+      .addGroupBy('c.address')
+      .addGroupBy('c.scale')
+      .addGroupBy('c.taxCode')
+      .addGroupBy('c.isPremium')
+      .orderBy('"openJobs"', 'DESC')
+      .addOrderBy('c.isPremium', 'DESC')
+      .addOrderBy('c.name', 'ASC')
+      .limit(limit)
+      .getRawMany();
+
+    return rawResults.map((r) => ({
+      _id: r._id,
+      name: r.name,
+      logo: r.logo || null,
+      address: r.address || null,
+      scale: r.scale || null,
+      taxCode: r.taxCode || null,
+      isPremium: Boolean(r.isPremium),
+      openJobs: parseInt(r.openJobs, 10) || 0,
+    }));
   }
 }

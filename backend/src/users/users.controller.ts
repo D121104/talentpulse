@@ -13,6 +13,7 @@ import {
 import { UsersService } from './users.service';
 import { RegisterUserDto } from './dto/create-user.dto';
 import { UpdateUserDto, UpdateUserPasswordDto } from './dto/update-user.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 import { IUser } from './users.interface';
 import { User, Roles, Role } from 'src/decorator/customize';
@@ -69,6 +70,14 @@ export class UsersController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.usersService.findOne(id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Update the authenticated candidate profile' })
+  @ApiBearerAuth()
+  @Patch('/me/profile')
+  updateProfile(@Body() dto: UpdateProfileDto, @User() user: IUser) {
+    return this.usersService.updateProfile(user._id, dto, user);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -199,5 +208,60 @@ export class UsersController {
   @Get('/admin/pending-hrs')
   findPendingHrs() {
     return this.usersService.findPendingHrs();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Boost candidate profile to the top of HR CV search',
+  })
+  @ApiBearerAuth()
+  @Post('/candidate/boost-profile')
+  boostProfile(@User() user: IUser) {
+    return this.usersService.boostProfile(user._id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get candidate profile boost status & cooldown' })
+  @ApiBearerAuth()
+  @Get('/candidate/boost-status')
+  getBoostStatus(@User() user: IUser) {
+    return this.usersService.getBoostStatus(user._id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get candidate job seeking & visibility settings' })
+  @ApiBearerAuth()
+  @Get('/candidate/settings')
+  getCandidateSettings(@User() user: IUser) {
+    return this.usersService.getCandidateSettings(user._id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Update candidate job seeking & visibility settings',
+  })
+  @ApiBearerAuth()
+  @Patch('/candidate/settings')
+  updateCandidateSettings(
+    @Body()
+    settings: {
+      isJobSeeking?: boolean;
+      isJobRecommendation?: boolean;
+      allowRecruiterSearch?: boolean;
+    },
+    @User() user: IUser,
+  ) {
+    return this.usersService.updateCandidateSettings(user._id, settings);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary:
+      'Get current user real-time dynamic premium entitlements and limits',
+  })
+  @ApiBearerAuth()
+  @Get('/me/entitlements')
+  getMyEntitlements(@User() user: IUser) {
+    return this.usersService.getUserEntitlements(user);
   }
 }

@@ -49,9 +49,12 @@ export class UpdateUserDto {
 }
 
 export class UpdateUserPasswordDto {
-  @IsNotEmpty()
-  oldPassword: string;
+  @IsOptional()
+  oldPassword?: string;
 
-  @IsNotEmpty()
+  @IsOptional()
+  currentPassword?: string;
+
+  @IsNotEmpty({ message: 'Mật khẩu mới không được để trống' })
   newPassword: string;
 }

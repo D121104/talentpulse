@@ -69,6 +69,17 @@ export class UserCVsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Patch(':id/searchable')
+  @ResponseMessage('Cập nhật trạng thái cho phép NTD tìm kiếm thành công')
+  toggleSearchable(
+    @Param('id') id: string,
+    @Body('isSearchable') isSearchable: boolean,
+    @User() user: IUser,
+  ) {
+    return this.userCVsService.toggleSearchable(id, user, isSearchable);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @ResponseMessage('Xóa CV thành công')
   remove(@Param('id') id: string, @User() user: IUser) {

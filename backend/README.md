@@ -1,278 +1,154 @@
 # Job Recruitment Backend API
 
-Backend API cho ứng dụng tuyển dụng việc làm, xây dựng trên NestJS framework.
+NestJS backend cho nền tảng tuyển dụng TalentPulse.
 
-## Tech Stack
+## Current implementation contract
 
-- **Framework**: NestJS 9.x
-- **Database**: MongoDB với Mongoose
+NestJS là owner của business APIs, authorization, users, companies, jobs,
+applications, PostgreSQL/RDS canonical persistence, job lifecycle, transactional
+outbox, lease/retry/idempotency và orchestration của job indexing. PostgreSQL là
+nguồn dữ liệu nghiệp vụ duy nhất; Qdrant Cloud chỉ là derived vector index và
+FastAPI là boundary cho các xử lý AI.
+
+Demo chạy qua CloudFront tới private EC2/Nginx. Trên EC2, NestJS API/worker,
+FastAPI AI service và Valkey là private services; PostgreSQL chạy trên RDS và
+vector index chạy trên Qdrant Cloud. Media CV tiếp tục dùng Cloudinary.
+
+## Tech stack
+
+- **Framework**: NestJS, TypeORM, TypeScript
+- **Database**: PostgreSQL/RDS (canonical persistence)
 - **Authentication**: JWT + Passport (Local, Google OAuth)
-- **File Storage**: Cloudinary
-- **Queue**: Bull (Redis-based)
+- **Authorization**: NestJS guards/roles và explicit service boundaries
+- **File storage**: Cloudinary
+- **Queue/cache**: Bull trên Redis-compatible Valkey/Redis
 - **Real-time**: Socket.IO
-- **AI/ML**: @xenova/transformers (all-MiniLM-L6-v2)
-- **PDF Generation**: Puppeteer
+- **AI boundary**: FastAPI cho CV parsing, deterministic CV-job matching, RAG,
+  embeddings và provider-specific indexing
+- **PDF/DOCX**: `pdf-parse` và `mammoth`; PDF generation dùng Puppeteer
 - **Email**: Nodemailer + Handlebars templates
 
-## Tính năng chính
+## Local endpoints
 
-### 1. Authentication & Authorization
+| Thành phần | URL |
+| --- | --- |
+| NestJS API | `http://localhost:8000/api/v1` |
+| Vite frontend | `http://localhost:5173` |
+| Google OAuth callback | `http://localhost:8000/api/v1/auth/google/callback` |
+| Swagger | `http://localhost:8000/api` |
 
-- **Đăng ký/Đăng nhập**: Email/Password hoặc Google OAuth
-- **JWT Tokens**: Access token + Refresh token
-- **Roles**: USER, HR, ADMIN
-- **Đăng ký HR**: Yêu cầu Admin duyệt trước khi hoạt động
-- **Khóa tài khoản**: Admin có thể khóa user với lý do
+Health contract:
 
-### 2. Quản lý Công ty (Companies)
+- NestJS: `GET /api/v1/health` và `GET /api/v1/health/ready`.
+- FastAPI: `GET /health`, `GET /health/live`, và `GET /health/ready`.
+- Nginx: `GET /origin-health`.
 
-- **Tạo công ty**: HR tạo công ty mới (cần Admin duyệt để kích hoạt)
-- **Duyệt công ty**: Admin kích hoạt/khóa công ty
-- **Theo dõi công ty**: User có thể follow/unfollow công ty
-- **Yêu cầu tham gia**: HR có thể request join công ty đã tồn tại
-- **Quản lý HR**: Người tạo công ty có quyền duyệt/từ chối HR requests
-- **Thông báo**: Tự động gửi notification khi có sự kiện (follow, duyệt, etc.)
+## Core features
 
-### 3. Quản lý Công việc (Jobs)
+### Authentication, authorization, companies and jobs
 
-- **CRUD Jobs**: HR tạo/sửa/xóa job cho công ty của mình
-- **Thông tin job**: Tên, mô tả, skills, salary, level, location, deadline
-- **Tự động thông báo**: Gửi notification đến followers khi công ty đăng job mới
-- **Re-process CV**: Khi job description thay đổi, tự động re-process tất cả CV đã apply
+- Email/password và Google OAuth authentication với JWT access/refresh tokens.
+- Roles USER, HR và ADMIN; HR/company approval và account/company controls.
+- HR tạo, sửa, quản lý và đóng job; job changes phát sinh lifecycle/outbox events.
+- User theo dõi company, nhận notifications và quản lý hồ sơ/CV.
 
-### 4. Quản lý CV (UserCV)
+### CV and applications
 
-#### Định dạng hỗ trợ
-- **PDF**: Sử dụng `pdf-parse` để extract text
-- **DOCX**: Sử dụng `mammoth` để extract text
-- **Online CV**: Tạo CV trực tuyến với templates
+- Upload PDF/DOCX lên Cloudinary; backend lưu metadata và parsed result canonical
+  trong PostgreSQL. Không dùng OCR cho PDF scan/image không có text layer.
+- Online CV builder, export PDF, primary CV management và soft-delete workflows.
+- Submit application, theo dõi status, HR review/status updates và notifications.
+- CV processing chạy async qua Bull/Valkey; application state vẫn do NestJS sở hữu.
 
-> **Lưu ý**: Hệ thống không sử dụng OCR. Chỉ extract text trực tiếp từ file PDF/DOCX. PDF dạng scan/image sẽ không extract được nội dung.
+### AI matching
 
-#### Quy trình xử lý CV
-1. User upload file PDF/DOCX lên Cloudinary
-2. Backend tự động download và parse text từ file
-3. Extract các sections: skills, education, experience, certificates
-4. Lưu parsedText và structured data vào database
-5. Dữ liệu này được sử dụng cho AI matching sau này
+NestJS gửi dữ liệu đã được authorization và consent kiểm soát tới FastAPI. FastAPI
+trả về deterministic, explainable components; NestJS quyết định persistence và
+API exposure của application result.
 
-#### Tính năng
-- Đặt CV chính (primary CV)
-- Xem danh sách CV của user
-- Xóa CV (auto chuyển primary sang CV khác)
+Scoring contract:
 
-### 5. Online CV Builder
+- semantic similarity: **50%**
+- skill coverage: **35%**
+- experience/level compatibility: **15%**
+- location và work-mode được báo cáo riêng, **không** đưa vào numeric score
 
-- **Templates**: Hỗ trợ nhiều template (template1, template2,...)
-- **Nội dung**: Thông tin cá nhân, học vấn, kinh nghiệm, kỹ năng, chứng chỉ, hoạt động, giải thưởng
-- **Export PDF**: Sử dụng Puppeteer + Handlebars để generate PDF
-- **Tự động tạo UserCV**: Khi export PDF, tự động tạo entry trong UserCV với parsed data
+Các kết quả gồm overall score, matched/missing skills, strengths, gaps, component
+scores, scoring version và degradation state. Current result contract uses
+UUID/string-compatible canonical IDs, provider-managed ephemeral embeddings, CV
+`contentHash`, job `jobSourceVersion`, validated component scores,
+scoring/normalization versions, and compatibility metadata.
 
-### 6. Ứng tuyển (Applications)
+### Job indexing orchestration
 
-#### Quy trình ứng tuyển
-1. User chọn CV và submit application cho job
-2. Backend tạo application với status PENDING
-3. **Async CV Processing**: Queue job để AI matching (không block user)
-4. HR nhận notification về application mới
+NestJS tạo và claim outbox work, kiểm soát lease/retry/idempotency/stale fencing,
+rồi gọi FastAPI bằng service JWT. FastAPI cung cấp:
 
-#### Trạng thái Application
-- `PENDING`: Chờ review
-- `REVIEWING`: Đang xem xét
-- `APPROVED`: Đã chấp thuận
-- `REJECTED`: Đã từ chối
+- `POST /internal/v1/index/jobs/upsert`
+- `POST /internal/v1/index/jobs/delete`
 
-#### Tính năng cho HR
-- Xem danh sách applications theo job
-- Cập nhật trạng thái application
-- Tìm kiếm application theo nội dung CV
+Scope indexing mặc định là `jobs:index` và có thể cấu hình bằng
+`AI_JOB_INDEX_SCOPE`. Các scope AI là `cv:parse`, `cv:match`, `rag:retrieve`,
+`rag:generate`, `jobs:index` — không dùng một scope tổng quát cho mọi route.
 
-### 7. AI Matching System
+## Environment variables
 
-#### Kiến trúc
-```
-Application Created
-        ↓
-Queue CV Processing (Bull)
-        ↓
-CV Processing Processor
-        ↓
-AI Matching Service
-        ↓
-CVMatchResult (DB)
-```
-
-#### Cách hoạt động
-1. **Text Extraction**: Sử dụng pre-parsed text từ UserCV (không download lại file)
-2. **Embedding Generation**: Sử dụng `all-MiniLM-L6-v2` để tạo vector embeddings
-3. **Semantic Similarity**: Tính cosine similarity giữa CV embedding và JD embedding
-4. **Skill Matching**: So khớp skills trong CV với requirements của job
-5. **Score Calculation**:
-   - 40% semantic similarity
-   - 60% skill match ratio
-   - Bonus points cho high skill match
-
-#### API cho HR
-- `GET /applications/job/:jobId/ranked`: Lấy danh sách ứng viên đã xếp hạng theo match score
-- `GET /applications/job/:jobId/search`: Tìm kiếm theo skills, education, address, certificates
-- `GET /applications/job/:jobId/processing-status`: Xem trạng thái processing
-
-#### CVMatchResult Fields
-```typescript
-{
-  cvId: ObjectId,
-  userId: ObjectId,
-  jobId: ObjectId,
-  applicationId: ObjectId,
-  cvText: string,
-  cvEmbedding: number[],
-  matchScore: number,        
-  matchedSkills: string[],
-  missingSkills: string[],
-  explanation: string,
-  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED',
-  processedAt: Date
-}
-```
-
-### 8. Notifications
-
-#### Loại thông báo
-- `JOB`: Thông báo về công việc mới
-- `RESUME`: Thông báo về application
-- `COMPANY`: Thông báo về công ty
-- `APPLICATION`: Thông báo về đơn ứng tuyển
-- `SYSTEM`: Thông báo hệ thống
-
-#### Real-time
-- Sử dụng Socket.IO
-- User connect với userId
-- Server emit notifications theo userId
-
-### 9. Subscribers (Email Notifications)
-
-- User đăng ký nhận email về jobs theo skills
-- Cron job chạy hàng ngày (8AM) gửi email
-- Batch processing để tránh overwhelm mail server
-
-### 10. Comments
-
-- Nested comments (tree structure) cho company
-- Sử dụng left/right để quản lý hierarchy
-
-## Cấu trúc thư mục
-
-```
-src/
-├── ai-matching/          # AI matching service & processor
-│   ├── ai-matching.service.ts
-│   ├── cv-processing.service.ts
-│   ├── cv-processing.processor.ts
-│   └── schemas/
-├── applications/         # Job applications
-├── auth/                 # Authentication
-├── comments/            # Company comments
-├── companies/           # Company management
-├── files/               # File upload (Cloudinary)
-├── jobs/                # Job postings
-├── mail/                # Email service
-├── notifications/       # Notifications + WebSocket
-├── online-cvs/          # Online CV builder
-│   └── templates/       # Handlebars templates
-├── otps/                # OTP verification
-├── redis/               # Redis cache service
-├── skills/              # Skills management
-├── subscribers/         # Email subscribers
-├── usercvs/             # User CVs management
-└── users/               # User management
-```
-
-## Environment Variables
+Development values live in `backend/.env.example`; never copy real credentials
+into documentation. Các biến chính:
 
 ```env
-# MongoDB
-MONGO_URL=mongodb://localhost:27017/job-recruitment
-
-# JWT
-JWT_SECRET=your-jwt-secret
-JWT_EXPIRES_IN=1d
-JWT_REFRESH_SECRET=your-refresh-secret
-JWT_REFRESH_EXPIRES_IN=7d
-
-# Redis (for Bull queue)
+PORT=8000
+NODE_ENV=development
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=postgres
+DB_PASSWORD=replace-me
+DB_DATABASE=recruitment_db
+DB_SYNCHRONIZE=true
+REDIS_ENABLED=true
 REDIS_HOST=localhost
 REDIS_PORT=6379
-
-# Cloudinary
-CLOUDINARY_CLOUD_NAME=your-cloud-name
-CLOUDINARY_API_KEY=your-api-key
-CLOUDINARY_API_SECRET=your-api-secret
-
-# Google OAuth
-GOOGLE_CLIENT_ID=your-client-id
-GOOGLE_CLIENT_SECRET=your-client-secret
-GOOGLE_CALLBACK_URL=http://localhost:8080/api/v1/auth/google/callback
-
-# Mail
-MAIL_HOST=smtp.gmail.com
-MAIL_USER=your-email
-MAIL_PASSWORD=your-app-password
-MAIL_FROM="Job Recruitment" <noreply@example.com>
-
-# Frontend URL
-URL_FRONTEND=http://localhost:3000
+GOOGLE_CALLBACK_URL=http://localhost:8000/api/v1/auth/google/callback
+URL_FRONTEND=http://localhost:5173
+AI_JOB_INDEX_SCOPE=jobs:index
 ```
 
-## Installation
+Trong demo, secrets được render trên EC2 từ Secrets Manager và không truyền qua
+Compose interpolation hoặc process arguments. `DB_SYNCHRONIZE=false` ngoài local
+development; migration là trách nhiệm vận hành có kiểm soát.
+
+## Installation and development
 
 ```bash
-# Install dependencies
 npm install
-
-# Development
-npm run dev
-
-# Build
+npm run start:dev
 npm run build
-
-# Production
-npm run start:prod
+npm run lint
+npm test
 ```
 
-## API Documentation
+## Project structure
 
-Swagger UI available at: `http://localhost:8080/api`
-
-## Key Dependencies
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| @nestjs/core | 9.4.0 | NestJS framework |
-| mongoose | 7.1.0 | MongoDB ODM |
-| @nestjs/jwt | 10.0.3 | JWT authentication |
-| @nestjs/bull | 10.0.1 | Queue processing |
-| @xenova/transformers | 2.17.2 | AI embeddings |
-| pdf-parse | 1.1.1 | PDF text extraction |
-| mammoth | 1.11.0 | DOCX text extraction |
-| puppeteer | 24.37.5 | PDF generation |
-| cloudinary | 2.1.0 | File storage |
-| socket.io | 4.8.3 | Real-time communication |
+```text
+src/
+├── ai-matching/          # AI client, matching and async CV processor
+├── applications/         # Application lifecycle and persistence
+├── auth/                 # Authentication and Google OAuth
+├── companies/            # Company management
+├── jobs/                 # Job lifecycle
+├── job-indexing/         # Outbox, lease/retry and FastAPI indexing orchestration
+├── notifications/        # Notifications and Socket.IO
+├── online-cvs/            # Online CV builder and templates
+├── redis/                # Valkey/Redis integration
+├── usercvs/              # CV metadata and processing state
+└── users/                # User management
+```
 
 ## Notes
 
-### CV Processing
-- **Không sử dụng OCR**: Chỉ extract text trực tiếp từ PDF/DOCX
-- **PDF scan/image**: Sẽ không extract được nội dung, chỉ hoạt động với PDF có text layer
-- **Async processing**: CV được parse async sau khi upload, AI matching cũng chạy async
-
-### AI Matching
-- **Model**: all-MiniLM-L6-v2 (sentence transformer)
-- **Embedding size**: 384 dimensions
-- **Queue**: Bull + Redis, retry 3 lần với exponential backoff
-- **Pre-calculated**: Kết quả được lưu trong CVMatchResult, query nhanh khi HR xem
-
-### Security
-- Helmet middleware
-- Rate limiting với @nestjs/throttler
-- Soft delete pattern (không xóa vĩnh viễn)
-- Role-based access control
+- CV text and provider payloads are sensitive; logs must not contain raw CVs,
+  tokens, passwords or full prompts/responses.
+- Authorization is enforced by NestJS, not by an LLM.
+- Qdrant data is rebuildable from PostgreSQL and indexing outbox state.
+- Current RAG v1 uses bounded active-job/CV/conversation evidence. The product can
+  add application-history/behavioral recommendation modes in a later version.

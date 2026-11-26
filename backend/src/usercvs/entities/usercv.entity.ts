@@ -9,6 +9,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
+import { CVParseStatus } from '../cv-parse-status';
 
 @Entity('user_cvs')
 export class UserCV {
@@ -32,6 +33,24 @@ export class UserCV {
 
   @Column({ type: 'text', nullable: true })
   parsedText: string;
+  @Column({ type: 'varchar', length: 20, default: CVParseStatus.PENDING })
+  parseStatus: CVParseStatus;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  contentHash: string;
+
+  @Column({
+    type: 'varchar',
+    length: 64,
+    default: () => 'uuid_generate_v4()::text',
+  })
+  contentVersion: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  parsedAt: Date;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  parseErrorCode: string;
 
   @Column({ type: 'text', array: true, default: '{}' })
   skills: string[];
@@ -45,8 +64,17 @@ export class UserCV {
   @Column({ type: 'text', array: true, default: '{}' })
   certificates: string[];
 
+  @Column({ type: 'text', array: true, default: '{}' })
+  warnings: string[];
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  parserVersion: string;
+
   @Column({ default: false })
   isPrimary: boolean;
+
+  @Column({ default: true })
+  isSearchable: boolean;
 
   @Column({ type: 'uuid' })
   userId: string;

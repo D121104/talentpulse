@@ -3,11 +3,36 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Repository } from 'typeorm';
+import { Cron } from '@nestjs/schedule';
+import {
+  CURRENT_MATCH_SCORING_VERSION,
+  CURRENT_SKILL_NORMALIZATION_VERSION,
+  hasCurrentMatchingVersions,
+} from './matching-versions';
+import {
+  Application,
+  ApplicationStatus,
+} from 'src/applications/entities/application.entity';
+import { Job } from 'src/jobs/entities/job.entity';
+import { Company } from 'src/companies/entities/company.entity';
+import { UserCV } from 'src/usercvs/entities/usercv.entity';
+import { CVParseStatus } from 'src/usercvs/cv-parse-status';
+import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
 import {
   CVMatchResult,
   CVProcessingStatus,
 } from './entities/cv-match-result.entity';
-import { CVProcessingJobData } from './cv-processing.processor';
+import {
+  CVProcessingJobData,
+  consentIdempotencyKey,
+  hasAutomaticMatchingEntitlement,
+} from './cv-processing.processor';
+
+const retryOptions = {
+  attempts: 3,
+  backoff: { type: 'exponential' as const, delay: 5000 },
+};
 
 @Injectable()
 export class CVProcessingService {
@@ -20,230 +45,405 @@ export class CVProcessingService {
     private readonly cvProcessingQueue: Queue,
   ) {}
 
-  /**
-   * Queue CV processing when an application is created
-   * Uses pre-parsed CV text from DB (no file download needed)
-   */
+  async enqueueEligibleApplication(applicationId: string): Promise<void> {
+    const manager = this.cvMatchResultRepo.manager;
+    const application = await manager
+      .getRepository(Application)
+      .findOne({ where: { _id: applicationId } });
+    if (
+      !application ||
+      application.isDeleted ||
+      application.deletedAt ||
+      ![
+        ApplicationStatus.PENDING,
+        ApplicationStatus.REVIEWING,
+        ApplicationStatus.CONSIDERING,
+        ApplicationStatus.APPROVED,
+      ].includes(application.status) ||
+      !application.aiRankingConsentGranted ||
+      !application.aiRankingConsentVersion ||
+      !application.aiRankingConsentPolicyHash ||
+      !application.aiRankingConsentAt
+    )
+      return;
+    const [cv, job] = await Promise.all([
+      manager
+        .getRepository(UserCV)
+        .findOne({ where: { _id: application.cvId } }),
+      manager.getRepository(Job).findOne({ where: { _id: application.jobId } }),
+    ]);
+    if (
+      !cv ||
+      cv.isDeleted ||
+      cv.deletedAt ||
+      cv.userId !== application.userId ||
+      cv.parseStatus !== CVParseStatus.READY ||
+      !cv.contentHash ||
+      !cv.contentVersion ||
+      !job ||
+      job.isDeleted ||
+      job.deletedAt ||
+      !job.company?._id ||
+      application.companyId !== job.company._id
+    )
+      return;
+    const company = await manager
+      .getRepository(Company)
+      .findOne({ where: { _id: job.company._id } });
+    if (
+      !company ||
+      !(await hasAutomaticMatchingEntitlement(
+        manager,
+        job,
+        company,
+        application.userId,
+      ))
+    )
+      return;
+    const version = getJobSourceVersion(job, company);
+    await this.queueCVProcessing({
+      cvId: cv._id,
+      userId: application.userId,
+      applicationId,
+      cvContentVersion: cv.contentVersion,
+      contentHash: cv.contentHash,
+      jobId: job._id,
+      jobSourceVersion: version,
+      aiRankingConsentGranted: true,
+      aiRankingConsentVersion: application.aiRankingConsentVersion,
+      aiRankingConsentPolicyHash: application.aiRankingConsentPolicyHash,
+      consentIdempotencyKey: consentIdempotencyKey(
+        applicationId,
+        cv.contentVersion,
+        version,
+      ),
+    });
+  }
+
+  async enqueueReadyCV(cvId: string): Promise<void> {
+    // Keyset pages keep each query bounded even for a heavily reused CV.
+    let cursor = '00000000-0000-0000-0000-000000000000';
+    for (;;) {
+      const applications = await this.cvMatchResultRepo.manager
+        .getRepository(Application)
+        .createQueryBuilder('application')
+        .where('application.cvId = :cvId', { cvId })
+        .andWhere('application._id > :cursor', { cursor })
+        .orderBy('application._id', 'ASC')
+        .take(100)
+        .getMany();
+      for (const application of applications)
+        await this.enqueueEligibleApplication(application._id);
+      if (applications.length < 100) return;
+      cursor = applications[applications.length - 1]._id;
+    }
+  }
+
+  private reconciliationCursor = '00000000-0000-0000-0000-000000000000';
+  private reconciling = false;
+
+  @Cron('*/1 * * * *')
+  async reconcileAutomaticMatches(): Promise<void> {
+    if (!areQueueWorkersEnabled() || this.reconciling) return;
+    this.reconciling = true;
+    try {
+      // Recover apply/READY races and transient queue failures, at most 100
+      // recent applications per tick. Never scan historical applications.
+      const applications = await this.cvMatchResultRepo.manager
+        .getRepository(Application)
+        .createQueryBuilder('application')
+        .innerJoin(UserCV, 'cv', 'cv._id = application.cvId')
+        .leftJoin(
+          CVMatchResult,
+          'result',
+          'result.cvId = application.cvId AND result.jobId = application.jobId',
+        )
+        .where('(application.createdAt >= :since OR cv.parsedAt >= :since)', {
+          since: new Date(Date.now() - 86400000),
+        })
+        .andWhere('cv.parseStatus = :ready', { ready: CVParseStatus.READY })
+        .andWhere('application.aiRankingConsentGranted = true')
+        .andWhere('(result._id IS NULL OR result.status IN (:...statuses))', {
+          statuses: [CVProcessingStatus.PENDING, CVProcessingStatus.COMPLETED],
+        })
+        .andWhere('application._id > :cursor', {
+          cursor: this.reconciliationCursor,
+        })
+        .orderBy('application._id', 'ASC')
+        .take(100)
+        .getMany();
+      for (const application of applications) {
+        try {
+          await this.enqueueEligibleApplication(application._id);
+        } catch {
+          this.logger.warn(
+            `Automatic matching enqueue deferred: ${application._id}`,
+          );
+        }
+      }
+      this.reconciliationCursor =
+        applications.length === 100
+          ? applications[99]._id
+          : '00000000-0000-0000-0000-000000000000';
+    } catch {
+      this.logger.warn('Automatic matching reconciliation unavailable');
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  /** Queue only opaque IDs, versions, hashes and consent fencing data. */
   async queueCVProcessing(params: {
     cvId: string;
     userId: string;
     applicationId: string;
-    cvUrl: string;
-    cvText: string;
-    job: {
-      _id: string;
-      name: string;
-      description?: string;
-      skills?: string[];
-      level?: string;
-    };
+    cvContentVersion: string;
+    contentHash: string;
+    jobId: string;
+    jobSourceVersion: string;
+    aiRankingConsentGranted: true;
+    aiRankingConsentVersion: string;
+    aiRankingConsentPolicyHash: string;
+    consentIdempotencyKey: string;
   }): Promise<CVMatchResult> {
-    const { cvId, userId, applicationId, cvUrl, cvText, job } = params;
-
-    const existing = await this.cvMatchResultRepo.findOne({
-      where: {
-        cvId,
-        jobId: job._id,
-      },
-    });
-
-    if (existing) {
-      this.logger.log(
-        `CV match result already exists for CV ${cvId} and Job ${job._id}`,
+    return this.cvMatchResultRepo.manager.transaction(async (manager) => {
+      // Serialize both READY and apply events across API/worker processes.
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`${params.cvId}:${params.jobId}`],
       );
+      const repo = manager.getRepository(CVMatchResult);
+      const existing = await repo.findOne({
+        where: { cvId: params.cvId, jobId: params.jobId },
+      });
 
       if (
-        existing.status === CVProcessingStatus.FAILED ||
-        existing.status === CVProcessingStatus.PENDING
+        existing &&
+        !existing.isDeleted &&
+        !existing.deletedAt &&
+        existing.applicationId === params.applicationId &&
+        existing.contentHash === params.contentHash &&
+        existing.jobSourceVersion === params.jobSourceVersion &&
+        (existing.status !== CVProcessingStatus.COMPLETED ||
+          hasCurrentMatchingVersions(existing))
       ) {
-        await this.cvProcessingQueue.add(
-          'reprocess-cv',
-          {
-            cvMatchResultId: existing._id,
-          },
-          {
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 5000 },
-          },
+        this.logger.log(
+          `CV match result already exists for CV ${params.cvId} and Job ${params.jobId}`,
         );
+        if (
+          existing.status === CVProcessingStatus.FAILED ||
+          existing.status === CVProcessingStatus.PENDING
+        ) {
+          await this.cvProcessingQueue.add(
+            'reprocess-cv',
+            { cvMatchResultId: existing._id },
+            {
+              ...retryOptions,
+              jobId: consentIdempotencyKey(
+                params.applicationId,
+                params.cvContentVersion,
+                params.jobSourceVersion,
+              ),
+              removeOnComplete: true,
+              removeOnFail: true,
+            },
+          );
+        }
+        return existing;
       }
 
-      return existing;
-    }
+      const savedResult = await repo.save(
+        repo.create({
+          ...(existing ? { _id: existing._id } : {}),
+          cvId: params.cvId,
+          userId: params.userId,
+          jobId: params.jobId,
+          applicationId: params.applicationId,
+          contentHash: params.contentHash,
+          jobSourceVersion: params.jobSourceVersion,
+          status: CVProcessingStatus.PENDING,
+          isDeleted: false,
+          deletedAt: null,
+        }),
+      );
 
-    const cvMatchResult = this.cvMatchResultRepo.create({
-      cvId,
-      userId,
-      jobId: job._id,
-      applicationId,
-      cvUrl,
-      status: CVProcessingStatus.PENDING,
+      const payload: CVProcessingJobData = {
+        cvMatchResultId: savedResult._id,
+        cvId: params.cvId,
+        userId: params.userId,
+        applicationId: params.applicationId,
+        jobId: params.jobId,
+        cvContentVersion: params.cvContentVersion,
+        contentHash: params.contentHash,
+        jobSourceVersion: params.jobSourceVersion,
+        aiRankingConsentGranted: true,
+        aiRankingConsentVersion: params.aiRankingConsentVersion,
+        aiRankingConsentPolicyHash: params.aiRankingConsentPolicyHash,
+        consentIdempotencyKey: consentIdempotencyKey(
+          params.applicationId,
+          params.cvContentVersion,
+          params.jobSourceVersion,
+        ),
+      };
+
+      await this.cvProcessingQueue.add('process-cv', payload, {
+        ...retryOptions,
+        jobId: payload.consentIdempotencyKey,
+        removeOnComplete: true,
+        removeOnFail: true,
+      });
+      this.logger.log(
+        `Queued CV processing: CV ${params.cvId} for Job ${params.jobId}`,
+      );
+      return savedResult;
     });
-
-    const savedResult = await this.cvMatchResultRepo.save(cvMatchResult);
-
-    const jobSkills = Array.isArray(job.skills)
-      ? job.skills.map((s: any) => (typeof s === 'string' ? s : s.name))
-      : [];
-
-    const jobData: CVProcessingJobData = {
-      cvMatchResultId: savedResult._id,
-      cvText,
-      jobId: job._id,
-      jobName: job.name,
-      jobDescription: job.description || '',
-      jobSkills,
-      jobLevel: job.level || '',
-    };
-
-    await this.cvProcessingQueue.add('process-cv', jobData, {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
-      removeOnComplete: true,
-      removeOnFail: false,
-    });
-
-    this.logger.log(`Queued CV processing: CV ${cvId} for Job ${job._id}`);
-
-    return savedResult;
   }
 
-  /**
-   * Get pre-calculated ranked candidates for a job
-   * Fast query from database instead of real-time processing
-   */
   async getRankedCandidates(
     jobId: string,
     topN = 10,
+    currentJobSourceVersion: string,
+    applicationId?: string,
   ): Promise<CVMatchResult[]> {
-    return await this.cvMatchResultRepo.find({
-      where: {
-        jobId,
+    return this.cvMatchResultRepo
+      .createQueryBuilder('result')
+      .leftJoinAndSelect('result.user', 'user')
+      .leftJoinAndSelect('result.cv', 'cv')
+      .leftJoinAndSelect('result.application', 'application')
+      .leftJoin('result.job', 'job')
+      .where('result.jobId = :jobId', { jobId })
+      .andWhere(
+        applicationId ? 'result.applicationId = :applicationId' : '1=1',
+        { applicationId },
+      )
+      .andWhere('result.status = :status', {
         status: CVProcessingStatus.COMPLETED,
-        isDeleted: false,
-      },
-      order: { matchScore: 'DESC' },
-      take: topN,
-      relations: ['userId', 'cvId', 'applicationId'],
-    });
+      })
+      .andWhere('result.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('result.deletedAt IS NULL')
+      .andWhere('job.isDeleted = false AND job.deletedAt IS NULL')
+      .andWhere("CAST(application.companyId AS text) = job.company->>'_id'")
+      .andWhere('result.jobSourceVersion = :jobSourceVersion', {
+        jobSourceVersion: currentJobSourceVersion,
+      })
+      .andWhere('cv.contentHash IS NOT NULL')
+      .andWhere('result.contentHash = cv.contentHash')
+      .andWhere('result.scoringVersion = :scoringVersion', {
+        scoringVersion: CURRENT_MATCH_SCORING_VERSION,
+      })
+      .andWhere('result.normalizationVersion = :normalizationVersion', {
+        normalizationVersion: CURRENT_SKILL_NORMALIZATION_VERSION,
+      })
+      .andWhere(
+        'application.cvId = result.cvId AND application.userId = result.userId AND application.jobId = result.jobId',
+      )
+      .andWhere('cv.userId = result.userId')
+      .andWhere('(cv.isDeleted = false OR cv.isDeleted IS NULL)')
+      .andWhere('cv.deletedAt IS NULL')
+      .andWhere('application.aiRankingConsentGranted = true')
+      .andWhere('application.aiRankingConsentVersion IS NOT NULL')
+      .andWhere('application.aiRankingConsentPolicyHash IS NOT NULL')
+      .andWhere('application.aiRankingConsentAt IS NOT NULL')
+      .andWhere('application.isDeleted = false')
+      .andWhere('application.deletedAt IS NULL')
+      .andWhere('application.status IN (:...eligibleStatuses)', {
+        eligibleStatuses: [
+          ApplicationStatus.PENDING,
+          ApplicationStatus.REVIEWING,
+          ApplicationStatus.CONSIDERING,
+          ApplicationStatus.APPROVED,
+        ],
+      })
+      .andWhere('user.isDeleted = false')
+      .andWhere('user.deletedAt IS NULL')
+      .orderBy('result.matchScore', 'DESC')
+      .addOrderBy('result._id', 'ASC')
+      .take(topN)
+      .getMany();
   }
 
-  /**
-   * Get processing status for a job
-   */
   async getProcessingStatus(jobId: string): Promise<{
     total: number;
     completed: number;
     processing: number;
     pending: number;
     failed: number;
+    stale: number;
   }> {
+    const reportedStatus = `CASE WHEN result.status = 'COMPLETED' AND
+      (result.scoringVersion IS DISTINCT FROM :scoringVersion OR
+       result.normalizationVersion IS DISTINCT FROM :normalizationVersion)
+      THEN 'STALE' ELSE result.status::text END`;
     const stats = await this.cvMatchResultRepo
       .createQueryBuilder('result')
-      .select('result.status', 'status')
+      .select(reportedStatus, 'status')
+      .setParameters({
+        scoringVersion: CURRENT_MATCH_SCORING_VERSION,
+        normalizationVersion: CURRENT_SKILL_NORMALIZATION_VERSION,
+      })
       .addSelect('COUNT(result._id)', 'count')
       .where('result.jobId = :jobId', { jobId })
       .andWhere('result.isDeleted = :isDeleted', { isDeleted: false })
-      .groupBy('result.status')
+      .groupBy('1')
       .getRawMany();
-
-    const result = {
+    const output = {
       total: 0,
       completed: 0,
       processing: 0,
       pending: 0,
       failed: 0,
+      stale: 0,
     };
-
     for (const stat of stats) {
       const count = parseInt(stat.count, 10);
-      result.total += count;
+      output.total += count;
       switch (stat.status) {
+        case 'STALE':
+          output.stale = count;
+          break;
         case CVProcessingStatus.COMPLETED:
-          result.completed = count;
+          output.completed = count;
           break;
         case CVProcessingStatus.PROCESSING:
-          result.processing = count;
+          output.processing = count;
           break;
         case CVProcessingStatus.PENDING:
-          result.pending = count;
+          output.pending = count;
           break;
         case CVProcessingStatus.FAILED:
-          result.failed = count;
+          output.failed = count;
           break;
       }
     }
-
-    return result;
+    return output;
   }
 
-  /**
-   * Reprocess failed CVs for a job
-   */
   async reprocessFailedCVs(jobId: string): Promise<number> {
     const failedResults = await this.cvMatchResultRepo.find({
-      where: {
-        jobId,
-        status: CVProcessingStatus.FAILED,
-        isDeleted: false,
-      },
+      where: { jobId, status: CVProcessingStatus.FAILED, isDeleted: false },
     });
-
     for (const result of failedResults) {
       await this.cvProcessingQueue.add(
         'reprocess-cv',
-        {
-          cvMatchResultId: result._id,
-        },
-        {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-        },
+        { cvMatchResultId: result._id },
+        retryOptions,
       );
     }
-
     this.logger.log(
       `Requeued ${failedResults.length} failed CV processing jobs for Job ${jobId}`,
     );
-
     return failedResults.length;
   }
 
-  /**
-   * Delete match results when application is deleted
-   */
   async deleteByApplication(applicationId: string): Promise<void> {
     await this.cvMatchResultRepo.update({ applicationId }, { isDeleted: true });
   }
 
-  /**
-   * Re-process all CVs for a job when job details are updated
-   */
-  async reprocessAllCVsForJob(
-    jobId: string,
-    jobData: {
-      name: string;
-      description?: string;
-      skills?: string[];
-      level?: string;
-    },
-  ): Promise<number> {
+  async reprocessAllCVsForJob(jobId: string): Promise<number> {
     const allResults = await this.cvMatchResultRepo.find({
-      where: {
-        jobId,
-        isDeleted: false,
-      },
+      where: { jobId, isDeleted: false },
     });
-
-    if (allResults.length === 0) {
-      this.logger.log(`No CV match results found for Job ${jobId}`);
-      return 0;
-    }
-
-    const jobSkills = Array.isArray(jobData.skills)
-      ? jobData.skills.map((s: any) => (typeof s === 'string' ? s : s.name))
-      : [];
-
+    if (allResults.length === 0) return 0;
     for (const result of allResults) {
       await this.cvMatchResultRepo.update(result._id, {
         status: CVProcessingStatus.PENDING,
@@ -252,88 +452,39 @@ export class CVProcessingService {
         missingSkills: [],
         explanation: null as any,
       });
-
-      const jobProcessingData: CVProcessingJobData = {
-        cvMatchResultId: result._id,
-        cvText: result.cvText || '',
-        jobId: jobId,
-        jobName: jobData.name,
-        jobDescription: jobData.description || '',
-        jobSkills,
-        jobLevel: jobData.level || '',
-      };
-
-      await this.cvProcessingQueue.add('process-cv', jobProcessingData, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: true,
-        removeOnFail: false,
-      });
+      await this.cvProcessingQueue.add(
+        'reprocess-cv',
+        { cvMatchResultId: result._id },
+        retryOptions,
+      );
     }
-
     this.logger.log(
       `Requeued ${allResults.length} CV processing jobs for updated Job ${jobId}`,
     );
-
     return allResults.length;
   }
 
-  /**
-   * Re-process CV when user updates their CV
-   */
-  async reprocessCVForAllJobs(cvId: string, cvUrl: string): Promise<number> {
+  async reprocessCVForAllJobs(cvId: string): Promise<number> {
     const allResults = await this.cvMatchResultRepo.find({
-      where: {
-        cvId,
-        isDeleted: false,
-      },
-      relations: ['job'],
+      where: { cvId, isDeleted: false },
     });
-
-    if (allResults.length === 0) {
-      this.logger.log(`No job applications found for CV ${cvId}`);
-      return 0;
-    }
-
     for (const result of allResults) {
-      const job = result.job;
-      if (!job) continue;
-
       await this.cvMatchResultRepo.update(result._id, {
         status: CVProcessingStatus.PENDING,
-        cvUrl,
         matchScore: 0,
         matchedSkills: [],
         missingSkills: [],
         explanation: null as any,
       });
-
-      const jobSkills = Array.isArray(job.skills)
-        ? job.skills.map((s: any) => (typeof s === 'string' ? s : s.name))
-        : [];
-
-      const jobProcessingData: CVProcessingJobData = {
-        cvMatchResultId: result._id,
-        cvText: result.cvText || '',
-        jobId: job._id,
-        jobName: job.name,
-        jobDescription: job.description || '',
-        jobSkills,
-        jobLevel: job.level || '',
-      };
-
-      await this.cvProcessingQueue.add('process-cv', jobProcessingData, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: true,
-        removeOnFail: false,
-      });
+      await this.cvProcessingQueue.add(
+        'reprocess-cv',
+        { cvMatchResultId: result._id },
+        retryOptions,
+      );
     }
-
     this.logger.log(
       `Requeued ${allResults.length} CV processing jobs for updated CV ${cvId}`,
     );
-
     return allResults.length;
   }
 }

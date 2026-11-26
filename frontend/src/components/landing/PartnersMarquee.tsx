@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 
 const partners = ['FPT Software', 'VNG', 'Tiki', 'VinGroup', 'Momo', 'Shopee', 'Grab', 'Samsung Vietnam'];
 
@@ -6,12 +7,15 @@ export default function PartnersMarquee() {
   const { t } = useTranslation();
 
   const PartnerItem = ({ name }: { name: string }) => (
-    <div className="flex items-center gap-2 mx-10 text-slate-400 dark:text-slate-600 hover:text-slate-700 dark:hover:text-slate-300 transition-colors duration-300 cursor-pointer shrink-0">
+    <Link
+      to={`/companies?search=${encodeURIComponent(name)}`}
+      className="flex items-center gap-2 mx-10 text-slate-400 dark:text-slate-600 hover:text-primary dark:hover:text-primary-light transition-colors duration-300 cursor-pointer shrink-0"
+    >
       <div className="w-8 h-8 rounded-lg bg-slate-200/60 dark:bg-slate-700/60 flex items-center justify-center">
         <span className="text-xs font-bold text-slate-400 dark:text-slate-500">{name.charAt(0)}</span>
       </div>
       <span className="text-lg font-bold tracking-tight whitespace-nowrap">{name}</span>
-    </div>
+    </Link>
   );
 
   return (

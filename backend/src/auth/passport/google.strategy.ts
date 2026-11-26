@@ -24,7 +24,9 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     const email = emails?.[0]?.value?.trim().toLowerCase();
 
     if (!email) {
-      return done(new Error('Google account does not provide an email address'));
+      return done(
+        new Error('Google account does not provide an email address'),
+      );
     }
 
     const user = {

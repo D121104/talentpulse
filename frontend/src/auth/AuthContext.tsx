@@ -19,6 +19,7 @@ interface AuthContextValue {
   completeGoogleLogin: (code: string) => Promise<AuthSession>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<string | null>;
+  updateUser: (updatedFields: Partial<AuthUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -40,6 +41,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAccessToken(null);
     setUser(null);
     setStatus('guest');
+  };
+
+  const updateUser = (updatedFields: Partial<AuthUser>) => {
+    setUser((prev) => (prev ? { ...prev, ...updatedFields } : null));
   };
 
   const refreshSession = async () => {
@@ -74,13 +79,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     completeGoogleLogin: async (code) =>
       applySession(await authApi.exchangeGoogleCode(code)),
     logout: async () => {
+      const token = accessToken;
+      clearSession();
       try {
-        if (accessToken) await authApi.logout(accessToken);
+        if (token) await authApi.logout(token);
       } finally {
         clearSession();
       }
     },
     refreshSession,
+    updateUser,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

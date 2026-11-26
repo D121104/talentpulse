@@ -1,0 +1,32 @@
+groups:
+  - name: talentpulse-backend-log-alerts
+    rules:
+      - alert: BackendErrorLogSpike
+        expr: sum(count_over_time({service="talentpulse-backend", level="error"}[5m])) > 20
+        for: 1m
+        labels:
+          severity: warning
+          service: talentpulse-backend
+        annotations:
+          summary: 'Spike in backend error logs'
+          description: 'Backend emitted {{ $value }} error log entries over the last 5 minutes.'
+
+      - alert: BackendFatalOrUncaughtException
+        expr: sum(count_over_time({service="talentpulse-backend"} |~ "(?i)(unhandledRejection|uncaughtException|FATAL)"[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: talentpulse-backend
+        annotations:
+          summary: 'Fatal log or uncaught exception detected in backend'
+          description: 'Detected {{ $value }} fatal/uncaught exception log lines in backend over the last 5 minutes.'
+
+      - alert: BackendDependencyLogErrors
+        expr: sum(count_over_time({service="talentpulse-backend", level="error"} |~ "(?i)(ECONNREFUSED|ETIMEDOUT|PostgreSQL|Redis|Elasticsearch)"[5m])) > 5
+        for: 1m
+        labels:
+          severity: critical
+          service: talentpulse-backend
+        annotations:
+          summary: 'Backend dependency connection errors in logs'
+          description: 'Detected {{ $value }} dependency connection error log lines in backend over the last 5 minutes.'

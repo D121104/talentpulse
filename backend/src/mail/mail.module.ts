@@ -1,14 +1,20 @@
 import { Module } from '@nestjs/common';
 import { MailService } from './mail.service';
 import { MailController } from './mail.controller';
+import { MailProcessor } from './mail.processor';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { ConfigService } from '@nestjs/config';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bull';
 import { Subscriber } from 'src/subscribers/entities/subscriber.entity';
-import { Job } from 'src/jobs/entities/job.entity';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
+import { createNoopQueueProvider } from 'src/queues/queue-runtime';
+import { ActiveJobsModule } from 'src/active-jobs/active-jobs.module';
+
+const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
@@ -23,7 +29,10 @@ import { Job } from 'src/jobs/entities/job.entity';
           },
         },
         defaults: {
-          from: `"No Reply" <${configService.get<string>('EMAIL_AUTH_USER')}>`,
+          from: `"TalentPulse" <${
+            configService.get<string>('EMAIL_AUTH_USER') ||
+            'no-reply@talentpulse.com'
+          }>`,
         },
         template: (() => {
           const compiledDir = join(__dirname, 'templates');
@@ -39,10 +48,19 @@ import { Job } from 'src/jobs/entities/job.entity';
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([Subscriber, Job]),
+    TypeOrmModule.forFeature([Subscriber]),
+    ActiveJobsModule,
+    ...(queueWorkersEnabled
+      ? [BullModule.registerQueue({ name: 'mail-queue' })]
+      : []),
   ],
   controllers: [MailController],
-  providers: [MailService],
-  exports: [MailService],
+  providers: [
+    MailService,
+    ...(queueWorkersEnabled
+      ? [MailProcessor]
+      : [createNoopQueueProvider('mail-queue')]),
+  ],
+  exports: [MailService, ...(queueWorkersEnabled ? [BullModule] : [])],
 })
 export class MailModule {}

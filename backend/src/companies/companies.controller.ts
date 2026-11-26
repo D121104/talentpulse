@@ -38,6 +38,20 @@ export class CompaniesController {
     return this.companiesService.findAll(query);
   }
 
+  @Get('hr/dashboard-stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.HR, Role.ADMIN)
+  getHrDashboardStats(@User() user: IUser) {
+    return this.companiesService.getHrDashboardStats(user);
+  }
+
+  @Get('top-hiring')
+  getTopHiringCompanies(@Query('limit') limit?: string) {
+    return this.companiesService.getTopHiringCompanies(
+      limit ? parseInt(limit, 10) : 10,
+    );
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.companiesService.findOne(id);

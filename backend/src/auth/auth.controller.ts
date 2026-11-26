@@ -21,6 +21,7 @@ import { Public, User } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { CreateHrDto } from 'src/users/dto/create-hr.dto';
+import { ForgotPasswordDto } from 'src/users/dto/forgot-password.dto';
 
 @Controller('auth')
 @ApiTags('Auth Controller')
@@ -75,17 +76,26 @@ export class AuthController {
   @Public()
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  async googleAuthRedirect(@Req() request: Request & { user: any }, @Res() response: Response) {
+  async googleAuthRedirect(
+    @Req() request: Request & { user: any },
+    @Res() response: Response,
+  ) {
     const frontendUrl = (
       this.configService.get<string>('URL_FRONTEND') || 'http://localhost:5173'
     ).replace(/\/$/, '');
 
     try {
       if (!request.user) {
-        return response.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+        return response.redirect(
+          `${frontendUrl}/login?error=google_auth_failed`,
+        );
       }
-      const code = await this.authService.createGoogleExchangeCode(request.user);
-      return response.redirect(`${frontendUrl}/auth/google/callback?code=${encodeURIComponent(code)}`);
+      const code = await this.authService.createGoogleExchangeCode(
+        request.user,
+      );
+      return response.redirect(
+        `${frontendUrl}/auth/google/callback?code=${encodeURIComponent(code)}`,
+      );
     } catch (error) {
       return response.redirect(`${frontendUrl}/login?error=google_auth_failed`);
     }
@@ -116,17 +126,41 @@ export class AuthController {
   }
 
   @Public()
+  @ApiOperation({ summary: 'Request password reset OTP / email' })
+  @Post('forgot-password')
+  handleForgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Public()
   @ApiOperation({ summary: 'Reset a password with an OTP token' })
   @Post('reset-password')
   handleResetPassword(@Body() body: { token: string; password: string }) {
     return this.authService.resetPassword(body.token, body.password);
   }
 
+  @Public()
+  @ApiOperation({ summary: 'Verify candidate email account' })
+  @Post('verify-account')
+  handleVerifyAccount(@Body() body: { token: string }) {
+    return this.authService.verifyAccount(body.token);
+  }
+
+  @Public()
+  @ApiOperation({ summary: 'Resend candidate account verification email' })
+  @Post('resend-verification')
+  handleResendVerification(@Body() body: { email?: string; userId?: string }) {
+    return this.authService.resendVerification(body.email, body.userId);
+  }
+
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Logout and revoke the current refresh token' })
   @ApiBearerAuth()
   @Post('logout')
-  handleLogout(@Res({ passthrough: true }) response: Response, @User() user: IUser) {
+  handleLogout(
+    @Res({ passthrough: true }) response: Response,
+    @User() user: IUser,
+  ) {
     return this.authService.logout(user, response);
   }
 }

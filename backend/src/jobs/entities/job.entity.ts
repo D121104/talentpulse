@@ -5,6 +5,9 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  Index,
+  BeforeInsert,
+  BeforeUpdate,
 } from 'typeorm';
 
 @Entity('jobs')
@@ -27,6 +30,9 @@ export class Job {
     name: string;
     logo?: string;
     isActive?: boolean;
+    scale?: string;
+    address?: string;
+    industry?: string;
   };
 
   @Column({ type: 'numeric', nullable: true })
@@ -35,7 +41,19 @@ export class Job {
   @Column({ nullable: true })
   level: string;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ nullable: true, default: 'Làm việc tại văn phòng / Onsite' })
+  workingModel: string;
+
+  @Column({ nullable: true, default: 'Đại học trở lên' })
+  education: string;
+
+  @Column({ type: 'text', array: true, default: '{}' })
+  benefits: string[];
+
+  @Column({ type: 'text', array: true, default: '{}' })
+  categories: string[];
+
+  @Column({ type: 'timestamptz', nullable: true })
   startDate: Date;
 
   @Column({ type: 'int', nullable: true })
@@ -44,11 +62,59 @@ export class Job {
   @Column({ nullable: true })
   location: string;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'double precision', nullable: true })
+  lat: number;
+
+  @Column({ type: 'double precision', nullable: true })
+  lon: number;
+
+  @Index({ spatial: true })
+  @Column({
+    type: 'geometry',
+    spatialFeatureType: 'Point',
+    srid: 4326,
+    nullable: true,
+  })
+  locationPoint: { type: string; coordinates: [number, number] } | null;
+
+  @BeforeInsert()
+  @BeforeUpdate()
+  syncLocation() {
+    if (
+      this.lat != null &&
+      this.lon != null &&
+      !isNaN(Number(this.lat)) &&
+      !isNaN(Number(this.lon))
+    ) {
+      this.locationPoint = {
+        type: 'Point',
+        coordinates: [Number(this.lon), Number(this.lat)],
+      };
+    } else {
+      this.locationPoint = null;
+    }
+  }
+
+  @Column({ type: 'timestamptz', nullable: true })
   endDate: Date;
 
   @Column({ default: true })
   isActive: boolean;
+
+  @Column({ default: false })
+  isHot: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  boostedAt: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  boostExpiresAt: Date;
+
+  @Column({ default: false })
+  isFeatured: boolean;
+
+  @Column({ default: false })
+  isUrgent: boolean;
 
   @Column({ default: false })
   isDeleted: boolean;

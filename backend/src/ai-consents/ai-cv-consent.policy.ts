@@ -1,0 +1,88 @@
+import { createHash } from 'crypto';
+import { ConfigService } from '@nestjs/config';
+
+/**
+ * Consent scopes are application capabilities, not user-defined labels.
+ * Adding a scope requires a code change and an explicit policy definition.
+ */
+export enum AiCvConsentScope {
+  CV_MATCHING = 'cv_matching',
+  CV_GENERATION = 'cv_generation',
+}
+
+export interface ActiveAiCvConsentPolicy {
+  scope: AiCvConsentScope;
+  consentVersion: string;
+  policyHash: string;
+}
+
+const DEFAULT_CONSENT_VERSION = 'phase0-v1';
+const DEFAULT_GENERATION_CONSENT_VERSION = 'phase1-v1';
+const MATCHING_POLICY_TEXT =
+  'TalentPulse may process the candidate CV for the explicitly selected AI CV matching purpose.';
+const GENERATION_POLICY_TEXT =
+  'TalentPulse may use the candidate profile and selected CV data to generate an editable CV draft for the candidate review.';
+const DEFAULT_POLICY_HASH = createHash('sha256')
+  .update(MATCHING_POLICY_TEXT, 'utf8')
+  .digest('hex');
+const DEFAULT_GENERATION_POLICY_HASH = createHash('sha256')
+  .update(GENERATION_POLICY_TEXT, 'utf8')
+  .digest('hex');
+
+export const AI_CV_CONSENT_ERROR_MESSAGES = {
+  INVALID_USER_ID: 'Invalid user id',
+  INVALID_CV_ID: 'Invalid CV id',
+  INVALID_SCOPE: 'Invalid AI CV consent scope',
+  POLICY_MISMATCH:
+    'AI CV consent policy/version does not match the active policy',
+  ACTIVE_CONSENT_EXISTS: 'An active consent already exists for this scope',
+  NO_ACTIVE_CONSENT: 'No active CV consent exists for this scope',
+  INVALID_CONSENT: 'No valid consent exists for this AI purpose',
+} as const;
+
+export function isAiCvConsentScope(value: unknown): value is AiCvConsentScope {
+  return Object.values(AiCvConsentScope).includes(value as AiCvConsentScope);
+}
+
+export function getActiveAiCvConsentPolicy(
+  configService?: ConfigService,
+  scope: AiCvConsentScope = AiCvConsentScope.CV_MATCHING,
+): ActiveAiCvConsentPolicy {
+  const isGeneration = scope === AiCvConsentScope.CV_GENERATION;
+  const consentVersion =
+    configService
+      ?.get<string>(
+        isGeneration
+          ? 'AI_CV_GENERATION_CONSENT_VERSION'
+          : 'AI_CV_CONSENT_VERSION',
+      )
+      ?.trim() ||
+    (isGeneration
+      ? DEFAULT_GENERATION_CONSENT_VERSION
+      : DEFAULT_CONSENT_VERSION);
+  const policyHash =
+    configService
+      ?.get<string>(
+        isGeneration
+          ? 'AI_CV_GENERATION_CONSENT_POLICY_HASH'
+          : 'AI_CV_CONSENT_POLICY_HASH',
+      )
+      ?.trim()
+      .toLowerCase() ||
+    (isGeneration ? DEFAULT_GENERATION_POLICY_HASH : DEFAULT_POLICY_HASH);
+
+  if (
+    !/^\w[\w.-]{0,79}$/.test(consentVersion) ||
+    !/^[a-f0-9]{64}$/.test(policyHash)
+  ) {
+    throw new Error(
+      'AI_CV_CONSENT_VERSION must be a simple version and AI_CV_CONSENT_POLICY_HASH must be a SHA-256 hex digest',
+    );
+  }
+
+  return {
+    scope,
+    consentVersion,
+    policyHash,
+  };
+}

@@ -1,0 +1,699 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  TalentPulse demo runtime skeleton: private EC2, ECR, private S3/OAC,
+  optional CloudFront VPC Origin, and least-privilege runtime/deploy IAM.
+  This template intentionally does not contain secret values.
+
+Parameters:
+  DeployIngress:
+    Type: String
+    AllowedValues: [ 'false', 'true' ]
+    Default: 'false'
+    Description: >-
+      false creates the private runtime only. true creates the CloudFront VPC
+      Origin and distribution after the application is healthy.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC containing the private subnet and RDS.
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing private subnet for the EC2 origin.
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Existing RDS security group to which demo ingress is added.
+  RdsPort:
+    Type: Number
+    Default: 5432
+    MinValue: 1
+    MaxValue: 65535
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: Approved Amazon Linux 2023 x86_64 AMI for the target region.
+  InstanceType:
+    Type: String
+    Default: m7i-flex.large
+    AllowedValues: [ m7i-flex.large, c7i-flex.large ]
+  RootVolumeSizeGiB:
+    Type: Number
+    Default: 40
+    MinValue: 20
+    MaxValue: 200
+  BackendRepositoryName:
+    Type: String
+    Default: talentpulse-demo-backend
+  AiRepositoryName:
+    Type: String
+    Default: talentpulse-demo-ai-service
+  FrontendBucketName:
+    Type: String
+    Default: ''
+    Description: Optional globally unique name; leave empty for a generated name.
+  BundleBucketName:
+    Type: String
+    Default: ''
+    Description: Optional globally unique name; leave empty for a generated name.
+  BackendSecretArn:
+    Type: String
+    NoEcho: true
+    Description: Existing Secrets Manager ARN for backend runtime values.
+  AiSecretArn:
+    Type: String
+    NoEcho: true
+    Description: Existing Secrets Manager ARN for AI runtime values.
+  ValkeySecretArn:
+    Type: String
+    NoEcho: true
+    Description: Existing Secrets Manager ARN for Valkey runtime values.
+  BedrockModelArn:
+    Type: String
+    AllowedPattern: '^arn:[^:]+:bedrock:[a-z0-9-]+:([0-9]{12})?:(foundation-model|inference-profile)/[^*]+$'
+    Description: Required approved Bedrock model ARN; wildcard resources are refused.
+  CloudFrontVpcOriginSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Required AWS-managed CloudFront VPC Origin security group ID when ingress is enabled.
+  CloudFrontCachePolicyId:
+    Type: String
+    Default: 658327ea-f89d-4fab-a63d-7e88639e58f6
+    Description: AWS-managed CachingOptimized policy ID.
+  GitHubRepository:
+    Type: String
+    Description: GitHub repository in owner/name form, for example the repository configured by the operator.
+  GitHubOidcProviderArn:
+    Type: String
+    Description: ARN of the pre-created GitHub Actions OIDC provider; account-specific and intentionally not hardcoded.
+
+Rules:
+  IngressRequiresCloudFrontSecurityGroup:
+    Assertions:
+      - Assert: !Or
+          - !Equals [ !Ref DeployIngress, 'false' ]
+          - !Not [ !Equals [ !Ref CloudFrontVpcOriginSecurityGroupId, '' ] ]
+        AssertDescription: DeployIngress=true requires the managed CloudFront VPC Origin security group.
+
+Conditions:
+  IsIngressEnabled: !Equals [ !Ref DeployIngress, 'true' ]
+  HasFrontendBucketName: !Not [ !Equals [ !Ref FrontendBucketName, '' ] ]
+  HasBundleBucketName: !Not [ !Equals [ !Ref BundleBucketName, '' ] ]
+
+Resources:
+  BackendRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref BackendRepositoryName
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      Tags:
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+
+  AiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref AiRepositoryName
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      Tags:
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [ HasFrontendBucketName, !Ref FrontendBucketName, !Ref AWS::NoValue ]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+
+  DeploymentBundleBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [ HasBundleBucketName, !Ref BundleBucketName, !Ref AWS::NoValue ]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldBundles
+            Status: Enabled
+            ExpirationInDays: 14
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 14
+      Tags:
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+
+  FrontendOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-frontend-oac'
+        Description: OAC for the private TalentPulse demo SPA bucket.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: IsIngressEnabled
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOACReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DemoDistribution}'
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt FrontendBucket.Arn
+              - !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  DemoSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private TalentPulse demo EC2 origin and runtime egress.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2'
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+
+  DemoOriginHttpIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsIngressEnabled
+    Properties:
+      GroupId: !Ref DemoSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref CloudFrontVpcOriginSecurityGroupId
+      Description: CloudFront VPC Origin managed security group only.
+
+  RdsIngressFromDemo:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref RdsPort
+      ToPort: !Ref RdsPort
+      SourceSecurityGroupId: !Ref DemoSecurityGroup
+      Description: TalentPulse demo EC2 to existing RDS only.
+
+  DemoLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RetentionInDays: 14
+      LogGroupName: !Sub '/talentpulse/demo/${AWS::StackName}'
+
+  DemoInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-ec2-runtime'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: RuntimePullSecretsLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PullDemoImages
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PullDemoRepositories
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  - !GetAtt BackendRepository.Arn
+                  - !GetAtt AiRepository.Arn
+              - Sid: ReadRuntimeSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref BackendSecretArn
+                  - !Ref AiSecretArn
+                  - !Ref ValkeySecretArn
+              - Sid: WriteRuntimeLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                Resource: !GetAtt DemoLogGroup.Arn
+              - Sid: ReadDeploymentBundles
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${DeploymentBundleBucket.Arn}/bundles/*'
+              - Sid: InvokeApprovedBedrockModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: !Ref BedrockModelArn
+      Tags:
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+
+  DemoInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref DemoInstanceRole ]
+
+  DemoInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: RdsIngressFromDemo
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref DemoInstanceProfile
+      SubnetId: !Ref PrivateSubnetId
+      SecurityGroupIds: [ !Ref DemoSecurityGroup ]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref RootVolumeSizeGiB
+            Encrypted: true
+            DeleteOnTermination: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-runtime'
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            mkdir -p /opt/talentpulse/{releases,bin} /etc/talentpulse /run/talentpulse
+            chmod 0750 /opt/talentpulse /opt/talentpulse/releases /opt/talentpulse/bin /etc/talentpulse
+            dnf install -y docker awscli-2 amazon-cloudwatch-agent curl unzip jq python3
+            systemctl enable --now docker
+            mkdir -p /usr/local/lib/docker/cli-plugins
+            curl --fail --silent --show-error --location \
+              https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-x86_64 \
+              --output /usr/local/lib/docker/cli-plugins/docker-compose
+            chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
+            systemctl enable --now amazon-ssm-agent || true
+            metadata_token="$(curl --fail --silent --show-error -X PUT \
+              -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
+              http://169.254.169.254/latest/api/token)"
+            instance_id="$(curl --fail --silent --show-error \
+              -H "X-aws-ec2-metadata-token: $metadata_token" \
+              http://169.254.169.254/latest/meta-data/instance-id)"
+            cat >/etc/talentpulse/demo-runtime.conf <<CONF
+            EXPECTED_ACCOUNT='${AWS::AccountId}'
+            EXPECTED_REGION='${AWS::Region}'
+            EXPECTED_INSTANCE_ID='$instance_id'
+            EXPECTED_INSTANCE_NAME='${AWS::StackName}-runtime'
+            BACKEND_REPOSITORY_URI='${BackendRepository.RepositoryUri}'
+            AI_REPOSITORY_URI='${AiRepository.RepositoryUri}'
+            DEPLOYMENT_BUNDLE_BUCKET='${DeploymentBundleBucket}'
+            BACKEND_SECRET_ARN='${BackendSecretArn}'
+            AI_SECRET_ARN='${AiSecretArn}'
+            VALKEY_SECRET_ARN='${ValkeySecretArn}'
+            CONF
+            chown root:root /etc/talentpulse/demo-runtime.conf
+            chmod 0600 /etc/talentpulse/demo-runtime.conf
+            cat >/opt/talentpulse/bin/deploy-demo <<'BOOTSTRAP'
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            umask 077
+            [[ "$(id -u)" == 0 ]] || { printf 'demo bootstrap requires root\n' >&2; exit 1; }
+            [[ "$#" -ge 4 ]] || { printf 'demo bootstrap arguments are incomplete\n' >&2; exit 1; }
+            bundle="$2"
+            commit="$4"
+            [[ "$commit" =~ ^[0-9a-fA-F]{40}$ ]] || { printf 'invalid commit\n' >&2; exit 1; }
+            [[ "$bundle" == "s3://${DeploymentBundleBucket}/bundles/$commit" ]] || { printf 'invalid bundle\n' >&2; exit 1; }
+            tmp="$(mktemp -d /opt/talentpulse/.bootstrap.XXXXXX)"
+            trap 'rm -rf "$tmp"' EXIT
+            mkdir -p "$tmp/nginx" "$tmp/ai-service"
+            for object in docker-compose.yml nginx/default.conf ai-entrypoint.sh .env.example release_bundle.py RELEASE-MANIFEST.json SHA256SUMS ai-service/pyproject.toml ai-service/uv.lock; do
+              aws --no-cli-pager s3 cp "$bundle/$object" "$tmp/$object" --only-show-errors >/dev/null
+            done
+            python3 "$tmp/release_bundle.py" verify \
+              --bundle-dir "$tmp" --source-commit "$commit" \
+              --backend-image "$6" --ai-image "$8"
+            install -o root -g root -m 0750 "$tmp/release_bundle.py" /opt/talentpulse/bin/release_bundle.py
+            install -o root -g root -m 0750 "$tmp/ai-entrypoint.sh" /opt/talentpulse/bin/deploy-demo.real
+            exec /opt/talentpulse/bin/deploy-demo.real "$@"
+            BOOTSTRAP
+            chmod 0750 /opt/talentpulse/bin/deploy-demo
+            cat >/opt/talentpulse/bin/deploy-demo-resume <<'RESUME'
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            umask 077
+            info=/opt/talentpulse/current/release.info
+            [[ -r "$info" ]] || exit 0
+            # release.info is generated by the verified deploy helper and contains
+            # only non-secret release identifiers/digests.
+            # shellcheck disable=SC1091
+            source "$info"
+            exec /opt/talentpulse/bin/deploy-demo --resume \
+              --bundle "$bundle" --commit "$commit" \
+              --backend-image "$backend_image" --ai-image "$ai_image" \
+              --migration-mode skip
+            RESUME
+            chmod 0750 /opt/talentpulse/bin/deploy-demo-resume
+            cat >/etc/systemd/system/talentpulse-demo.service <<'UNIT'
+            [Unit]
+            Description=TalentPulse demo runtime
+            After=network-online.target docker.service
+            Wants=network-online.target
+            Requires=docker.service
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/opt/talentpulse/bin/deploy-demo-resume
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+            systemctl daemon-reload
+            systemctl enable talentpulse-demo.service
+
+  DemoVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Condition: IsIngressEnabled
+    Properties:
+      VpcOriginEndpointConfig:
+        Arn: !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${DemoInstance}'
+        Name: !Sub '${AWS::StackName}-ec2-vpc-origin'
+        HTTPPort: 80
+        OriginProtocolPolicy: http-only
+        IpAddressType: ipv4
+      Tags:
+        - Key: Project
+          Value: talentpulse
+        - Key: Environment
+          Value: demo
+
+  SpaRouteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-spa-route'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Rewrite extensionless SPA routes without changing API errors.
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          var isApi = uri.indexOf('/api/') === 0 || uri.indexOf('/socket.io/') === 0;
+          if (!isApi && uri !== '/' && uri.indexOf('.') === -1) {
+            request.uri = '/index.html';
+          }
+          return request;
+        }
+
+  DemoDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: IsIngressEnabled
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: TalentPulse demo unified SPA/API/WebSocket ingress.
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - Id: frontend-s3
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+            OriginAccessControlId: !GetAtt FrontendOriginAccessControl.Id
+          - Id: backend-vpc-origin
+            DomainName: !GetAtt DemoInstance.PrivateDnsName
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt DemoVpcOrigin.Id
+              OriginKeepaliveTimeout: 60
+              OriginReadTimeout: 120
+        DefaultCacheBehavior:
+          TargetOriginId: frontend-s3
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [ GET, HEAD ]
+          CachePolicyId: !Ref CloudFrontCachePolicyId
+          Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRouteFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: backend-vpc-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [ DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT ]
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - Authorization
+                - Content-Type
+                - Origin
+                - Referer
+                - User-Agent
+                - X-Forwarded-Proto
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+            Compress: true
+          - PathPattern: /socket.io/*
+            TargetOriginId: backend-vpc-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [ DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT ]
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - Authorization
+                - Connection
+                - Host
+                - Origin
+                - Sec-WebSocket-Key
+                - Sec-WebSocket-Protocol
+                - Sec-WebSocket-Version
+                - Upgrade
+                - X-Forwarded-Proto
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+        PriceClass: PriceClass_100
+
+  GitHubOidcDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-github-deploy'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:demo'
+                token.actions.githubusercontent.com:ref: refs/heads/develop
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub '${GitHubRepository}/.github/workflows/demo-deploy.yml@refs/heads/develop'
+      Policies:
+        - PolicyName: DemoDeploymentOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PushImmutableImages
+                Effect: Allow
+                Action:
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:DescribeImages
+                  - ecr:DescribeImageScanFindings
+                Resource:
+                  - !GetAtt BackendRepository.Arn
+                  - !GetAtt AiRepository.Arn
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: ListDemoArtifactPrefixes
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - !GetAtt FrontendBucket.Arn
+                  - !GetAtt DeploymentBundleBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - '*'
+                      - bundles/*
+              - Sid: WriteFrontendArtifacts
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                Resource: !Sub '${FrontendBucket.Arn}/*'
+              - Sid: WriteDeploymentBundles
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                Resource: !Sub '${DeploymentBundleBucket.Arn}/bundles/*'
+              - Sid: InspectDemoStack
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+              - Sid: UpdateDemoStack
+                Effect: Allow
+                Action: cloudformation:UpdateStack
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+              - Sid: InspectDemoInstance
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ssm:DescribeInstanceInformation
+                Resource: '*'
+              # GetCommandInvocation does not support an instance/document
+              # resource ARN; AWS requires Resource '*' for this read action.
+              - Sid: ReadDemoCommandInvocation
+                Effect: Allow
+                Action: ssm:GetCommandInvocation
+                Resource: '*'
+              - Sid: SendCommandToDemoInstance
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${DemoInstance}'
+              - Sid: PassOnlyDemoInstanceRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt DemoInstanceRole.Arn
+
+  GitHubCloudFrontIngressPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: IsIngressEnabled
+    Properties:
+      ManagedPolicyName: !Sub '${AWS::StackName}-github-cloudfront-ingress'
+      Roles:
+        - !Ref GitHubOidcDeployRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: InvalidateDemoDistribution
+            Effect: Allow
+            Action:
+              - cloudfront:CreateInvalidation
+              - cloudfront:GetDistribution
+            Resource: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DemoDistribution}'
+
+Outputs:
+  DemoInstanceId:
+    Value: !Ref DemoInstance
+  DemoInstancePrivateDnsName:
+    Value: !GetAtt DemoInstance.PrivateDnsName
+  DemoSecurityGroupId:
+    Value: !Ref DemoSecurityGroup
+  BackendRepositoryUri:
+    Value: !GetAtt BackendRepository.RepositoryUri
+  AiRepositoryUri:
+    Value: !GetAtt AiRepository.RepositoryUri
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  DeploymentBundleBucketName:
+    Value: !Ref DeploymentBundleBucket
+  DemoDistributionId:
+    Condition: IsIngressEnabled
+    Value: !Ref DemoDistribution
+  DemoDistributionDomainName:
+    Condition: IsIngressEnabled
+    Value: !GetAtt DemoDistribution.DomainName
+  GitHubDeployRoleArn:
+    Value: !GetAtt GitHubOidcDeployRole.Arn

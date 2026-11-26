@@ -1,0 +1,45 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'severity', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'slack-notifications'
+  routes:
+    - matchers:
+        - 'severity = "critical"'
+      group_wait: 10s
+      repeat_interval: 1h
+      receiver: 'slack-notifications'
+
+inhibit_rules:
+  - source_matchers:
+      - 'severity = "critical"'
+    target_matchers:
+      - 'severity = "warning"'
+    equal: ['service', 'instance']
+
+  - source_matchers:
+      - 'alertname =~ "BackendDown|PostgresDown|RedisDown|ElasticsearchDown"'
+    target_matchers:
+      - 'severity = "warning"'
+    equal: ['service']
+
+receivers:
+  - name: 'slack-notifications'
+    slack_configs:
+      - api_url: '__SLACK_WEBHOOK_URL__'
+        channel: '__SLACK_CHANNEL__'
+        username: '__SLACK_USERNAME__'
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}danger{{ else }}warning{{ end }}{{ else }}good{{ end }}'
+        title: '{{ if eq .Status "firing" }}[FIRING:{{ .Alerts.Firing | len }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }} ({{ .CommonLabels.service }})'
+        text: |-
+          {{ range .Alerts -}}
+          *Severity:* {{ .Labels.severity | toUpper }}
+          *Service:* {{ .Labels.service }}{{ if .Labels.instance }} (`{{ .Labels.instance }}`){{ end }}
+          *Summary:* {{ .Annotations.summary }}
+          {{ if .Annotations.description }}*Description:* {{ .Annotations.description }}{{ end }}
+          {{ end }}

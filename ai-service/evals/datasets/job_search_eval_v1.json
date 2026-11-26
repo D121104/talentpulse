@@ -1,0 +1,2220 @@
+{
+  "schema_version": "job-search-eval-v1",
+  "description": "Synthetic retrieval evaluation corpus; no personal data.",
+  "jobs": [
+    {
+      "job_id": "71b254a4-204a-5be3-b5cb-64bf6605c78a",
+      "title": "Backend Python Engineer",
+      "company_name": "Synthetic Be",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 3200,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "FastAPI",
+        "PostgreSQL",
+        "Docker"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Backend Python Engineer synthetic role. Skills: Python, FastAPI, PostgreSQL, Docker.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "7e92d396-bcda-53ac-b31e-c8ae3e28e1c2",
+      "title": "Java Backend Developer",
+      "company_name": "Synthetic Be",
+      "location": "Ho Chi Minh City",
+      "level": "senior",
+      "salary": 4800,
+      "salary_currency": "USD",
+      "skills": [
+        "Java",
+        "Spring Boot",
+        "Kafka",
+        "PostgreSQL"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Java Backend Developer synthetic role. Skills: Java, Spring Boot, Kafka, PostgreSQL.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "af4dcf57-05ce-5a9d-bfba-e443a08df5d0",
+      "title": "Node.js API Engineer",
+      "company_name": "Synthetic Be",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 3000,
+      "salary_currency": "USD",
+      "skills": [
+        "Node.js",
+        "TypeScript",
+        "NestJS",
+        "Redis"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Node.js API Engineer synthetic role. Skills: Node.js, TypeScript, NestJS, Redis.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "ef817582-36fc-5503-bf87-9a1b467e08fc",
+      "title": "Go Platform Backend Engineer",
+      "company_name": "Synthetic Be",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 5500,
+      "salary_currency": "USD",
+      "skills": [
+        "Go",
+        "gRPC",
+        "Kubernetes",
+        "PostgreSQL"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Go Platform Backend Engineer synthetic role. Skills: Go, gRPC, Kubernetes, PostgreSQL.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "5b473af1-a396-5f63-be90-6da747d93ed4",
+      "title": "Kotlin Backend Engineer",
+      "company_name": "Synthetic Be",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 4200,
+      "salary_currency": "USD",
+      "skills": [
+        "Kotlin",
+        "Spring Boot",
+        "Kafka",
+        "AWS"
+      ],
+      "work_mode": "remote",
+      "employment_type": "contract",
+      "description": "Kotlin Backend Engineer synthetic role. Skills: Kotlin, Spring Boot, Kafka, AWS.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "937c86d2-7112-50b7-8f4f-7f6d0e70c9e6",
+      "title": "Frontend React Engineer",
+      "company_name": "Synthetic Fe",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 3100,
+      "salary_currency": "USD",
+      "skills": [
+        "React",
+        "TypeScript",
+        "Next.js",
+        "CSS"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Frontend React Engineer synthetic role. Skills: React, TypeScript, Next.js, CSS.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "d46b7b7d-ffa9-51c1-b3a1-751cd0dd6768",
+      "title": "Vue.js Frontend Developer",
+      "company_name": "Synthetic Fe",
+      "location": "Ho Chi Minh City",
+      "level": "mid",
+      "salary": 2800,
+      "salary_currency": "USD",
+      "skills": [
+        "Vue.js",
+        "JavaScript",
+        "CSS",
+        "HTML"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Vue.js Frontend Developer synthetic role. Skills: Vue.js, JavaScript, CSS, HTML.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "551cd049-e699-51f1-8a0c-e58b616b599b",
+      "title": "Angular UI Engineer",
+      "company_name": "Synthetic Fe",
+      "location": "Da Nang",
+      "level": "senior",
+      "salary": 3900,
+      "salary_currency": "USD",
+      "skills": [
+        "Angular",
+        "TypeScript",
+        "RxJS",
+        "SCSS"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Angular UI Engineer synthetic role. Skills: Angular, TypeScript, RxJS, SCSS.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "f541b830-c0e5-58bd-8dfe-c636b9a3a8af",
+      "title": "Next.js Web Engineer",
+      "company_name": "Synthetic Fe",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 3700,
+      "salary_currency": "USD",
+      "skills": [
+        "Next.js",
+        "React",
+        "TypeScript",
+        "SEO"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Next.js Web Engineer synthetic role. Skills: Next.js, React, TypeScript, SEO.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "4dc86e15-5e2c-568a-bc7b-cc30788aa538",
+      "title": "Design Systems Frontend Engineer",
+      "company_name": "Synthetic Fe",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 4300,
+      "salary_currency": "USD",
+      "skills": [
+        "React",
+        "Storybook",
+        "Accessibility",
+        "TypeScript"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Design Systems Frontend Engineer synthetic role. Skills: React, Storybook, Accessibility, TypeScript.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "98fcca15-0f06-58e0-9e86-b6b5cbcc5bf3",
+      "title": "Frontend Performance Specialist",
+      "company_name": "Synthetic Fe",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 3300,
+      "salary_currency": "USD",
+      "skills": [
+        "React",
+        "Web Vitals",
+        "JavaScript",
+        "Lighthouse"
+      ],
+      "work_mode": "remote",
+      "employment_type": "contract",
+      "description": "Frontend Performance Specialist synthetic role. Skills: React, Web Vitals, JavaScript, Lighthouse.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "f86e469c-3085-5ff2-bd80-3bb86b3105fd",
+      "title": "Product Data Analyst",
+      "company_name": "Synthetic Data",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 2700,
+      "salary_currency": "USD",
+      "skills": [
+        "SQL",
+        "Python",
+        "Tableau",
+        "A/B testing"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Product Data Analyst synthetic role. Skills: SQL, Python, Tableau, A/B testing.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "3bc7e578-c5a3-5b13-a78d-fccfd813c392",
+      "title": "Analytics Engineer",
+      "company_name": "Synthetic Data",
+      "location": "Ho Chi Minh City",
+      "level": "mid",
+      "salary": 3500,
+      "salary_currency": "USD",
+      "skills": [
+        "dbt",
+        "SQL",
+        "Snowflake",
+        "Looker"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Analytics Engineer synthetic role. Skills: dbt, SQL, Snowflake, Looker.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "1be799d8-a1d9-51dd-a33d-113356482650",
+      "title": "Data Engineer",
+      "company_name": "Synthetic Data",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 5100,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "Spark",
+        "Airflow",
+        "AWS"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Data Engineer synthetic role. Skills: Python, Spark, Airflow, AWS.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "29fd9725-2581-5883-b1b8-5aa4fe64b5ac",
+      "title": "Data Warehouse Developer",
+      "company_name": "Synthetic Data",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 4400,
+      "salary_currency": "USD",
+      "skills": [
+        "SQL",
+        "ETL",
+        "BigQuery",
+        "Data modeling"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Data Warehouse Developer synthetic role. Skills: SQL, ETL, BigQuery, Data modeling.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "3120cd6b-b654-5cd5-a3d2-1b71c5df43a8",
+      "title": "Business Intelligence Analyst",
+      "company_name": "Synthetic Data",
+      "location": "Ho Chi Minh City",
+      "level": "junior",
+      "salary": 2300,
+      "salary_currency": "USD",
+      "skills": [
+        "SQL",
+        "Power BI",
+        "Excel",
+        "Dashboard"
+      ],
+      "work_mode": "onsite",
+      "employment_type": "full_time",
+      "description": "Business Intelligence Analyst synthetic role. Skills: SQL, Power BI, Excel, Dashboard.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "72d6af30-e0cc-530a-9b34-cef07d8b6faf",
+      "title": "Streaming Data Engineer",
+      "company_name": "Synthetic Data",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 4600,
+      "salary_currency": "USD",
+      "skills": [
+        "Kafka",
+        "Flink",
+        "Java",
+        "Python"
+      ],
+      "work_mode": "remote",
+      "employment_type": "contract",
+      "description": "Streaming Data Engineer synthetic role. Skills: Kafka, Flink, Java, Python.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "3a4fb78a-ca79-5391-8fc7-6554908ab875",
+      "title": "Machine Learning Engineer",
+      "company_name": "Synthetic Ml",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 5200,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "PyTorch",
+        "MLOps",
+        "Docker"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Machine Learning Engineer synthetic role. Skills: Python, PyTorch, MLOps, Docker.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "a12242f1-7bb0-51f6-8bb1-f4105286e70b",
+      "title": "NLP Engineer",
+      "company_name": "Synthetic Ml",
+      "location": "Ho Chi Minh City",
+      "level": "mid",
+      "salary": 4900,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "NLP",
+        "Transformers",
+        "PyTorch"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "NLP Engineer synthetic role. Skills: Python, NLP, Transformers, PyTorch.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "321715f9-aee5-5bda-84f7-4067e7017419",
+      "title": "Computer Vision Engineer",
+      "company_name": "Synthetic Ml",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 5600,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "OpenCV",
+        "TensorFlow",
+        "CUDA"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Computer Vision Engineer synthetic role. Skills: Python, OpenCV, TensorFlow, CUDA.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "d45b368c-4a92-544e-ad7a-f377285be976",
+      "title": "Recommendation Scientist",
+      "company_name": "Synthetic Ml",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 4500,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "Ranking",
+        "Recommender systems",
+        "Spark"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Recommendation Scientist synthetic role. Skills: Python, Ranking, Recommender systems, Spark.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "aeebd7d9-93bb-5165-8c26-f0d88999e177",
+      "title": "LLM Application Engineer",
+      "company_name": "Synthetic Ml",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 5000,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "RAG",
+        "LangChain",
+        "Vector search"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "LLM Application Engineer synthetic role. Skills: Python, RAG, LangChain, Vector search.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "6b81e21f-914e-5a35-8bf5-65a23118dc6c",
+      "title": "MLOps Data Scientist",
+      "company_name": "Synthetic Ml",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 4800,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "MLflow",
+        "Kubernetes",
+        "SQL"
+      ],
+      "work_mode": "remote",
+      "employment_type": "contract",
+      "description": "MLOps Data Scientist synthetic role. Skills: Python, MLflow, Kubernetes, SQL.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "657bf874-2917-591c-ba7b-7439fc9aeec2",
+      "title": "Site Reliability Engineer",
+      "company_name": "Synthetic Sre",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 5300,
+      "salary_currency": "USD",
+      "skills": [
+        "Kubernetes",
+        "Terraform",
+        "Prometheus",
+        "Linux"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Site Reliability Engineer synthetic role. Skills: Kubernetes, Terraform, Prometheus, Linux.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "0acf9203-f387-5e96-801c-8dd612411a58",
+      "title": "Cloud SRE",
+      "company_name": "Synthetic Sre",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 5700,
+      "salary_currency": "USD",
+      "skills": [
+        "AWS",
+        "Terraform",
+        "Linux",
+        "Incident response"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Cloud SRE synthetic role. Skills: AWS, Terraform, Linux, Incident response.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "571d8f65-ba76-5c4a-8ff5-30a27cdb1990",
+      "title": "DevOps Engineer",
+      "company_name": "Synthetic Devops",
+      "location": "Ho Chi Minh City",
+      "level": "mid",
+      "salary": 4100,
+      "salary_currency": "USD",
+      "skills": [
+        "Azure",
+        "CI/CD",
+        "Docker",
+        "Terraform"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "DevOps Engineer synthetic role. Skills: Azure, CI/CD, Docker, Terraform.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "78ce237b-bda5-5e5f-933d-576422ab418e",
+      "title": "Platform CI Engineer",
+      "company_name": "Synthetic Devops",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 3800,
+      "salary_currency": "USD",
+      "skills": [
+        "GitLab CI",
+        "Kubernetes",
+        "Docker",
+        "Linux"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Platform CI Engineer synthetic role. Skills: GitLab CI, Kubernetes, Docker, Linux.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "4805374e-3aba-514d-9c66-097dd724e50b",
+      "title": "Observability Engineer",
+      "company_name": "Synthetic Observability",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 4400,
+      "salary_currency": "USD",
+      "skills": [
+        "Prometheus",
+        "Grafana",
+        "OpenTelemetry",
+        "Python"
+      ],
+      "work_mode": "remote",
+      "employment_type": "contract",
+      "description": "Observability Engineer synthetic role. Skills: Prometheus, Grafana, OpenTelemetry, Python.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "ada6ef13-0ed0-5b89-b4fe-179d62d8d598",
+      "title": "Release Engineer",
+      "company_name": "Synthetic Release",
+      "location": "Hanoi",
+      "level": "junior",
+      "salary": 2600,
+      "salary_currency": "USD",
+      "skills": [
+        "CI/CD",
+        "GitHub Actions",
+        "Docker",
+        "Linux"
+      ],
+      "work_mode": "onsite",
+      "employment_type": "full_time",
+      "description": "Release Engineer synthetic role. Skills: CI/CD, GitHub Actions, Docker, Linux.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "8a11a1d0-6eef-5d01-956e-0c81e7eff3d4",
+      "title": "QA Automation Engineer",
+      "company_name": "Synthetic Qa",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 3000,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "Selenium",
+        "API testing",
+        "Pytest"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "QA Automation Engineer synthetic role. Skills: Python, Selenium, API testing, Pytest.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "41741400-73c7-5bca-a80c-eced1791c6d8",
+      "title": "Quality Assurance Analyst",
+      "company_name": "Synthetic Qa",
+      "location": "Ho Chi Minh City",
+      "level": "junior",
+      "salary": 2000,
+      "salary_currency": "USD",
+      "skills": [
+        "Manual testing",
+        "Test cases",
+        "SQL",
+        "Jira"
+      ],
+      "work_mode": "onsite",
+      "employment_type": "full_time",
+      "description": "Quality Assurance Analyst synthetic role. Skills: Manual testing, Test cases, SQL, Jira.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "62fb2ea0-b8ef-520a-932d-7289ddc4376c",
+      "title": "Performance Test Engineer",
+      "company_name": "Synthetic Qa",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 4200,
+      "salary_currency": "USD",
+      "skills": [
+        "JMeter",
+        "Load testing",
+        "Python",
+        "Observability"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Performance Test Engineer synthetic role. Skills: JMeter, Load testing, Python, Observability.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "bea81c34-c81c-54ba-9ec5-56eaa285b86f",
+      "title": "Mobile QA Engineer",
+      "company_name": "Synthetic Qa",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 2900,
+      "salary_currency": "USD",
+      "skills": [
+        "Appium",
+        "Android",
+        "iOS",
+        "Regression testing"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Mobile QA Engineer synthetic role. Skills: Appium, Android, iOS, Regression testing.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "0b53b1e0-4346-5723-90da-1b889e98bb38",
+      "title": "QA Security Tester",
+      "company_name": "Synthetic Qa",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 3500,
+      "salary_currency": "USD",
+      "skills": [
+        "OWASP",
+        "API testing",
+        "Burp Suite",
+        "Python"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "contract",
+      "description": "QA Security Tester synthetic role. Skills: OWASP, API testing, Burp Suite, Python.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "4091e9e3-1c3e-5d74-a763-245e256455a7",
+      "title": "Technical Product Manager",
+      "company_name": "Synthetic Pm",
+      "location": "Ho Chi Minh City",
+      "level": "senior",
+      "salary": 4600,
+      "salary_currency": "USD",
+      "skills": [
+        "Roadmaps",
+        "APIs",
+        "Product analytics",
+        "Agile"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Technical Product Manager synthetic role. Skills: Roadmaps, APIs, Product analytics, Agile.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "deeab17d-fd15-5510-afb3-6a1d44b16780",
+      "title": "Growth Product Manager",
+      "company_name": "Synthetic Pm",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 3900,
+      "salary_currency": "USD",
+      "skills": [
+        "A/B testing",
+        "Analytics",
+        "SQL",
+        "Agile"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Growth Product Manager synthetic role. Skills: A/B testing, Analytics, SQL, Agile.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "ee45d574-75cc-55d1-8bd7-c7b6e9ca023c",
+      "title": "Data Product Manager",
+      "company_name": "Synthetic Pm",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 4500,
+      "salary_currency": "USD",
+      "skills": [
+        "Data products",
+        "SQL",
+        "Stakeholder management",
+        "Roadmaps"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Data Product Manager synthetic role. Skills: Data products, SQL, Stakeholder management, Roadmaps.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "13ba0048-3aba-57d3-b84a-e551038ee80c",
+      "title": "Mobile Product Owner",
+      "company_name": "Synthetic Po",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 3300,
+      "salary_currency": "USD",
+      "skills": [
+        "Mobile",
+        "User stories",
+        "Backlog",
+        "Agile"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Mobile Product Owner synthetic role. Skills: Mobile, User stories, Backlog, Agile.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "1cedfa43-b850-5f46-8e9c-0fb193207037",
+      "title": "Application Security Engineer",
+      "company_name": "Synthetic Sec",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 5000,
+      "salary_currency": "USD",
+      "skills": [
+        "AppSec",
+        "OWASP",
+        "SAST",
+        "Python"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Application Security Engineer synthetic role. Skills: AppSec, OWASP, SAST, Python.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "ce2bb979-d3d0-5967-86c4-cd77e5b3f8b5",
+      "title": "Cloud Security Engineer",
+      "company_name": "Synthetic Sec",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 5600,
+      "salary_currency": "USD",
+      "skills": [
+        "AWS",
+        "IAM",
+        "Terraform",
+        "Threat modeling"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Cloud Security Engineer synthetic role. Skills: AWS, IAM, Terraform, Threat modeling.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "fc13a7d4-2f9f-5bc1-aaea-f8385da91be1",
+      "title": "Penetration Tester",
+      "company_name": "Synthetic Sec",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 4000,
+      "salary_currency": "USD",
+      "skills": [
+        "Penetration testing",
+        "Burp Suite",
+        "OWASP",
+        "Linux"
+      ],
+      "work_mode": "remote",
+      "employment_type": "contract",
+      "description": "Penetration Tester synthetic role. Skills: Penetration testing, Burp Suite, OWASP, Linux.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "9e6ba439-c1d2-5e15-9f0d-5b5baee3e5b1",
+      "title": "Identity Access Engineer",
+      "company_name": "Synthetic Sec",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 3900,
+      "salary_currency": "USD",
+      "skills": [
+        "IAM",
+        "OAuth2",
+        "SAML",
+        "Python"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Identity Access Engineer synthetic role. Skills: IAM, OAuth2, SAML, Python.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "f1697ba1-5b03-5bae-b2a8-eb0c78d22a03",
+      "title": "Android Engineer",
+      "company_name": "Synthetic Mobile",
+      "location": "Ho Chi Minh City",
+      "level": "mid",
+      "salary": 3600,
+      "salary_currency": "USD",
+      "skills": [
+        "Kotlin",
+        "Android",
+        "Jetpack",
+        "MVVM"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Android Engineer synthetic role. Skills: Kotlin, Android, Jetpack, MVVM.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "d8a91b6a-d5aa-5830-9749-a46f50808021",
+      "title": "iOS Engineer",
+      "company_name": "Synthetic Mobile",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 5200,
+      "salary_currency": "USD",
+      "skills": [
+        "Swift",
+        "iOS",
+        "SwiftUI",
+        "XCTest"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "iOS Engineer synthetic role. Skills: Swift, iOS, SwiftUI, XCTest.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "b54d9776-067c-5098-80bd-d5028896d0bd",
+      "title": "Flutter Mobile Developer",
+      "company_name": "Synthetic Mobile",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 3200,
+      "salary_currency": "USD",
+      "skills": [
+        "Flutter",
+        "Dart",
+        "Android",
+        "iOS"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Flutter Mobile Developer synthetic role. Skills: Flutter, Dart, Android, iOS.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "13f601b3-a17f-5d15-ade5-09219fd4c190",
+      "title": "Cloud Solutions Architect",
+      "company_name": "Synthetic Cloud",
+      "location": "Remote",
+      "level": "principal",
+      "salary": 6500,
+      "salary_currency": "USD",
+      "skills": [
+        "AWS",
+        "Azure",
+        "Kubernetes",
+        "Architecture"
+      ],
+      "work_mode": "remote",
+      "employment_type": "contract",
+      "description": "Cloud Solutions Architect synthetic role. Skills: AWS, Azure, Kubernetes, Architecture.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "4a9d4b93-dea8-525a-8b50-08cb1cc8a325",
+      "title": "Platform Engineer",
+      "company_name": "Synthetic Platform",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 5400,
+      "salary_currency": "USD",
+      "skills": [
+        "Kubernetes",
+        "Go",
+        "Terraform",
+        "AWS"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Platform Engineer synthetic role. Skills: Kubernetes, Go, Terraform, AWS.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "b42f4b02-532c-5288-a6b4-6f2f18fd3768",
+      "title": "Developer Experience Engineer",
+      "company_name": "Synthetic Platform",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 4300,
+      "salary_currency": "USD",
+      "skills": [
+        "Go",
+        "APIs",
+        "Developer tooling",
+        "CI/CD"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Developer Experience Engineer synthetic role. Skills: Go, APIs, Developer tooling, CI/CD.",
+      "is_active": true,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "64f73a47-8de0-5be9-946f-36308512be19",
+      "title": "Legacy Python Developer",
+      "company_name": "Synthetic Old",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 2800,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "Django",
+        "SQL"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Legacy Python Developer synthetic role. Skills: Python, Django, SQL.",
+      "is_active": false,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "ec693534-5fab-57c4-beb8-1b2a6be0b253",
+      "title": "React Engineer Archive",
+      "company_name": "Synthetic Deleted",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 3000,
+      "salary_currency": "USD",
+      "skills": [
+        "React",
+        "TypeScript",
+        "CSS"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "React Engineer Archive synthetic role. Skills: React, TypeScript, CSS.",
+      "is_active": false,
+      "is_deleted": true,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "9c58b1a3-0898-5379-afd5-1a8996dc18ec",
+      "title": "Machine Learning Engineer Closed",
+      "company_name": "Synthetic Old",
+      "location": "Ho Chi Minh City",
+      "level": "senior",
+      "salary": 5000,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "PyTorch",
+        "MLOps"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Machine Learning Engineer Closed synthetic role. Skills: Python, PyTorch, MLOps.",
+      "is_active": false,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "ec4f3c2d-2ae3-56b5-8922-7ecb443a6b1f",
+      "title": "SRE Deleted Listing",
+      "company_name": "Synthetic Deleted",
+      "location": "Da Nang",
+      "level": "senior",
+      "salary": 4500,
+      "salary_currency": "USD",
+      "skills": [
+        "Kubernetes",
+        "Terraform",
+        "Prometheus"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "SRE Deleted Listing synthetic role. Skills: Kubernetes, Terraform, Prometheus.",
+      "is_active": false,
+      "is_deleted": true,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "4d358358-262b-55e9-adf5-8cf37d5f8c88",
+      "title": "QA Automation Expired",
+      "company_name": "Synthetic Old",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 2700,
+      "salary_currency": "USD",
+      "skills": [
+        "Python",
+        "Selenium",
+        "Pytest"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "QA Automation Expired synthetic role. Skills: Python, Selenium, Pytest.",
+      "is_active": false,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "dcbb3b29-a663-57b4-b4f5-3ca2551f981f",
+      "title": "Security Engineer Removed",
+      "company_name": "Synthetic Deleted",
+      "location": "Remote",
+      "level": "mid",
+      "salary": 4200,
+      "salary_currency": "USD",
+      "skills": [
+        "OWASP",
+        "Python",
+        "Linux"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Security Engineer Removed synthetic role. Skills: OWASP, Python, Linux.",
+      "is_active": false,
+      "is_deleted": true,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "de082630-34d8-5c8f-a2d0-8ff9a2787f0f",
+      "title": "Data Analyst Archived",
+      "company_name": "Synthetic Old",
+      "location": "Ho Chi Minh City",
+      "level": "junior",
+      "salary": 2200,
+      "salary_currency": "USD",
+      "skills": [
+        "SQL",
+        "Tableau",
+        "Python"
+      ],
+      "work_mode": "onsite",
+      "employment_type": "full_time",
+      "description": "Data Analyst Archived synthetic role. Skills: SQL, Tableau, Python.",
+      "is_active": false,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "cec42fc6-73ff-5b7b-96d2-cb20cf9d357a",
+      "title": "Android Role Deleted",
+      "company_name": "Synthetic Deleted",
+      "location": "Hanoi",
+      "level": "mid",
+      "salary": 3400,
+      "salary_currency": "USD",
+      "skills": [
+        "Kotlin",
+        "Android",
+        "Jetpack"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Android Role Deleted synthetic role. Skills: Kotlin, Android, Jetpack.",
+      "is_active": false,
+      "is_deleted": true,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "c69809b2-ada4-5309-ba63-475db97fb5b3",
+      "title": "Java Backend Closed",
+      "company_name": "Synthetic Old",
+      "location": "Remote",
+      "level": "senior",
+      "salary": 4700,
+      "salary_currency": "USD",
+      "skills": [
+        "Java",
+        "Spring Boot",
+        "Kafka"
+      ],
+      "work_mode": "remote",
+      "employment_type": "full_time",
+      "description": "Java Backend Closed synthetic role. Skills: Java, Spring Boot, Kafka.",
+      "is_active": false,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "f28af7a4-a667-5f27-85b9-eda5aa9a81fa",
+      "title": "Vue Listing Removed",
+      "company_name": "Synthetic Deleted",
+      "location": "Ho Chi Minh City",
+      "level": "mid",
+      "salary": 2700,
+      "salary_currency": "USD",
+      "skills": [
+        "Vue.js",
+        "JavaScript",
+        "CSS"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Vue Listing Removed synthetic role. Skills: Vue.js, JavaScript, CSS.",
+      "is_active": false,
+      "is_deleted": true,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "3b86c281-fa56-5c56-84cd-a601b180a6af",
+      "title": "Cloud Engineer Expired",
+      "company_name": "Synthetic Old",
+      "location": "Da Nang",
+      "level": "mid",
+      "salary": 3900,
+      "salary_currency": "USD",
+      "skills": [
+        "AWS",
+        "Terraform",
+        "Linux"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Cloud Engineer Expired synthetic role. Skills: AWS, Terraform, Linux.",
+      "is_active": false,
+      "is_deleted": false,
+      "company_is_active": true,
+      "company_is_deleted": false
+    },
+    {
+      "job_id": "33736570-d9a9-54d6-81b8-a37f58e4c477",
+      "title": "Product Manager Deleted",
+      "company_name": "Synthetic Deleted",
+      "location": "Hanoi",
+      "level": "senior",
+      "salary": 4300,
+      "salary_currency": "USD",
+      "skills": [
+        "Roadmaps",
+        "Agile",
+        "Analytics"
+      ],
+      "work_mode": "hybrid",
+      "employment_type": "full_time",
+      "description": "Product Manager Deleted synthetic role. Skills: Roadmaps, Agile, Analytics.",
+      "is_active": false,
+      "is_deleted": true,
+      "company_is_active": true,
+      "company_is_deleted": false
+    }
+  ],
+  "queries": [
+    {
+      "query_id": "q01",
+      "text": "Python FastAPI backend engineer in Hanoi",
+      "locale": "en",
+      "filter_state": {
+        "location": "Hanoi",
+        "skills": [
+          "Python",
+          "FastAPI"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "71b254a4-204a-5be3-b5cb-64bf6605c78a"
+      ],
+      "graded_relevance": {
+        "71b254a4-204a-5be3-b5cb-64bf6605c78a": 3
+      },
+      "expected_excluded_job_ids": [
+        "64f73a47-8de0-5be9-946f-36308512be19"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q02",
+      "text": "Java Spring Boot Kafka backend",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "7e92d396-bcda-53ac-b31e-c8ae3e28e1c2",
+        "5b473af1-a396-5f63-be90-6da747d93ed4"
+      ],
+      "graded_relevance": {
+        "7e92d396-bcda-53ac-b31e-c8ae3e28e1c2": 3,
+        "5b473af1-a396-5f63-be90-6da747d93ed4": 2
+      },
+      "expected_excluded_job_ids": [
+        "c69809b2-ada4-5309-ba63-475db97fb5b3"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q03",
+      "text": "kỹ sư backend Python làm việc từ xa",
+      "locale": "vi",
+      "filter_state": {
+        "skills": [
+          "Python"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "71b254a4-204a-5be3-b5cb-64bf6605c78a",
+        "ef817582-36fc-5503-bf87-9a1b467e08fc"
+      ],
+      "graded_relevance": {
+        "71b254a4-204a-5be3-b5cb-64bf6605c78a": 3,
+        "ef817582-36fc-5503-bf87-9a1b467e08fc": 2
+      },
+      "expected_excluded_job_ids": [
+        "64f73a47-8de0-5be9-946f-36308512be19"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q04",
+      "text": "NestJS TypeScript API ở Đà Nẵng",
+      "locale": "mixed",
+      "filter_state": {
+        "location": "Da Nang",
+        "skills": [
+          "NestJS"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "af4dcf57-05ce-5a9d-bfba-e443a08df5d0"
+      ],
+      "graded_relevance": {
+        "af4dcf57-05ce-5a9d-bfba-e443a08df5d0": 3
+      },
+      "expected_excluded_job_ids": [
+        "7e92d396-bcda-53ac-b31e-c8ae3e28e1c2"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q05",
+      "text": "Go gRPC platform backend remote",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "ef817582-36fc-5503-bf87-9a1b467e08fc",
+        "b42f4b02-532c-5288-a6b4-6f2f18fd3768"
+      ],
+      "graded_relevance": {
+        "ef817582-36fc-5503-bf87-9a1b467e08fc": 3,
+        "b42f4b02-532c-5288-a6b4-6f2f18fd3768": 2
+      },
+      "expected_excluded_job_ids": [
+        "c69809b2-ada4-5309-ba63-475db97fb5b3"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q06",
+      "text": "React TypeScript frontend engineer",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "937c86d2-7112-50b7-8f4f-7f6d0e70c9e6",
+        "f541b830-c0e5-58bd-8dfe-c636b9a3a8af",
+        "4dc86e15-5e2c-568a-bc7b-cc30788aa538"
+      ],
+      "graded_relevance": {
+        "937c86d2-7112-50b7-8f4f-7f6d0e70c9e6": 3,
+        "f541b830-c0e5-58bd-8dfe-c636b9a3a8af": 2,
+        "4dc86e15-5e2c-568a-bc7b-cc30788aa538": 2
+      },
+      "expected_excluded_job_ids": [
+        "ec693534-5fab-57c4-beb8-1b2a6be0b253",
+        "f28af7a4-a667-5f27-85b9-eda5aa9a81fa"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q07",
+      "text": "frontend Vue JavaScript Hồ Chí Minh",
+      "locale": "vi",
+      "filter_state": {
+        "location": "Ho Chi Minh City",
+        "skills": [
+          "Vue.js"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "d46b7b7d-ffa9-51c1-b3a1-751cd0dd6768"
+      ],
+      "graded_relevance": {
+        "d46b7b7d-ffa9-51c1-b3a1-751cd0dd6768": 3
+      },
+      "expected_excluded_job_ids": [
+        "f28af7a4-a667-5f27-85b9-eda5aa9a81fa"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q08",
+      "text": "Next.js SEO web performance remote",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "f541b830-c0e5-58bd-8dfe-c636b9a3a8af",
+        "98fcca15-0f06-58e0-9e86-b6b5cbcc5bf3"
+      ],
+      "graded_relevance": {
+        "f541b830-c0e5-58bd-8dfe-c636b9a3a8af": 3,
+        "98fcca15-0f06-58e0-9e86-b6b5cbcc5bf3": 2
+      },
+      "expected_excluded_job_ids": [
+        "ec693534-5fab-57c4-beb8-1b2a6be0b253"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q09",
+      "text": "Angular RxJS senior UI",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "551cd049-e699-51f1-8a0c-e58b616b599b"
+      ],
+      "graded_relevance": {
+        "551cd049-e699-51f1-8a0c-e58b616b599b": 3
+      },
+      "expected_excluded_job_ids": [
+        "937c86d2-7112-50b7-8f4f-7f6d0e70c9e6"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q10",
+      "text": "SQL Python analytics dashboard",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "f86e469c-3085-5ff2-bd80-3bb86b3105fd",
+        "3120cd6b-b654-5cd5-a3d2-1b71c5df43a8"
+      ],
+      "graded_relevance": {
+        "f86e469c-3085-5ff2-bd80-3bb86b3105fd": 3,
+        "3120cd6b-b654-5cd5-a3d2-1b71c5df43a8": 2
+      },
+      "expected_excluded_job_ids": [
+        "de082630-34d8-5c8f-a2d0-8ff9a2787f0f"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q11",
+      "text": "data engineer Spark Airflow remote",
+      "locale": "en",
+      "filter_state": {
+        "location": "Remote",
+        "skills": [
+          "Spark",
+          "Airflow"
+        ],
+        "salary_min": 4000
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "1be799d8-a1d9-51dd-a33d-113356482650"
+      ],
+      "graded_relevance": {
+        "1be799d8-a1d9-51dd-a33d-113356482650": 3
+      },
+      "expected_excluded_job_ids": [
+        "de082630-34d8-5c8f-a2d0-8ff9a2787f0f"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q12",
+      "text": "kỹ sư dữ liệu Kafka thời gian thực",
+      "locale": "vi",
+      "filter_state": {
+        "skills": [
+          "Kafka"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "72d6af30-e0cc-530a-9b34-cef07d8b6faf"
+      ],
+      "graded_relevance": {
+        "72d6af30-e0cc-530a-9b34-cef07d8b6faf": 3
+      },
+      "expected_excluded_job_ids": [
+        "c69809b2-ada4-5309-ba63-475db97fb5b3"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q13",
+      "text": "dbt Snowflake analytics engineer",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "3bc7e578-c5a3-5b13-a78d-fccfd813c392"
+      ],
+      "graded_relevance": {
+        "3bc7e578-c5a3-5b13-a78d-fccfd813c392": 3
+      },
+      "expected_excluded_job_ids": [
+        "29fd9725-2581-5883-b1b8-5aa4fe64b5ac"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q14",
+      "text": "tìm việc phân tích dữ liệu tại Hà Nội",
+      "locale": "vi",
+      "filter_state": {
+        "location": "Hanoi"
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "f86e469c-3085-5ff2-bd80-3bb86b3105fd",
+        "29fd9725-2581-5883-b1b8-5aa4fe64b5ac"
+      ],
+      "graded_relevance": {
+        "f86e469c-3085-5ff2-bd80-3bb86b3105fd": 3,
+        "29fd9725-2581-5883-b1b8-5aa4fe64b5ac": 2
+      },
+      "expected_excluded_job_ids": [
+        "de082630-34d8-5c8f-a2d0-8ff9a2787f0f"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q15",
+      "text": "machine learning PyTorch MLOps",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "3a4fb78a-ca79-5391-8fc7-6554908ab875",
+        "6b81e21f-914e-5a35-8bf5-65a23118dc6c"
+      ],
+      "graded_relevance": {
+        "3a4fb78a-ca79-5391-8fc7-6554908ab875": 3,
+        "6b81e21f-914e-5a35-8bf5-65a23118dc6c": 2
+      },
+      "expected_excluded_job_ids": [
+        "9c58b1a3-0898-5379-afd5-1a8996dc18ec"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q16",
+      "text": "NLP Transformers multilingual Vietnamese",
+      "locale": "mixed",
+      "filter_state": {
+        "skills": [
+          "NLP"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "a12242f1-7bb0-51f6-8bb1-f4105286e70b"
+      ],
+      "graded_relevance": {
+        "a12242f1-7bb0-51f6-8bb1-f4105286e70b": 3
+      },
+      "expected_excluded_job_ids": [
+        "321715f9-aee5-5bda-84f7-4067e7017419"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q17",
+      "text": "computer vision OpenCV GPU",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "321715f9-aee5-5bda-84f7-4067e7017419"
+      ],
+      "graded_relevance": {
+        "321715f9-aee5-5bda-84f7-4067e7017419": 3
+      },
+      "expected_excluded_job_ids": [
+        "a12242f1-7bb0-51f6-8bb1-f4105286e70b"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q18",
+      "text": "recommendation ranking offline evaluation",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "d45b368c-4a92-544e-ad7a-f377285be976"
+      ],
+      "graded_relevance": {
+        "d45b368c-4a92-544e-ad7a-f377285be976": 3
+      },
+      "expected_excluded_job_ids": [
+        "6b81e21f-914e-5a35-8bf5-65a23118dc6c"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q19",
+      "text": "RAG vector search LangChain engineer",
+      "locale": "en",
+      "filter_state": {
+        "skills": [
+          "RAG",
+          "Vector search"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "aeebd7d9-93bb-5165-8c26-f0d88999e177"
+      ],
+      "graded_relevance": {
+        "aeebd7d9-93bb-5165-8c26-f0d88999e177": 3
+      },
+      "expected_excluded_job_ids": [
+        "71b254a4-204a-5be3-b5cb-64bf6605c78a"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q20",
+      "text": "MLOps MLflow Kubernetes remote",
+      "locale": "en",
+      "filter_state": {
+        "location": "Remote",
+        "skills": [
+          "MLflow"
+        ],
+        "salary_min": 4500
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "6b81e21f-914e-5a35-8bf5-65a23118dc6c"
+      ],
+      "graded_relevance": {
+        "6b81e21f-914e-5a35-8bf5-65a23118dc6c": 3
+      },
+      "expected_excluded_job_ids": [
+        "9c58b1a3-0898-5379-afd5-1a8996dc18ec"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q21",
+      "text": "Kubernetes Terraform SRE",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "657bf874-2917-591c-ba7b-7439fc9aeec2",
+        "4a9d4b93-dea8-525a-8b50-08cb1cc8a325"
+      ],
+      "graded_relevance": {
+        "657bf874-2917-591c-ba7b-7439fc9aeec2": 3,
+        "4a9d4b93-dea8-525a-8b50-08cb1cc8a325": 2
+      },
+      "expected_excluded_job_ids": [
+        "ec4f3c2d-2ae3-56b5-8922-7ecb443a6b1f"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q22",
+      "text": "AWS cloud reliability incident response",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "0acf9203-f387-5e96-801c-8dd612411a58",
+        "ce2bb979-d3d0-5967-86c4-cd77e5b3f8b5"
+      ],
+      "graded_relevance": {
+        "0acf9203-f387-5e96-801c-8dd612411a58": 3,
+        "ce2bb979-d3d0-5967-86c4-cd77e5b3f8b5": 1
+      },
+      "expected_excluded_job_ids": [
+        "3b86c281-fa56-5c56-84cd-a601b180a6af"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q23",
+      "text": "Prometheus Grafana observability",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "4805374e-3aba-514d-9c66-097dd724e50b",
+        "657bf874-2917-591c-ba7b-7439fc9aeec2"
+      ],
+      "graded_relevance": {
+        "4805374e-3aba-514d-9c66-097dd724e50b": 3,
+        "657bf874-2917-591c-ba7b-7439fc9aeec2": 2
+      },
+      "expected_excluded_job_ids": [
+        "ec4f3c2d-2ae3-56b5-8922-7ecb443a6b1f"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q24",
+      "text": "DevOps Azure CI/CD Docker",
+      "locale": "en",
+      "filter_state": {
+        "skills": [
+          "Docker"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "571d8f65-ba76-5c4a-8ff5-30a27cdb1990",
+        "ada6ef13-0ed0-5b89-b4fe-179d62d8d598"
+      ],
+      "graded_relevance": {
+        "571d8f65-ba76-5c4a-8ff5-30a27cdb1990": 3,
+        "ada6ef13-0ed0-5b89-b4fe-179d62d8d598": 2
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q25",
+      "text": "GitLab CI platform Đà Nẵng",
+      "locale": "mixed",
+      "filter_state": {
+        "location": "Da Nang",
+        "skills": [
+          "GitLab CI"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "78ce237b-bda5-5e5f-933d-576422ab418e"
+      ],
+      "graded_relevance": {
+        "78ce237b-bda5-5e5f-933d-576422ab418e": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q26",
+      "text": "QA automation Python Selenium API",
+      "locale": "en",
+      "filter_state": {
+        "skills": [
+          "Python",
+          "Selenium"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "8a11a1d0-6eef-5d01-956e-0c81e7eff3d4"
+      ],
+      "graded_relevance": {
+        "8a11a1d0-6eef-5d01-956e-0c81e7eff3d4": 3
+      },
+      "expected_excluded_job_ids": [
+        "4d358358-262b-55e9-adf5-8cf37d5f8c88"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q27",
+      "text": "manual testing SQL junior Hồ Chí Minh",
+      "locale": "vi",
+      "filter_state": {
+        "location": "Ho Chi Minh City",
+        "level": "junior"
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "41741400-73c7-5bca-a80c-eced1791c6d8"
+      ],
+      "graded_relevance": {
+        "41741400-73c7-5bca-a80c-eced1791c6d8": 3
+      },
+      "expected_excluded_job_ids": [
+        "8a11a1d0-6eef-5d01-956e-0c81e7eff3d4"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q28",
+      "text": "performance load testing JMeter",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "62fb2ea0-b8ef-520a-932d-7289ddc4376c"
+      ],
+      "graded_relevance": {
+        "62fb2ea0-b8ef-520a-932d-7289ddc4376c": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q29",
+      "text": "Mobile QA Appium Android iOS",
+      "locale": "en",
+      "filter_state": {
+        "skills": [
+          "Appium"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "bea81c34-c81c-54ba-9ec5-56eaa285b86f"
+      ],
+      "graded_relevance": {
+        "bea81c34-c81c-54ba-9ec5-56eaa285b86f": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q30",
+      "text": "OWASP API security testing",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "0b53b1e0-4346-5723-90da-1b889e98bb38",
+        "fc13a7d4-2f9f-5bc1-aaea-f8385da91be1"
+      ],
+      "graded_relevance": {
+        "0b53b1e0-4346-5723-90da-1b889e98bb38": 3,
+        "fc13a7d4-2f9f-5bc1-aaea-f8385da91be1": 2
+      },
+      "expected_excluded_job_ids": [
+        "dcbb3b29-a663-57b4-b4f5-3ca2551f981f"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q31",
+      "text": "technical product manager API roadmap",
+      "locale": "en",
+      "filter_state": {
+        "skills": [
+          "APIs"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "4091e9e3-1c3e-5d74-a763-245e256455a7"
+      ],
+      "graded_relevance": {
+        "4091e9e3-1c3e-5d74-a763-245e256455a7": 3
+      },
+      "expected_excluded_job_ids": [
+        "33736570-d9a9-54d6-81b8-a37f58e4c477"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q32",
+      "text": "A/B testing growth product analytics",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "deeab17d-fd15-5510-afb3-6a1d44b16780",
+        "f86e469c-3085-5ff2-bd80-3bb86b3105fd"
+      ],
+      "graded_relevance": {
+        "deeab17d-fd15-5510-afb3-6a1d44b16780": 3,
+        "f86e469c-3085-5ff2-bd80-3bb86b3105fd": 1
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q33",
+      "text": "quản lý sản phẩm dữ liệu SQL Hà Nội",
+      "locale": "vi",
+      "filter_state": {
+        "location": "Hanoi",
+        "skills": [
+          "SQL"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "ee45d574-75cc-55d1-8bd7-c7b6e9ca023c"
+      ],
+      "graded_relevance": {
+        "ee45d574-75cc-55d1-8bd7-c7b6e9ca023c": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q34",
+      "text": "mobile product owner backlog",
+      "locale": "en",
+      "filter_state": {
+        "skills": [
+          "Mobile"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "13ba0048-3aba-57d3-b84a-e551038ee80c"
+      ],
+      "graded_relevance": {
+        "13ba0048-3aba-57d3-b84a-e551038ee80c": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q35",
+      "text": "Application Security OWASP SAST",
+      "locale": "en",
+      "filter_state": {
+        "skills": [
+          "OWASP",
+          "SAST"
+        ]
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "1cedfa43-b850-5f46-8e9c-0fb193207037"
+      ],
+      "graded_relevance": {
+        "1cedfa43-b850-5f46-8e9c-0fb193207037": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q36",
+      "text": "IAM OAuth2 SAML identity",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "9e6ba439-c1d2-5e15-9f0d-5b5baee3e5b1"
+      ],
+      "graded_relevance": {
+        "9e6ba439-c1d2-5e15-9f0d-5b5baee3e5b1": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q37",
+      "text": "Android Kotlin Jetpack",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "f1697ba1-5b03-5bae-b2a8-eb0c78d22a03",
+        "b54d9776-067c-5098-80bd-d5028896d0bd"
+      ],
+      "graded_relevance": {
+        "f1697ba1-5b03-5bae-b2a8-eb0c78d22a03": 3,
+        "b54d9776-067c-5098-80bd-d5028896d0bd": 1
+      },
+      "expected_excluded_job_ids": [
+        "cec42fc6-73ff-5b7b-96d2-cb20cf9d357a"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q38",
+      "text": "iOS SwiftUI XCTest remote",
+      "locale": "en",
+      "filter_state": {
+        "location": "Remote"
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "d8a91b6a-d5aa-5830-9749-a46f50808021"
+      ],
+      "graded_relevance": {
+        "d8a91b6a-d5aa-5830-9749-a46f50808021": 3
+      },
+      "expected_excluded_job_ids": [],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q39",
+      "text": "việc làm kỹ sư đám mây AWS Terraform remote",
+      "locale": "vi",
+      "filter_state": {
+        "location": "Remote"
+      },
+      "explicit_filters": {},
+      "relevant_job_ids": [
+        "13f601b3-a17f-5d15-ade5-09219fd4c190",
+        "0acf9203-f387-5e96-801c-8dd612411a58"
+      ],
+      "graded_relevance": {
+        "13f601b3-a17f-5d15-ade5-09219fd4c190": 3,
+        "0acf9203-f387-5e96-801c-8dd612411a58": 2
+      },
+      "expected_excluded_job_ids": [
+        "3b86c281-fa56-5c56-84cd-a601b180a6af"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    },
+    {
+      "query_id": "q40",
+      "text": "nonexistent quantum payroll technology",
+      "locale": "en",
+      "filter_state": {},
+      "explicit_filters": {},
+      "relevant_job_ids": [],
+      "graded_relevance": {},
+      "expected_excluded_job_ids": [
+        "71b254a4-204a-5be3-b5cb-64bf6605c78a",
+        "1be799d8-a1d9-51dd-a33d-113356482650",
+        "64f73a47-8de0-5be9-946f-36308512be19"
+      ],
+      "evaluate_at": [
+        5,
+        10
+      ]
+    }
+  ]
+}

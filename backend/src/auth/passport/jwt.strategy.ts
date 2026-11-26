@@ -1,11 +1,16 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
-import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { IUser } from 'src/users/users.interface';
 import { User } from 'src/users/entities/user.entity';
+import { requiredSecret } from '../required-secret';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -15,7 +20,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: configService.get<string>('JWT_SECRET'),
+      secretOrKey: requiredSecret(configService, 'JWT_SECRET'),
     });
   }
 
@@ -39,6 +44,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       address: user.address,
       avatar: user.avatar,
       isApproved: user.isApproved,
+      isPremium: user.isPremium || false,
+      premiumPlan: user.premiumPlan || 'FREE',
+      premiumExpiresAt: user.premiumExpiresAt || undefined,
+      isVerified: user.isVerified || false,
+      verifiedAt: user.verifiedAt || undefined,
+      lastBoostedAt: user.lastBoostedAt || undefined,
+      boostExpiresAt: user.boostExpiresAt || undefined,
+      isJobSeeking: user.isJobSeeking ?? true,
+      isJobRecommendation: user.isJobRecommendation ?? true,
+      allowRecruiterSearch: user.allowRecruiterSearch ?? true,
     } as IUser;
   }
 }

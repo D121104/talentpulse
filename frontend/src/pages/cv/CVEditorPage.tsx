@@ -1,40 +1,49 @@
-import { useState, useEffect, useRef } from 'react';
-import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import {
+  useParams,
+  useSearchParams,
+  useNavigate,
+  useLocation,
+} from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
   Save,
   Type,
   LayoutGrid,
   Sparkles,
-  Plus,
-  Trash2,
   Layers,
   ZoomIn,
   ZoomOut,
   Crown,
   CheckCircle2,
+  Info,
+  ChevronDown,
+  AlertTriangle,
+  Loader2,
   X,
-  Phone,
-  Mail,
-  MapPin,
+  Sun,
+  Moon,
   Globe,
   MoveUp,
   MoveDown,
-  Sun,
-  Moon,
-  Bold,
-  Italic,
-  Underline as UnderlineIcon,
-  ChevronDown,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-} from 'lucide-react';
-import { useAuth } from '../../auth/AuthContext';
-import { useTheme } from '../../context/ThemeContext';
-import { onlineCvApi } from '../../lib/cvApi';
-import { CV_FONTS, CV_THEMES } from '../../lib/cvTypes';
+  Plus,
+} from "lucide-react";
+import { useAuth } from "../../auth/AuthContext";
+import { useTheme } from "../../context/ThemeContext";
+import { useToast } from "../../context/ToastContext";
+import { formatDate } from "../../lib/dateUtils";
+import { ApiError } from "../../lib/api";
+import { onlineCvApi } from "../../lib/cvApi";
+import { optionalCandidateNumber } from "../../lib/candidateSearch";
+import {
+  CV_FONTS,
+  CV_THEMES,
+  CV_TEMPLATE_LABELS,
+  filterMeaningfulCvEntries,
+  resolveLoadedCvLocale,
+} from "../../lib/cvTypes";
 import type {
   OnlineCV,
   CVTemplateType,
@@ -42,508 +51,414 @@ import type {
   WorkExperienceEntry,
   SkillEntry,
   ActivityEntry,
+  ProjectEntry,
   CertificateEntry,
   AwardEntry,
   CVFontOption,
   CVThemeOption,
-} from '../../lib/cvTypes';
+  CVGenerationMode,
+  CVGenerationStatus,
+  CVGenerationJobStatus,
+  CVGenerationDraft,
+  GenerateOnlineCVDraftResponse,
+  GenerateOnlineCVJobStatusResponse,
+  CreateOnlineCVDto,
+  UpdateOnlineCVDto,
+  CVLocale,
+} from "../../lib/cvTypes";
+import { CV_EDITOR_TEMPLATES } from "../../components/cv/editor/templates";
+import {
+  normalizeCvGenerationWarnings,
+} from "../../lib/cvWarningNormalization";
 
-// ================= RICH INLINE FORMATTING TYPES & TOOLBAR =================
-export interface FieldFormatting {
-  fontSize?: string;
-  fontFamily?: string;
-  color?: string;
-  isBold?: boolean;
-  isItalic?: boolean;
-  isUnderline?: boolean;
-  textAlign?: 'left' | 'center' | 'right';
-}
+type UnknownRecord = Record<string, unknown>;
 
-const PRESET_COLORS = [
-  '#000000',
-  '#2563EB',
-  '#0F172A',
-  '#0D9488',
-  '#4F46E5',
-  '#991B1B',
-  '#16A34A',
-  '#D97706',
-];
+const asRecord = (value: unknown): UnknownRecord =>
+  value && typeof value === "object" ? (value as UnknownRecord) : {};
 
-const PRESET_FONT_SIZES = [
-  '10px', '11px', '12px', '13px', '14px', '15px', '16px', '17px', '18px', '19px', '20px',
-  '21px', '22px', '24px', '26px', '28px', '30px', '32px', '34px', '36px', '38px', '40px',
-];
+const asText = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
 
-export function resolveFontSizePx(sizeVal?: string | number, fallback: string = '14px'): string {
-  if (!sizeVal) return fallback;
-  if (typeof sizeVal === 'number') return `${Math.round(sizeVal)}px`;
-  if (sizeVal.endsWith('px')) return sizeVal;
-  if (sizeVal.endsWith('rem') || sizeVal.endsWith('em')) {
-    const num = parseFloat(sizeVal);
-    return `${Math.round(num * 16)}px`;
+const createIdempotencyKey = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
   }
-  return `${sizeVal}`;
-}
+  return `cv-generation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
 
-interface FloatingFormatToolbarProps {
-  formatting: FieldFormatting;
-  onUpdateFormatting: (newFmt: Partial<FieldFormatting>) => void;
-  defaultFontSizePx?: string;
-  defaultFontFamily?: string;
-  defaultColor?: string;
-  defaultTextAlign?: 'left' | 'center' | 'right';
-}
+const localizedGenerationStatus = (
+  status: CVGenerationJobStatus | "IDLE",
+  locale: CVLocale,
+): string => {
+  const messages: Record<string, [string, string]> = {
+    QUEUED: ["Yêu cầu đã được tiếp nhận. Đang xếp hàng xử lý...", "Request accepted. Waiting to start..."],
+    PROCESSING: ["Đang tạo bản nháp CV...", "Creating your CV draft..."],
+    CANCEL_REQUESTED: ["Đang xử lý yêu cầu hủy...", "Processing cancellation request..."],
+    COMPLETE: ["Đã tạo xong bản nháp CV.", "Your CV draft is ready."],
+    DEGRADED: ["Đã tạo bản nháp an toàn. Hãy kiểm tra nội dung.", "A safe draft is ready. Review the content."],
+    STALE: ["Yêu cầu đã hết hiệu lực. Bạn có thể thử lại.", "This request is no longer current. You can try again."],
+    FAILED: ["Không thể tạo bản nháp lúc này. Vui lòng thử lại.", "The draft could not be created. Please try again."],
+    CANCELLED: ["Đã hủy tạo bản nháp.", "Draft generation was cancelled."],
+    IDLE: ["", ""],
+  };
+  const [vi, en] = messages[status] || messages.FAILED;
+  return locale === "vi-VN" ? vi : en;
+};
 
-function FloatingFormatToolbar({
-  formatting,
-  onUpdateFormatting,
-  defaultFontSizePx = '14px',
-  defaultFontFamily = 'Times New Roman',
-  defaultColor = '#000000',
-  defaultTextAlign = 'left',
-}: FloatingFormatToolbarProps) {
-  const [openDropdown, setOpenDropdown] = useState<'size' | 'font' | 'color' | null>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
+const normalizeGenerationMode = (
+  value: unknown,
+): CVGenerationMode | undefined =>
+  value === "EDITOR_ONLY" || value === "MANUAL" ? value : undefined;
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (toolbarRef.current && !toolbarRef.current.contains(e.target as Node)) {
-        setOpenDropdown(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+const normalizeContentKey = (value: string): string =>
+  value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}+#]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 
-  const effectiveFontFamily = formatting.fontFamily || defaultFontFamily;
-  const activeFont = CV_FONTS.find((f) => f.family === effectiveFontFamily) || CV_FONTS[0];
-  const displayFontName = activeFont.name.split(' (')[0];
-  const displayFontSize = formatting.fontSize || defaultFontSizePx;
-  const effectiveColor = formatting.color || defaultColor;
-  const effectiveAlign = formatting.textAlign || defaultTextAlign;
-
-  return (
-    <div
-      ref={toolbarRef}
-      onMouseDown={(e) => e.stopPropagation()}
-      className="absolute -top-12 left-0 z-40 flex items-center gap-1.5 rounded-2xl border border-slate-200/90 bg-white/95 px-3 py-1.5 shadow-xl shadow-slate-900/15 backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95 print:hidden select-none animate-in fade-in zoom-in-95 duration-150"
-    >
-      {/* 1. Custom Font Size Dropdown */}
-      <div className="relative">
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setOpenDropdown((prev) => (prev === 'size' ? null : 'size'))}
-          className="flex h-7 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
-        >
-          <span>{displayFontSize}</span>
-          <ChevronDown className="h-3 w-3 text-slate-400" />
-        </button>
-
-        {openDropdown === 'size' && (
-          <div className="absolute left-0 top-full mt-1.5 max-h-48 w-24 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-2xl dark:border-slate-700 dark:bg-slate-900 z-50">
-            {PRESET_FONT_SIZES.map((sz) => {
-              const isSelected = displayFontSize === sz;
-              return (
-                <button
-                  key={sz}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    onUpdateFormatting({ fontSize: sz });
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex w-full items-center justify-between px-2.5 py-1 text-xs font-medium hover:bg-primary/10 hover:text-primary transition cursor-pointer ${
-                    isSelected
-                      ? 'bg-primary/10 text-primary font-bold'
-                      : 'text-slate-700 dark:text-slate-200'
-                  }`}
-                >
-                  <span>{sz}</span>
-                  {isSelected && <CheckCircle2 className="h-3 w-3 text-primary" />}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* 2. Custom Font Family Dropdown */}
-      <div className="relative">
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setOpenDropdown((prev) => (prev === 'font' ? null : 'font'))}
-          className="flex h-7 max-w-[140px] items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 truncate cursor-pointer"
-        >
-          <span className="truncate">{displayFontName}</span>
-          <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />
-        </button>
-
-        {openDropdown === 'font' && (
-          <div className="absolute left-0 top-full mt-1.5 w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-2xl dark:border-slate-700 dark:bg-slate-900 z-50">
-            {CV_FONTS.map((font) => {
-              const isSelected = effectiveFontFamily === font.family;
-              return (
-                <button
-                  key={font.id}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    onUpdateFormatting({ fontFamily: font.family });
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex w-full items-center justify-between px-3 py-1.5 text-xs transition cursor-pointer ${
-                    isSelected
-                      ? 'bg-primary/10 text-primary font-bold'
-                      : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <span style={{ fontFamily: font.family }}>{font.name.split(' (')[0]}</span>
-                  {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 mx-0.5" />
-
-      {/* 3. Color Picker Swatch */}
-      <div className="relative">
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setOpenDropdown((prev) => (prev === 'color' ? null : 'color'))}
-          className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-slate-200 transition hover:scale-110 shadow-xs cursor-pointer"
-          style={{ backgroundColor: effectiveColor }}
-          title="Chọn màu chữ"
-        />
-
-        {openDropdown === 'color' && (
-          <div className="absolute left-0 top-full mt-2 w-36 rounded-2xl border border-slate-200 bg-white p-2.5 shadow-2xl dark:border-slate-700 dark:bg-slate-900 z-50">
-            <div className="grid grid-cols-4 gap-1.5">
-              {PRESET_COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    onUpdateFormatting({ color: c });
-                    setOpenDropdown(null);
-                  }}
-                  className="h-6 w-6 rounded-full border border-slate-200 transition hover:scale-115 cursor-pointer"
-                  style={{ backgroundColor: c }}
-                />
-              ))}
-            </div>
-            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <input
-                type="color"
-                value={effectiveColor}
-                onChange={(e) => onUpdateFormatting({ color: e.target.value })}
-                className="h-6 w-full rounded cursor-pointer border-0 bg-transparent"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 mx-0.5" />
-
-      {/* 4. Bold Button */}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => onUpdateFormatting({ isBold: !formatting.isBold })}
-        className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold transition cursor-pointer ${
-          formatting.isBold
-            ? 'bg-primary text-white shadow-xs'
-            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`}
-        title="In đậm (Bold)"
-      >
-        <Bold className="h-3.5 w-3.5" />
-      </button>
-
-      {/* 5. Italic Button */}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => onUpdateFormatting({ isItalic: !formatting.isItalic })}
-        className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold transition cursor-pointer ${
-          formatting.isItalic
-            ? 'bg-primary text-white shadow-xs'
-            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`}
-        title="In nghiêng (Italic)"
-      >
-        <Italic className="h-3.5 w-3.5" />
-      </button>
-
-      {/* 6. Underline Button */}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => onUpdateFormatting({ isUnderline: !formatting.isUnderline })}
-        className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold transition cursor-pointer ${
-          formatting.isUnderline
-            ? 'bg-primary text-white shadow-xs'
-            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`}
-        title="Gạch chân (Underline)"
-      >
-        <UnderlineIcon className="h-3.5 w-3.5" />
-      </button>
-
-      <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 mx-0.5" />
-
-      {/* 7. Align Left */}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => onUpdateFormatting({ textAlign: 'left' })}
-        className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold transition cursor-pointer ${
-          effectiveAlign === 'left'
-            ? 'bg-primary text-white shadow-xs'
-            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`}
-        title="Căn trái"
-      >
-        <AlignLeft className="h-3.5 w-3.5" />
-      </button>
-
-      {/* 8. Align Center */}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => onUpdateFormatting({ textAlign: 'center' })}
-        className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold transition cursor-pointer ${
-          effectiveAlign === 'center'
-            ? 'bg-primary text-white shadow-xs'
-            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`}
-        title="Căn giữa"
-      >
-        <AlignCenter className="h-3.5 w-3.5" />
-      </button>
-
-      {/* 9. Align Right */}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => onUpdateFormatting({ textAlign: 'right' })}
-        className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold transition cursor-pointer ${
-          effectiveAlign === 'right'
-            ? 'bg-primary text-white shadow-xs'
-            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`}
-        title="Căn phải"
-      >
-        <AlignRight className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  );
-}
-
-// ================= INLINE EDITABLE TEXT FIELD COMPONENT =================
-interface InlineTextProps {
-  value: string;
-  onChange: (val: string) => void;
-  placeholder: string;
-  className?: string;
-  style?: React.CSSProperties;
-  multiline?: boolean;
-  rows?: number;
-  asTitle?: boolean;
-  initialFormatting?: FieldFormatting;
-  defaultFontSizePx?: string;
-  defaultFontFamily?: string;
-  defaultColor?: string;
-  defaultTextAlign?: 'left' | 'center' | 'right';
-}
-
-function InlineText({
-  value,
-  onChange,
-  placeholder,
-  className = '',
-  style = {},
-  multiline = false,
-  rows = 2,
-  asTitle = false,
-  initialFormatting,
-  defaultFontSizePx,
-  defaultFontFamily,
-  defaultColor,
-  defaultTextAlign,
-}: InlineTextProps) {
-  const [isFocused, setIsFocused] = useState(false);
-  const [formatting, setFormatting] = useState<FieldFormatting>(initialFormatting || {});
-  const containerRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Auto-grow textarea height
-  useEffect(() => {
-    if (multiline && textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+const dedupeTextValues = (values: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  return values.reduce<string[]>((result, value) => {
+    const cleaned = value.trim().replace(/\s+/g, " ");
+    const key = normalizeContentKey(cleaned);
+    if (cleaned && key && !seen.has(key)) {
+      seen.add(key);
+      result.push(cleaned);
     }
-  }, [value, multiline, formatting.fontSize]);
+    return result;
+  }, []);
+};
 
-  const handleUpdateFormatting = (newFmt: Partial<FieldFormatting>) => {
-    setFormatting((prev) => ({ ...prev, ...newFmt }));
-  };
+const dedupeMappedEntries = <T extends UnknownRecord>(
+  entries: T[],
+  fields: string[],
+): T[] => {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    const key = fields
+      .map((field) => {
+        const value = entry[field];
+        return Array.isArray(value)
+          ? value
+              .filter((item): item is string => typeof item === "string")
+              .join(" ")
+          : typeof value === "string"
+            ? value
+            : "";
+      })
+      .map(normalizeContentKey)
+      .join("|");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 
-  const computedDefaultFontSize = defaultFontSizePx || resolveFontSizePx(style?.fontSize);
-  const computedDefaultFontFamily = defaultFontFamily || (style?.fontFamily as string) || 'Times New Roman';
-  const computedDefaultColor = defaultColor || (style?.color as string) || '#1E293B';
-  const computedDefaultTextAlign: 'left' | 'center' | 'right' =
-    defaultTextAlign ||
-    (style?.textAlign as 'left' | 'center' | 'right') ||
-    (className.includes('text-center') ? 'center' : className.includes('text-right') ? 'right' : 'left');
+const normalizeSectionOrder = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    // Both templates intentionally render one combined activities/projects timeline.
+    const canonical = item === "projects" ? "activities" : item;
+    if (!result.includes(canonical)) result.push(canonical);
+  }
+  return result;
+};
 
-  const dynamicStyle: React.CSSProperties = {
-    ...style,
-    background: 'transparent',
-    fontSize: formatting.fontSize || style.fontSize,
-    fontFamily: formatting.fontFamily || style.fontFamily,
-    color: formatting.color || style.color,
-    fontWeight: formatting.isBold !== undefined ? (formatting.isBold ? 'bold' : 'normal') : style.fontWeight,
-    fontStyle: formatting.isItalic !== undefined ? (formatting.isItalic ? 'italic' : 'normal') : style.fontStyle,
-    textDecoration: formatting.isUnderline !== undefined ? (formatting.isUnderline ? 'underline' : 'none') : style.textDecoration,
-    textAlign: formatting.textAlign || computedDefaultTextAlign,
-  };
-
-  const hoverFocusClasses =
-    'transition-all duration-150 rounded px-1.5 py-0.5 border border-dashed hover:border-red-400 hover:bg-red-50/20 dark:hover:border-red-400/80 dark:hover:bg-red-950/10 focus:border-solid focus:border-primary focus:bg-white focus:shadow-xs focus:outline-none dark:focus:bg-slate-900';
-
-  return (
-    <div ref={containerRef} className={`relative block min-w-0 max-w-full ${className}`}>
-      {/* Floating Toolbar appears when focused */}
-      {isFocused && (
-        <FloatingFormatToolbar
-          formatting={formatting}
-          onUpdateFormatting={handleUpdateFormatting}
-          defaultFontSizePx={computedDefaultFontSize}
-          defaultFontFamily={computedDefaultFontFamily}
-          defaultColor={computedDefaultColor}
-          defaultTextAlign={computedDefaultTextAlign}
-        />
-      )}
-
-      {multiline ? (
-        <textarea
-          ref={textareaRef}
-          rows={rows}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          placeholder={placeholder}
-          style={dynamicStyle}
-          className={`w-full max-w-full box-border resize-none overflow-hidden block ${
-            !isFocused ? 'border-transparent' : ''
-          } ${hoverFocusClasses} ${
-            !value ? 'italic text-slate-400 placeholder:text-slate-400' : ''
-          }`}
-        />
-      ) : (
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          placeholder={placeholder}
-          style={dynamicStyle}
-          className={`w-full max-w-full box-border block ${
-            !isFocused ? 'border-transparent' : ''
-          } ${hoverFocusClasses} ${
-            !value ? 'italic text-slate-400 placeholder:text-slate-400' : ''
-          } ${asTitle ? 'uppercase' : ''}`}
-        />
-      )}
-    </div>
+function mapGeneratedDraftResponse(
+  response: GenerateOnlineCVDraftResponse | GenerateOnlineCVJobStatusResponse,
+): {
+  draft: CVGenerationDraft;
+  status: CVGenerationStatus;
+  warnings: string[];
+  generationMode?: CVGenerationMode;
+  locale?: CVLocale;
+} {
+  const rawResponse = asRecord(response);
+  const rawDraft = asRecord(
+    rawResponse.draft ||
+      rawResponse.document ||
+      rawResponse.cv ||
+      rawResponse.current ||
+      rawResponse.currentGeneration ||
+      rawResponse.generation ||
+      rawResponse.result ||
+      rawResponse,
   );
+  const mapEntry = (value: unknown, fields: Record<string, string>) => {
+    const entry = asRecord(value);
+    return Object.fromEntries(
+      Object.entries(fields)
+        .map(([target, source]) => [
+          target,
+          asText(entry[target] ?? entry[source]),
+        ])
+        .filter(([, item]) => item !== undefined),
+    );
+  };
+  const mapStringEntries = (value: unknown, fields: Record<string, string>) => {
+    if (!Array.isArray(value)) return undefined;
+    const mapped = value.map((item) =>
+      typeof item === "string"
+        ? { [Object.keys(fields)[0]]: item }
+        : mapEntry(item, fields),
+    );
+    return filterMeaningfulCvEntries(
+      dedupeMappedEntries(mapped, Object.keys(fields)),
+    );
+  };
+
+  const rawWorkExperience = rawDraft.workExperience ?? rawDraft.work_experience;
+  const workExperience = Array.isArray(rawWorkExperience)
+    ? dedupeMappedEntries(
+        rawWorkExperience.map((item) => {
+          const entry = asRecord(item);
+          const bullets = Array.isArray(entry.bullets)
+            ? dedupeTextValues(
+                entry.bullets.filter(
+                  (bullet): bullet is string => typeof bullet === "string",
+                ),
+              )
+            : [];
+          return {
+            ...mapEntry(item, {
+              companyName: "company_name",
+              position: "position",
+              startDate: "start_date",
+              endDate: "end_date",
+              description: "description",
+            }),
+            ...(bullets.length > 0 ? { description: bullets.join("\n") } : {}),
+          };
+        }),
+        ["companyName", "position", "startDate", "endDate", "description"],
+      )
+    : undefined;
+
+  const rawProjects = rawDraft.projects;
+  const projects = Array.isArray(rawProjects)
+    ? dedupeMappedEntries(
+        rawProjects.map((item) => {
+          const entry = asRecord(item);
+          const bullets = Array.isArray(entry.bullets)
+            ? dedupeTextValues(
+                entry.bullets.filter(
+                  (bullet): bullet is string => typeof bullet === "string",
+                ),
+              )
+            : [];
+          return {
+            ...mapEntry(item, {
+              projectName: "project_name",
+              role: "role",
+              startDate: "start_date",
+              endDate: "end_date",
+              description: "description",
+            }),
+            ...(Array.isArray(entry.technologies)
+              ? {
+                  technologies: entry.technologies.filter(
+                    (technology): technology is string =>
+                      typeof technology === "string",
+                  ),
+                }
+              : {}),
+            ...(bullets.length > 0 ? { description: bullets.join("\n") } : {}),
+          };
+        }),
+        [
+          "projectName",
+          "role",
+          "startDate",
+          "endDate",
+          "description",
+          "technologies",
+        ],
+      )
+    : undefined;
+
+  const education = Array.isArray(rawDraft.education)
+    ? dedupeMappedEntries(
+        rawDraft.education.map((item) => {
+          const entry = asRecord(item);
+          return {
+            ...mapEntry(item, {
+              schoolName: "school_name",
+              major: "major",
+              startDate: "start_date",
+              endDate: "end_date",
+              description: "description",
+            }),
+            ...(asText(entry.major ?? entry.degree)
+              ? { major: asText(entry.major ?? entry.degree) }
+              : {}),
+          };
+        }),
+        ["schoolName", "major", "startDate", "endDate", "description"],
+      )
+    : undefined;
+
+  const rawSkills = rawDraft.skills;
+  const skills = Array.isArray(rawSkills)
+    ? dedupeMappedEntries(
+        rawSkills.map((item) =>
+          typeof item === "string"
+            ? { name: item }
+            : mapEntry(item, { name: "name", description: "description" }),
+        ),
+        ["name", "description"],
+      )
+    : undefined;
+  const rawSectionOrder = rawDraft.sectionOrder ?? rawDraft.section_order;
+  const sectionOrder = normalizeSectionOrder(rawSectionOrder);
+
+  const draft: CVGenerationDraft = {
+    title: asText(rawDraft.title),
+    fullName: asText(rawDraft.fullName ?? rawDraft.full_name),
+    position: asText(rawDraft.position ?? rawDraft.headline),
+    phone: asText(rawDraft.phone),
+    email: asText(rawDraft.email),
+    link: asText(rawDraft.link),
+    address: asText(rawDraft.address),
+    careerObjective: asText(
+      rawDraft.careerObjective ?? rawDraft.career_objective,
+    ),
+    education,
+    workExperience,
+    skills,
+    activities: mapStringEntries(rawDraft.activities, {
+      organizationName: "organization_name",
+      position: "position",
+      startDate: "start_date",
+      endDate: "end_date",
+      description: "description",
+    }),
+    projects,
+    certificates: mapStringEntries(rawDraft.certificates, {
+      name: "name",
+      issuer: "issuer",
+      date: "date",
+      credentialUrl: "credential_url",
+    }),
+    awards: mapStringEntries(rawDraft.awards, {
+      name: "name",
+      issuer: "issuer",
+      date: "date",
+      description: "description",
+    }),
+    sectionOrder,
+  };
+
+  const status = rawResponse.status;
+  const revision = asRecord(rawResponse.revision ?? rawDraft.revision);
+  const responseWarnings = Array.isArray(rawResponse.warnings)
+    ? rawResponse.warnings.filter(
+        (warning): warning is string => typeof warning === "string",
+      )
+    : [];
+  const revisionWarnings = Array.isArray(revision.warnings)
+    ? revision.warnings.filter(
+        (warning): warning is string => typeof warning === "string",
+      )
+    : [];
+  const warnings =
+    responseWarnings.length > 0 ? responseWarnings : revisionWarnings;
+  const normalizedStatus: CVGenerationStatus =
+    status === "DEGRADED" || status === "NO_EVIDENCE" || status === "COMPLETE"
+      ? status
+      : warnings.length > 0
+        ? "DEGRADED"
+        : "COMPLETE";
+  const rawLocale = rawResponse.locale ?? revision.locale ?? rawDraft.locale;
+  const locale: CVLocale | undefined =
+    rawLocale === "en-US" || rawLocale === "vi-VN" ? rawLocale : undefined;
+  const generationMode = normalizeGenerationMode(
+    rawResponse.generationMode ??
+      rawResponse.generation_mode ??
+      rawDraft.generationMode ??
+      rawDraft.generation_mode,
+  );
+
+  return { draft, status: normalizedStatus, warnings, generationMode, locale };
 }
 
 // ================= MAIN CV EDITOR PAGE =================
 export default function CVEditorPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { user, accessToken } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const toast = useToast();
 
-  const isNew = id === 'new' || !id;
-  const initialTemplate = (searchParams.get('template') as CVTemplateType) || 'template1';
+  const isNew = id === "new" || !id;
+  const locationState = location.state as {
+    templateType?: CVTemplateType;
+    cvLanguage?: "vi" | "en";
+    locale?: CVLocale;
+    themeColorId?: string;
+  } | null;
+
+  const initialTemplate: CVTemplateType =
+    locationState?.templateType ||
+    (searchParams.get("template") as CVTemplateType) ||
+    "template1";
+  const initialThemeColor = locationState?.themeColorId || "primary-blue";
+  const initialLanguage: "vi" | "en" =
+    locationState?.cvLanguage ||
+    (locationState?.locale === "en-US" ? "en" : "vi");
 
   // Core Form State
-  const [title, setTitle] = useState<string>('CV Chưa đặt tên');
-  const [templateType, setTemplateType] = useState<CVTemplateType>(initialTemplate);
+  const [title, setTitle] = useState<string>("CV Chưa đặt tên");
+  const [isTitleManual, setIsTitleManual] = useState<boolean>(false);
+  const [templateType, setTemplateType] =
+    useState<CVTemplateType>(initialTemplate);
   const [fontFamilyId, setFontFamilyId] = useState<string>(
-    initialTemplate === 'template1' ? 'times' : 'inter',
+    initialTemplate === "template1" ? "times" : "inter",
   );
-  const [themeColorId, setThemeColorId] = useState<string>('primary-blue');
-  const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
+  const [themeColorId, setThemeColorId] = useState<string>(initialThemeColor);
+  const [fontSize, setFontSize] = useState<"small" | "medium" | "large">(
+    "medium",
+  );
   const [lineSpacing, setLineSpacing] = useState<number>(1.3);
 
   // Form Fields
-  const [fullName, setFullName] = useState<string>(user?.name || 'Trần Quốc An');
-  const [position, setPosition] = useState<string>('Vị trí ứng tuyển');
-  const [phone, setPhone] = useState<string>('0123 456 789');
-  const [email, setEmail] = useState<string>(user?.email || 'email@example.com');
-  const [link, setLink] = useState<string>('linkedin.com/in/username');
-  const [address, setAddress] = useState<string>('Hà Nội, Việt Nam');
-  const [careerObjective, setCareerObjective] = useState<string>(
-    'Mục tiêu nghề nghiệp của bạn, bao gồm mục tiêu ngắn hạn và dài hạn',
+  const [fullName, setFullName] = useState<string>(user?.name || "");
+  const [position, setPosition] = useState<string>("");
+  const [phone, setPhone] = useState<string>("");
+  const [email, setEmail] = useState<string>(user?.email || "");
+  const [link, setLink] = useState<string>("");
+  const [address, setAddress] = useState<string>(user?.address || "");
+  const [careerObjective, setCareerObjective] = useState<string>("");
+  const [expectedSalary, setExpectedSalary] = useState('');
+  const [shareExpectedSalary, setShareExpectedSalary] = useState(false);
+  let salaryValue: number | null = null;
+  let salaryValid = true;
+  try {
+    salaryValue = optionalCandidateNumber(expectedSalary, 2147483647, true) ?? null;
+  } catch {
+    salaryValid = false;
+  }
+
+  const [education, setEducation] = useState<EducationEntry[]>([]);
+
+  const [workExperience, setWorkExperience] = useState<WorkExperienceEntry[]>(
+    [],
   );
 
-  const [education, setEducation] = useState<EducationEntry[]>([
-    {
-      schoolName: 'Tên trường học',
-      major: 'Ngành học / Môn học',
-      startDate: 'Bắt đầu',
-      endDate: 'Kết thúc',
-      description: 'Mô tả quá trình học tập hoặc thành tích của bạn',
-    },
-  ]);
+  const [skills, setSkills] = useState<SkillEntry[]>([]);
 
-  const [workExperience, setWorkExperience] = useState<WorkExperienceEntry[]>([
-    {
-      companyName: 'Tên công ty',
-      position: 'Vị trí công việc',
-      startDate: 'Bắt đầu',
-      endDate: 'Kết thúc',
-      description: 'Mô tả kinh nghiệm làm việc của bạn',
-    },
-  ]);
+  const [activities, setActivities] = useState<ActivityEntry[]>([]);
 
-  const [skills, setSkills] = useState<SkillEntry[]>([
-    { name: 'Tên kỹ năng', description: 'Mô tả kỹ năng' },
-    { name: 'Kỹ năng chuyên môn', description: 'Mức độ thành thạo' },
-  ]);
+  const [projects, setProjects] = useState<ProjectEntry[]>([]);
 
-  const [activities, setActivities] = useState<ActivityEntry[]>([
-    {
-      organizationName: 'Tên tổ chức',
-      position: 'Vị trí của bạn',
-      startDate: 'Bắt đầu',
-      endDate: 'Kết thúc',
-      description: 'Mô tả hoạt động',
-    },
-  ]);
+  const [certificates, setCertificates] = useState<CertificateEntry[]>([]);
 
-  const [certificates, setCertificates] = useState<CertificateEntry[]>([
-    { name: 'Tên chứng chỉ', date: 'Năm' },
-  ]);
-
-  const [awards, setAwards] = useState<AwardEntry[]>([
-    { name: 'Tên giải thưởng', date: 'Năm' },
-  ]);
+  const [awards, setAwards] = useState<AwardEntry[]>([]);
 
   // Section Visibility
   const [visibleSections, setVisibleSections] = useState({
@@ -558,21 +473,23 @@ export default function CVEditorPage() {
 
   // Dynamic Section Order
   const DEFAULT_SECTION_ORDER = [
-    'objective',
-    'education',
-    'experience',
-    'skills',
-    'activities',
-    'certificates',
-    'awards',
+    "objective",
+    "education",
+    "experience",
+    "skills",
+    "activities",
+    "certificates",
+    "awards",
   ];
-  const [sectionOrder, setSectionOrder] = useState<string[]>(DEFAULT_SECTION_ORDER);
+  const [sectionOrder, setSectionOrder] = useState<string[]>(
+    DEFAULT_SECTION_ORDER,
+  );
 
-  const moveSection = (sectionKey: string, direction: 'up' | 'down') => {
+  const moveSection = (sectionKey: string, direction: "up" | "down") => {
     setSectionOrder((prev) => {
       const idx = prev.indexOf(sectionKey);
       if (idx === -1) return prev;
-      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+      const targetIdx = direction === "up" ? idx - 1 : idx + 1;
       if (targetIdx < 0 || targetIdx >= prev.length) return prev;
       const next = [...prev];
       const [item] = next.splice(idx, 1);
@@ -583,42 +500,202 @@ export default function CVEditorPage() {
   };
 
   // CV Display Language
-  const [cvLanguage, setCvLanguage] = useState<'vi' | 'en'>('vi');
+  const [cvLanguage, setCvLanguage] = useState<"vi" | "en">(initialLanguage);
+  const cvLocale: CVLocale = cvLanguage === "en" ? "en-US" : "vi-VN";
+  const { i18n } = useTranslation();
+  const uiLocale: CVLocale = (i18n.resolvedLanguage || i18n.language || "vi").toLowerCase().startsWith("en") ? "en-US" : "vi-VN";
+  const uiVi = uiLocale === "vi-VN";
+  const saveCopy = (vi: string, en: string) =>
+    (i18n.resolvedLanguage || i18n.language || "vi").toLowerCase().startsWith("en") ? en : vi;
+  const localeLabels = CV_TEMPLATE_LABELS[cvLocale];
 
   const SECTION_LABELS = {
     vi: {
-      objective: 'MỤC TIÊU NGHỀ NGHIỆP',
-      education: 'HỌC VẤN',
-      experience: 'KINH NGHIỆM LÀM VIỆC',
-      skills: 'KỸ NĂNG CHUYÊN MÔN',
-      activities: 'HOẠT ĐỘNG & DỰ ÁN',
-      certificates: 'CHỨNG CHỈ',
-      awards: 'GIẢI THƯỞNG',
-      personalInfo: 'THÔNG TIN CÁ NHÂN',
-      contact: 'THÔNG TIN LIÊN HỆ',
+      objective: "MỤC TIÊU NGHỀ NGHIỆP",
+      education: "HỌC VẤN",
+      experience: "KINH NGHIỆM LÀM VIỆC",
+      skills: "KỸ NĂNG CHUYÊN MÔN",
+      activities: "HOẠT ĐỘNG & DỰ ÁN",
+      certificates: "CHỨNG CHỈ",
+      awards: "GIẢI THƯỞNG",
+      personalInfo: "THÔNG TIN CÁ NHÂN",
+      contact: "THÔNG TIN LIÊN HỆ",
     },
     en: {
-      objective: 'CAREER OBJECTIVE',
-      education: 'EDUCATION',
-      experience: 'WORK EXPERIENCE',
-      skills: 'PROFESSIONAL SKILLS',
-      activities: 'ACTIVITIES & PROJECTS',
-      certificates: 'CERTIFICATES',
-      awards: 'HONORS & AWARDS',
-      personalInfo: 'PERSONAL INFORMATION',
-      contact: 'CONTACT INFORMATION',
+      objective: "CAREER OBJECTIVE",
+      education: "EDUCATION",
+      experience: "WORK EXPERIENCE",
+      skills: "PROFESSIONAL SKILLS",
+      activities: "ACTIVITIES & PROJECTS",
+      certificates: "CERTIFICATES",
+      awards: "HONORS & AWARDS",
+      personalInfo: "PERSONAL INFORMATION",
+      contact: "CONTACT INFORMATION",
     },
   };
 
   // UI States
   const [activeSidebarTool, setActiveSidebarTool] = useState<
-    'design' | 'sections' | 'templates' | 'language' | 'ai' | 'library' | null
-  >('design');
+    "design" | "sections" | "templates" | "language" | "ai" | "library" | null
+  >("design");
   const [isSaving, setIsSaving] = useState(false);
+  const [isAutoSaving, setIsAutoSaving] = useState(false);
+  const [isLoadingExistingCv, setIsLoadingExistingCv] = useState(!isNew);
   const [isDirty, setIsDirty] = useState(false);
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [editorCvId, setEditorCvId] = useState<string | null>(
+    isNew ? null : id || null,
+  );
+  const [generationMode, setGenerationMode] =
+    useState<CVGenerationMode>("MANUAL");
+  const [contentVersion, setContentVersion] = useState(1);
+  const contentVersionRef = useRef(contentVersion);
+  contentVersionRef.current = contentVersion;
+  const [generationStatus, setGenerationStatus] =
+    useState<CVGenerationStatus>("IDLE");
+  const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
+  const [showGenerationWarnings, setShowGenerationWarnings] = useState(false);
+  const [generationErrorStatus, setGenerationError] = useState<CVGenerationJobStatus | "NAME_REQUIRED" | null>(null);
+  const generationError = generationErrorStatus === "NAME_REQUIRED"
+    ? uiVi ? "Hãy nhập họ tên trước khi tạo CV bằng AI." : "Enter a full name before creating an AI CV."
+    : generationErrorStatus ? localizedGenerationStatus(generationErrorStatus, uiLocale) : null;
+  const [generationJobId, setGenerationJobId] = useState("");
+  const [generationJobStatus, setGenerationJobStatus] = useState<
+    CVGenerationJobStatus | "IDLE"
+  >(searchParams.get("generation") ? "QUEUED" : "IDLE");
+  const [generationOperationId, setGenerationOperationId] = useState(
+    searchParams.get("generation") || "",
+  );
+  const generationTimerRef = useRef<number | null>(null);
+  const pollingOperationRef = useRef<string | null>(null);
+  const pollingStoppedRef = useRef(false);
+  const pollingInFlightRef = useRef(false);
+  const generationAbortRef = useRef<AbortController | null>(null);
   const [zoomScale, setZoomScale] = useState<number>(0.9);
   const [showAiModal, setShowAiModal] = useState(false);
   const [existingCvs, setExistingCvs] = useState<OnlineCV[]>([]);
+  const [pageCount, setPageCount] = useState<number>(1);
+  const cvPaperRef = useRef<HTMLDivElement>(null);
+  const latestPayloadRef = useRef<UpdateOnlineCVDto | null>(null);
+  const latestDraftRevisionRef = useRef(0);
+  const normalizedGenerationWarnings = normalizeCvGenerationWarnings(
+    generationWarnings,
+    generationStatus,
+    uiLocale,
+  );
+  const generationProvenance = normalizedGenerationWarnings.provenance;
+  const visibleGenerationWarnings = normalizedGenerationWarnings.messages;
+  const hasActionableGenerationWarnings = visibleGenerationWarnings.length > 0;
+  const hasGenerationBannerWarning =
+    generationProvenance !== "ai" ||
+    generationStatus === "DEGRADED" ||
+    generationStatus === "NO_EVIDENCE" ||
+    hasActionableGenerationWarnings;
+  const generationIsActive =
+    generationJobStatus === "QUEUED" ||
+    generationJobStatus === "PROCESSING" ||
+    generationJobStatus === "CANCEL_REQUESTED";
+  const generationQueryOperationId = searchParams.get("generation");
+  const generationContextRef = useRef({
+    pathname: location.pathname,
+    cvId: editorCvId || id,
+    accessToken,
+    operationId: generationQueryOperationId,
+  });
+  generationContextRef.current = {
+    pathname: location.pathname,
+    cvId: editorCvId || id,
+    accessToken,
+    operationId: generationQueryOperationId,
+  };
+  const generationContextIsCurrent = () =>
+    generationRequestContextIsCurrent() &&
+    generationContextRef.current.cvId === (editorCvId || id) &&
+    generationContextRef.current.accessToken === accessToken &&
+    generationContextRef.current.operationId === generationQueryOperationId;
+  const generationRequestContextIsCurrent = () =>
+    !pollingStoppedRef.current &&
+    generationContextRef.current.pathname === location.pathname &&
+    generationContextRef.current.accessToken === accessToken &&
+    generationContextRef.current.operationId === generationQueryOperationId;
+
+  // Measure and calculate exact page count
+  const calculatePages = () => {
+    if (!cvPaperRef.current) return;
+    const a4HeightPx = (297 * 96) / 25.4; // 1122.519685px
+    const scale = zoomScale || 1;
+    const rect = cvPaperRef.current.getBoundingClientRect();
+    const actualHeight =
+      rect.height > 0 ? rect.height / scale : cvPaperRef.current.scrollHeight;
+    const innerTemplate = cvPaperRef.current
+      .firstElementChild as HTMLElement | null;
+    const innerHeight = innerTemplate
+      ? innerTemplate.scrollHeight
+      : actualHeight;
+    const heightToEvaluate = Math.max(actualHeight, innerHeight);
+
+    const computedPages = Math.max(
+      1,
+      Math.ceil((heightToEvaluate - 10) / a4HeightPx),
+    );
+    setPageCount(computedPages);
+  };
+
+  useEffect(() => {
+    calculatePages();
+  }, [
+    fullName,
+    position,
+    phone,
+    email,
+    link,
+    address,
+    careerObjective,
+    education,
+    workExperience,
+    skills,
+    activities,
+    projects,
+    certificates,
+    awards,
+    fontSize,
+    lineSpacing,
+    sectionOrder,
+    visibleSections,
+    templateType,
+    zoomScale,
+  ]);
+
+  useEffect(() => {
+    calculatePages();
+
+    const handleContentChange = () => {
+      calculatePages();
+    };
+
+    const ro = new ResizeObserver(() => {
+      calculatePages();
+    });
+
+    if (cvPaperRef.current) {
+      ro.observe(cvPaperRef.current);
+    }
+
+    window.addEventListener(
+      "talentpulse:cv-content-change",
+      handleContentChange,
+    );
+    window.addEventListener("resize", handleContentChange);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener(
+        "talentpulse:cv-content-change",
+        handleContentChange,
+      );
+      window.removeEventListener("resize", handleContentChange);
+    };
+  }, [zoomScale]);
 
   const currentFont: CVFontOption =
     CV_FONTS.find((f) => f.id === fontFamilyId) || CV_FONTS[0];
@@ -634,7 +711,9 @@ export default function CVEditorPage() {
 
   // Mark dirty
   const markDirty = () => {
-    if (!isDirty) setIsDirty(true);
+    if (generationIsActive) return;
+    setIsDirty(true);
+    setDraftRevision((revision) => revision + 1);
   };
 
   // Prevent accidental page close / reload when dirty
@@ -642,60 +721,125 @@ export default function CVEditorPage() {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isDirty) {
         e.preventDefault();
-        e.returnValue = '';
+        e.returnValue = "";
       }
     };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isDirty]);
 
   // Load existing CV data if editing
   useEffect(() => {
-    if (!isNew && id && accessToken) {
-      void (async () => {
-        try {
-          const cv = await onlineCvApi.findOne(id, accessToken);
-          if (cv) {
-            setTitle(`CV - ${cv.fullName || 'Chưa đặt tên'}`);
-            setTemplateType(cv.templateType || 'template1');
-            setFullName(cv.fullName || '');
-            setPosition(cv.position || '');
-            setPhone(cv.phone || '');
-            setEmail(cv.email || '');
-            setLink(cv.link || '');
-            setAddress(cv.address || '');
-            setCareerObjective(cv.careerObjective || '');
-
-            if (cv.sectionOrder && Array.isArray(cv.sectionOrder) && cv.sectionOrder.length > 0) {
-              setSectionOrder(cv.sectionOrder);
-            }
-            if (cv.fontFamily) setFontFamilyId(cv.fontFamily);
-            if (cv.themeColor) setThemeColorId(cv.themeColor);
-            if (cv.fontSize) setFontSize(cv.fontSize);
-
-            if (cv.education && cv.education.length > 0) setEducation(cv.education);
-            if (cv.workExperience && cv.workExperience.length > 0)
-              setWorkExperience(cv.workExperience);
-            if (cv.skills && cv.skills.length > 0) setSkills(cv.skills);
-            if (cv.activities && cv.activities.length > 0) {
-              setActivities(cv.activities);
-              setVisibleSections((prev) => ({ ...prev, activities: true }));
-            }
-            if (cv.certificates && cv.certificates.length > 0) {
-              setCertificates(cv.certificates);
-              setVisibleSections((prev) => ({ ...prev, certificates: true }));
-            }
-            if (cv.awards && cv.awards.length > 0) {
-              setAwards(cv.awards);
-              setVisibleSections((prev) => ({ ...prev, awards: true }));
-            }
-          }
-        } catch (error) {
-          console.error('Failed to load CV:', error);
-        }
-      })();
+    if (isNew || !id) {
+      setIsLoadingExistingCv(false);
+      return;
     }
-  }, [id, isNew, accessToken]);
+    if (!accessToken) return;
+
+    setIsLoadingExistingCv(true);
+    void (async () => {
+      try {
+        const cv = await onlineCvApi.findOne(id, accessToken);
+        if (cv) {
+          // Apply revision locale before loaded fields can trigger an autosave.
+          const loadedLocale = resolveLoadedCvLocale(cv.revision);
+          setCvLanguage(loadedLocale === "en-US" ? "en" : "vi");
+          setTitle(
+            cv.title ||
+              `CV - ${cv.fullName || "Chưa đặt tên"}${cv.position ? ` - ${cv.position}` : ""}`,
+          );
+          setIsTitleManual(true);
+          setEditorCvId(cv._id);
+          setContentVersion(cv.contentVersion || 1);
+          setTemplateType(cv.templateType || "template1");
+          const loadedWarnings = cv.revision?.warnings || [];
+          const loadedGenerationMode =
+            cv.generationMode ||
+            (cv.revision?.generatedAt ? "EDITOR_ONLY" : "MANUAL");
+          setGenerationMode(loadedGenerationMode);
+          setGenerationWarnings(loadedWarnings);
+          if (!generationQueryOperationId) {
+            setGenerationStatus(
+              loadedGenerationMode === "EDITOR_ONLY"
+                ? loadedWarnings.length > 0
+                  ? "DEGRADED"
+                  : "COMPLETE"
+                : "IDLE",
+            );
+            setGenerationJobStatus(
+              loadedGenerationMode === "EDITOR_ONLY"
+                ? loadedWarnings.length > 0
+                  ? "DEGRADED"
+                  : "COMPLETE"
+                : "IDLE",
+            );
+          }
+          setFullName(cv.fullName || "");
+          setPosition(cv.position || "");
+          setPhone(cv.phone || "");
+          setEmail(cv.email || "");
+          setLink(cv.link || "");
+          setAddress(cv.address || "");
+          setCareerObjective(cv.careerObjective || "");
+          setExpectedSalary(cv.expectedSalaryVndMonthly == null ? '' : String(cv.expectedSalaryVndMonthly));
+          setShareExpectedSalary(cv.shareExpectedSalary === true);
+
+          const normalizedSectionOrder = normalizeSectionOrder(cv.sectionOrder);
+          if (normalizedSectionOrder && normalizedSectionOrder.length > 0) {
+            setSectionOrder(normalizedSectionOrder);
+          }
+          if (cv.fontFamily) setFontFamilyId(cv.fontFamily);
+          if (cv.themeColor) setThemeColorId(cv.themeColor);
+          if (cv.fontSize) setFontSize(cv.fontSize);
+
+          if (Array.isArray(cv.education))
+            setEducation(filterMeaningfulCvEntries(cv.education));
+          if (Array.isArray(cv.workExperience))
+            setWorkExperience(filterMeaningfulCvEntries(cv.workExperience));
+          if (Array.isArray(cv.skills))
+            setSkills(filterMeaningfulCvEntries(cv.skills));
+          if (Array.isArray(cv.activities)) {
+            setActivities(filterMeaningfulCvEntries(cv.activities));
+            setVisibleSections((prev) => ({
+              ...prev,
+              activities: cv.activities!.some(
+                (entry) => filterMeaningfulCvEntries([entry]).length > 0,
+              ),
+            }));
+          }
+          if (Array.isArray(cv.projects)) {
+            setProjects(filterMeaningfulCvEntries(cv.projects));
+            setVisibleSections((prev) => ({
+              ...prev,
+              activities:
+                filterMeaningfulCvEntries(cv.activities).length +
+                  filterMeaningfulCvEntries(cv.projects).length >
+                0,
+            }));
+          }
+          if (Array.isArray(cv.certificates)) {
+            setCertificates(filterMeaningfulCvEntries(cv.certificates));
+            setVisibleSections((prev) => ({
+              ...prev,
+              certificates:
+                filterMeaningfulCvEntries(cv.certificates).length > 0,
+            }));
+          }
+          if (Array.isArray(cv.awards)) {
+            setAwards(filterMeaningfulCvEntries(cv.awards));
+            setVisibleSections((prev) => ({
+              ...prev,
+              awards: filterMeaningfulCvEntries(cv.awards).length > 0,
+            }));
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load CV:", error);
+      } finally {
+        setIsLoadingExistingCv(false);
+      }
+    })();
+  }, [id, isNew, accessToken, generationQueryOperationId]);
 
   // Fetch existing user CVs for library tool
   useEffect(() => {
@@ -707,46 +851,77 @@ export default function CVEditorPage() {
     }
   }, [accessToken]);
 
+  // Auto-set template and language if navigating with state/query on new CV
+  useEffect(() => {
+    if (isNew) {
+      const selectedTpl =
+        locationState?.templateType ||
+        (searchParams.get("template") as CVTemplateType);
+      if (selectedTpl) {
+        setTemplateType(selectedTpl);
+        setFontFamilyId(selectedTpl === "template1" ? "times" : "inter");
+      }
+      if (locationState?.themeColorId) {
+        setThemeColorId(locationState.themeColorId);
+      }
+      if (locationState?.cvLanguage) {
+        setCvLanguage(locationState.cvLanguage);
+      }
+    }
+  }, [isNew, location.state, searchParams]);
+
   // Auto-set title on initial name/position change
   useEffect(() => {
-    if (isNew && fullName) {
-      setTitle(`CV - ${fullName}${position ? ` - ${position}` : ''}`);
+    if (isNew && fullName && !isTitleManual) {
+      setTitle(`CV - ${fullName}${position ? ` - ${position}` : ""}`);
     }
-  }, [fullName, position, isNew]);
+  }, [fullName, position, isNew, isTitleManual]);
 
   // Serializes the live interactive canvas into clean, static HTML for Puppeteer
   const generateStaticPrintHtml = (rootEl: HTMLElement): string => {
     const clone = rootEl.cloneNode(true) as HTMLElement;
-    clone.style.transform = 'none';
-    clone.style.margin = '0 auto';
-    clone.style.boxShadow = 'none';
+    clone.style.transform = "none";
+    clone.style.margin = "0 auto";
+    clone.style.boxShadow = "none";
 
     // Remove any interactive UI elements, edit buttons, toolbars, popovers
-    clone.querySelectorAll('.print\\:hidden, button, [role="toolbar"], [data-toolbar]').forEach((el) => el.remove());
+    clone
+      .querySelectorAll(
+        '.print\\:hidden, button, [role="toolbar"], [data-toolbar], [data-cv-empty-entry="true"]',
+      )
+      .forEach((el) => el.remove());
 
-    const liveInputs = rootEl.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
-    const cloneInputs = clone.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+    const liveInputs = Array.from(
+      rootEl.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+        "input, textarea",
+      ),
+    ).filter((input) => !input.closest('[data-cv-empty-entry="true"]'));
+    const cloneInputs = clone.querySelectorAll<
+      HTMLInputElement | HTMLTextAreaElement
+    >("input, textarea");
 
     cloneInputs.forEach((input, index) => {
       const liveInput = liveInputs[index];
-      const isTextarea = input.tagName === 'TEXTAREA';
-      const tag = isTextarea ? 'div' : 'span';
+      const isTextarea = input.tagName === "TEXTAREA";
+      const tag = isTextarea ? "div" : "span";
       const replacement = document.createElement(tag);
 
       replacement.className = input.className
-        .replace(/border-[^\s]+/g, '')
-        .replace(/focus:[^\s]+/g, '')
-        .replace(/hover:[^\s]+/g, '');
+        .replace(/border-[^\s]+/g, "")
+        .replace(/focus:[^\s]+/g, "")
+        .replace(/hover:[^\s]+/g, "");
       replacement.style.cssText = input.style.cssText;
-      replacement.style.border = 'none';
-      replacement.style.outline = 'none';
-      replacement.style.background = 'transparent';
-      replacement.style.boxShadow = 'none';
-      replacement.style.display = isTextarea ? 'block' : 'inline-block';
-      replacement.style.whiteSpace = 'pre-wrap';
-      replacement.style.wordBreak = 'break-word';
+      replacement.style.border = "none";
+      replacement.style.outline = "none";
+      replacement.style.background = "transparent";
+      replacement.style.boxShadow = "none";
+      replacement.style.display = isTextarea ? "block" : "inline-block";
+      replacement.style.whiteSpace = "pre-wrap";
+      replacement.style.wordBreak = "break-word";
 
-      const textVal = liveInput ? liveInput.value : (input.value || input.getAttribute('value') || '');
+      const textVal = liveInput
+        ? liveInput.value
+        : input.value || input.getAttribute("value") || "";
       replacement.textContent = textVal;
 
       input.parentNode?.replaceChild(replacement, input);
@@ -755,69 +930,612 @@ export default function CVEditorPage() {
     return clone.outerHTML;
   };
 
-  // Manual Save Handler
-  const handleSaveCV = async () => {
-    if (!fullName.trim()) {
-      alert('Vui lòng nhập Họ và tên trong CV!');
+  const buildCvPayload = (
+    includeHtmlContent: boolean,
+    payloadGenerationMode: CVGenerationMode = generationMode,
+    includeGenerationMode = true,
+  ): CreateOnlineCVDto => {
+    const payload: CreateOnlineCVDto = {
+      expectedSalaryVndMonthly: salaryValue,
+      shareExpectedSalary,
+      title:
+        title.trim() ||
+        `CV - ${fullName.trim()}${position ? ` - ${position.trim()}` : ""}`,
+      templateType,
+      locale: cvLocale,
+      fullName: fullName.trim(),
+      position: position.trim() || undefined,
+      phone: phone.trim() || undefined,
+      email: email.trim() || undefined,
+      link: link.trim() || undefined,
+      address: address.trim() || undefined,
+      careerObjective: visibleSections.objective
+        ? careerObjective.trim()
+        : undefined,
+      education: visibleSections.education
+        ? filterMeaningfulCvEntries(education)
+        : [],
+      workExperience: visibleSections.experience
+        ? filterMeaningfulCvEntries(workExperience)
+        : [],
+      skills: visibleSections.skills ? filterMeaningfulCvEntries(skills) : [],
+      activities: visibleSections.activities
+        ? filterMeaningfulCvEntries(activities)
+        : [],
+      projects: visibleSections.activities
+        ? filterMeaningfulCvEntries(projects)
+        : [],
+      certificates: visibleSections.certificates
+        ? filterMeaningfulCvEntries(certificates)
+        : [],
+      awards: visibleSections.awards ? filterMeaningfulCvEntries(awards) : [],
+      sectionOrder,
+      fontFamily: fontFamilyId,
+      themeColor: themeColorId,
+      fontSize,
+    };
+
+    if (includeGenerationMode) payload.generationMode = payloadGenerationMode;
+
+    if (includeHtmlContent && payloadGenerationMode !== "EDITOR_ONLY") {
+      const printCanvas = document.getElementById("cv-print-area");
+      payload.htmlContent = printCanvas
+        ? generateStaticPrintHtml(printCanvas)
+        : "";
+    }
+
+    return payload;
+  };
+
+  latestPayloadRef.current = !salaryValid ? null : {
+    ...buildCvPayload(false, generationMode, false),
+    expectedContentVersion: contentVersionRef.current,
+  };
+  latestDraftRevisionRef.current = draftRevision;
+
+  // Generated drafts and subsequent manual edits use the same PATCH contract.
+  useEffect(() => {
+    const activeCvId = editorCvId || (!isNew ? id : null);
+    if (
+      !activeCvId ||
+      !accessToken ||
+      isLoadingExistingCv ||
+      !isDirty ||
+      !salaryValid ||
+      isSaving ||
+      generationIsActive
+    ) {
       return;
+    }
+
+    const revision = draftRevision;
+    const timer = window.setTimeout(() => {
+      const payload = latestPayloadRef.current;
+      if (!payload) return;
+
+      setIsAutoSaving(true);
+      void onlineCvApi
+        .update(activeCvId, payload, accessToken)
+        .then((saved) => {
+          if (generationContextRef.current.cvId !== activeCvId ||
+              generationContextRef.current.accessToken !== accessToken) return;
+          contentVersionRef.current = saved.contentVersion || contentVersionRef.current;
+          setContentVersion(contentVersionRef.current);
+          if (latestDraftRevisionRef.current === revision) setIsDirty(false);
+        })
+        .catch((error: any) => {
+          toast.error(
+            "Lỗi tự động lưu CV",
+            error.message || "Không thể tự động lưu thay đổi.",
+          );
+        })
+        .finally(() => setIsAutoSaving(false));
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    accessToken,
+    draftRevision,
+    editorCvId,
+    generationIsActive,
+    id,
+    isDirty,
+    isLoadingExistingCv,
+    isNew,
+    isSaving,
+    salaryValid,
+    toast,
+  ]);
+
+  const applyGeneratedDraft = (
+    response: GenerateOnlineCVDraftResponse | GenerateOnlineCVJobStatusResponse,
+  ) => {
+    const mappedResponse = mapGeneratedDraftResponse(response);
+    const draft = mappedResponse.draft;
+    if (mappedResponse.locale)
+      setCvLanguage(mappedResponse.locale === "en-US" ? "en" : "vi");
+    if (draft.title && !isTitleManual) setTitle(draft.title);
+    if (draft.fullName !== undefined) setFullName(draft.fullName || "");
+    if (draft.position !== undefined) setPosition(draft.position || "");
+    if (draft.phone !== undefined) setPhone(draft.phone || "");
+    if (draft.email !== undefined) setEmail(draft.email || "");
+    if (draft.link !== undefined) setLink(draft.link || "");
+    if (draft.address !== undefined) setAddress(draft.address || "");
+    if (draft.careerObjective !== undefined)
+      setCareerObjective(draft.careerObjective || "");
+    if (draft.education)
+      setEducation(filterMeaningfulCvEntries(draft.education));
+    if (draft.workExperience)
+      setWorkExperience(filterMeaningfulCvEntries(draft.workExperience));
+    if (draft.skills) setSkills(filterMeaningfulCvEntries(draft.skills));
+    if (draft.activities)
+      setActivities(filterMeaningfulCvEntries(draft.activities));
+    if (draft.projects) setProjects(filterMeaningfulCvEntries(draft.projects));
+    if (draft.certificates)
+      setCertificates(filterMeaningfulCvEntries(draft.certificates));
+    if (draft.awards) setAwards(filterMeaningfulCvEntries(draft.awards));
+    if (draft.sectionOrder?.length) setSectionOrder(draft.sectionOrder);
+    if (draft.fontFamily) setFontFamilyId(draft.fontFamily);
+    if (draft.themeColor) setThemeColorId(draft.themeColor);
+    if (draft.fontSize) setFontSize(draft.fontSize);
+    if (draft.lineSpacing) setLineSpacing(draft.lineSpacing);
+
+    setVisibleSections((previous) => ({
+      ...previous,
+      ...(draft.activities || draft.projects
+        ? {
+            activities:
+              (draft.activities?.length || 0) + (draft.projects?.length || 0) >
+              0,
+          }
+        : {}),
+      ...(draft.certificates
+        ? { certificates: draft.certificates.length > 0 }
+        : {}),
+      ...(draft.awards ? { awards: draft.awards.length > 0 } : {}),
+    }));
+    // The generate endpoint is editor-only even if an older response omitted the mode.
+    setGenerationMode(mappedResponse.generationMode || "EDITOR_ONLY");
+    if (response.contentVersion !== undefined) {
+      contentVersionRef.current = response.contentVersion;
+      setContentVersion(response.contentVersion);
+    }
+    setGenerationWarnings(mappedResponse.warnings);
+    setGenerationStatus(mappedResponse.status);
+    setGenerationError(null);
+    markDirty();
+  };
+
+  const clearGenerationTimer = () => {
+    if (generationTimerRef.current !== null) {
+      window.clearTimeout(generationTimerRef.current);
+      generationTimerRef.current = null;
+    }
+  };
+
+  const clearGenerationQuery = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("generation");
+    navigate(
+      { pathname: location.pathname, search: next.toString() ? `?${next}` : "" },
+      { replace: true },
+    );
+  };
+
+  const persistGenerationQuery = (cvId: string, operationId: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("generation", operationId);
+    navigate(
+      {
+        pathname: `/cv-editor/${cvId}`,
+        search: `?${next.toString()}`,
+      },
+      { replace: true },
+    );
+  };
+
+  const applyTerminalGenerationResult = async (
+    result: GenerateOnlineCVJobStatusResponse,
+    cvId: string,
+  ): Promise<void> => {
+    const signal = generationAbortRef.current?.signal;
+    if (
+      pollingStoppedRef.current ||
+      !generationContextIsCurrent() ||
+      pollingOperationRef.current !== result.operationId
+    ) {
+      return;
+    }
+    let draftFetchFailed = false;
+    const rawResult = asRecord(result);
+    const currentPayload =
+      result.current ||
+      rawResult.currentGeneration ||
+      rawResult.generation ||
+      rawResult.result;
+    const hasResultPayload = Boolean(
+      result.draft ||
+        currentPayload ||
+        rawResult.fullName ||
+        rawResult.full_name,
+    );
+    if (hasResultPayload) {
+      applyGeneratedDraft({
+        ...result,
+        ...(currentPayload && !result.draft ? { cv: currentPayload } : {}),
+      } as GenerateOnlineCVJobStatusResponse);
+    } else {
+      try {
+        const current = await onlineCvApi.findOne(cvId, accessToken);
+        if (
+          pollingStoppedRef.current ||
+          signal?.aborted ||
+          !generationContextIsCurrent() ||
+          pollingOperationRef.current !== result.operationId
+        ) {
+          return;
+        }
+        applyGeneratedDraft({
+          ...result,
+          contentVersion: current.contentVersion,
+          cv: current,
+        } as GenerateOnlineCVJobStatusResponse);
+      } catch {
+        if (signal?.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== result.operationId) return;
+        draftFetchFailed = true;
+      }
+    }
+    setGenerationStatus(result.status === "DEGRADED" ? "DEGRADED" : "COMPLETE");
+    setGenerationError(
+      draftFetchFailed ? "FAILED" : null,
+    );
+  };
+
+  const scheduleGenerationPoll = (cvId: string, operationId: string, delaySeconds: number) => {
+    clearGenerationTimer();
+    generationTimerRef.current = window.setTimeout(() => {
+      void pollGenerationJob(cvId, operationId);
+    }, Math.max(1, Math.min(delaySeconds || 5, 60)) * 1000);
+  };
+
+  const pollGenerationJob = async (cvId: string, operationId: string): Promise<void> => {
+    const signal = generationAbortRef.current?.signal;
+    if (
+      pollingStoppedRef.current ||
+      pollingOperationRef.current !== operationId ||
+      !accessToken
+    ) {
+      return;
+    }
+    if (pollingInFlightRef.current) {
+      scheduleGenerationPoll(cvId, operationId, 5);
+      return;
+    }
+
+    pollingInFlightRef.current = true;
+    try {
+      const result = await onlineCvApi.getGenerationJob(
+        cvId,
+        operationId,
+        accessToken,
+        signal,
+      );
+      if (
+        pollingStoppedRef.current ||
+        signal?.aborted ||
+        !generationContextIsCurrent() ||
+        pollingOperationRef.current !== operationId
+      ) {
+        return;
+      }
+
+      const status = result.status;
+      if (
+        status === "QUEUED" ||
+        status === "PROCESSING" ||
+        status === "CANCEL_REQUESTED"
+      ) {
+        setGenerationJobStatus(status);
+        setGenerationStatus("GENERATING");
+        scheduleGenerationPoll(cvId, operationId, result.pollAfterSeconds || 5);
+        return;
+      }
+
+      clearGenerationTimer();
+      if (status === "COMPLETE" || status === "DEGRADED") {
+        await applyTerminalGenerationResult(result, cvId);
+        if (signal?.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+        setGenerationJobStatus(status);
+        pollingOperationRef.current = null;
+        clearGenerationQuery();
+        return;
+      }
+
+      const terminalStatus = status === "CANCELLED" || status === "STALE" ? status : "FAILED";
+      setGenerationJobStatus(terminalStatus);
+      setGenerationStatus(terminalStatus);
+      setGenerationError(terminalStatus);
+      pollingOperationRef.current = null;
+      clearGenerationQuery();
+    } catch (error) {
+      if (pollingStoppedRef.current || signal?.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+      if (error instanceof ApiError && [401, 403, 404, 409].includes(error.status)) {
+        const terminalStatus: CVGenerationJobStatus =
+          error.status === 404 || error.status === 409 ? "STALE" : "FAILED";
+        setGenerationJobStatus(terminalStatus);
+        setGenerationStatus(terminalStatus);
+        setGenerationError(terminalStatus);
+        pollingOperationRef.current = null;
+        clearGenerationQuery();
+      } else {
+        setGenerationError("FAILED");
+        scheduleGenerationPoll(cvId, operationId, 5);
+      }
+    } finally {
+      if (generationAbortRef.current?.signal === signal) pollingInFlightRef.current = false;
+    }
+  };
+
+  const startGenerationPolling = (
+    cvId: string,
+    operationId: string,
+    pollAfterSeconds = 5,
+  ) => {
+    clearGenerationTimer();
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = new AbortController();
+    pollingInFlightRef.current = false;
+    pollingStoppedRef.current = false;
+    pollingOperationRef.current = operationId;
+    setGenerationOperationId(operationId);
+    setGenerationJobStatus("QUEUED");
+    setGenerationStatus("GENERATING");
+    setGenerationError(null);
+    void pollGenerationJob(cvId, operationId);
+    scheduleGenerationPoll(cvId, operationId, pollAfterSeconds);
+  };
+
+  const cancelGeneration = async () => {
+    const cvId = editorCvId || id;
+    const operationId = generationOperationId;
+    if (!cvId || !operationId || !accessToken || !generationIsActive) return;
+    clearGenerationTimer();
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = new AbortController();
+    const signal = generationAbortRef.current.signal;
+    pollingInFlightRef.current = false;
+    pollingOperationRef.current = operationId;
+    try {
+      const result = await onlineCvApi.cancelGenerationJob(
+        cvId,
+        operationId,
+        accessToken,
+        signal,
+      );
+      if (signal.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+      if (result.status === "COMPLETE" || result.status === "DEGRADED") {
+        await applyTerminalGenerationResult(result, cvId);
+        if (signal.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+        setGenerationJobStatus(result.status);
+        pollingOperationRef.current = null;
+        clearGenerationQuery();
+        return;
+      }
+      if (
+        result.status === "CANCEL_REQUESTED" ||
+        result.status === "QUEUED" ||
+        result.status === "PROCESSING"
+      ) {
+        startGenerationPolling(
+          cvId,
+          operationId,
+          result.pollAfterSeconds || 5,
+        );
+        setGenerationJobStatus(result.status);
+        return;
+      }
+      const terminalStatus =
+        result.status === "STALE" || result.status === "FAILED"
+          ? result.status
+          : "CANCELLED";
+      setGenerationJobStatus(terminalStatus);
+      setGenerationStatus(terminalStatus);
+      setGenerationError(terminalStatus);
+      pollingOperationRef.current = null;
+      clearGenerationQuery();
+    } catch (error) {
+      if (signal.aborted || !generationContextIsCurrent() || pollingOperationRef.current !== operationId) return;
+      if (error instanceof ApiError && [401, 403, 404, 409].includes(error.status)) {
+        const terminalStatus: CVGenerationJobStatus =
+          error.status === 404 || error.status === 409 ? "STALE" : "FAILED";
+        setGenerationJobStatus(terminalStatus);
+        setGenerationStatus(terminalStatus);
+        setGenerationError(terminalStatus);
+        pollingOperationRef.current = null;
+        clearGenerationQuery();
+      } else {
+        pollingOperationRef.current = operationId;
+        setGenerationError("FAILED");
+        startGenerationPolling(cvId, operationId, 5);
+      }
+    }
+  };
+
+  useEffect(() => () => {
+    pollingStoppedRef.current = true;
+    pollingOperationRef.current = null;
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
+    clearGenerationTimer();
+  }, []);
+
+  useEffect(() => {
+    if (!accessToken || !editorCvId || !generationQueryOperationId) {
+      return () => {
+        if (pollingOperationRef.current) {
+          pollingOperationRef.current = null;
+          generationAbortRef.current?.abort();
+          generationAbortRef.current = null;
+          clearGenerationTimer();
+        }
+      };
+    }
+    if (pollingOperationRef.current !== generationQueryOperationId) {
+      startGenerationPolling(editorCvId, generationQueryOperationId);
+    }
+    return () => {
+      generationAbortRef.current?.abort();
+      generationAbortRef.current = null;
+      pollingOperationRef.current = null;
+      clearGenerationTimer();
+    };
+    // Polling is fenced by operationId and cleaned up on unmount or route changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, editorCvId, generationQueryOperationId]);
+
+  useEffect(() => {
+    if (generationIsActive && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  }, [generationIsActive]);
+
+  const persistCv = async (
+    redirectAfterSave: boolean,
+    payloadGenerationMode: CVGenerationMode = generationMode,
+  ): Promise<string | null> => {
+    if (!salaryValid) {
+      toast.error(!uiVi ? 'Enter a whole-number salary from 0 to 2,147,483,647 VND/month.' : 'Nhập lương nguyên từ 0 đến 2.147.483.647 VND/tháng.');
+      return null;
+    }
+    if (!fullName.trim()) {
+      toast.error(uiVi ? "Vui lòng nhập họ tên trong CV." : "Enter a full name in the CV.");
+      return null;
     }
 
     setIsSaving(true);
     try {
-      // Clean HTML snapshot of CV print canvas
-      let htmlContent = '';
-      const printCanvas = document.getElementById('cv-print-area');
-      if (printCanvas) {
-        htmlContent = generateStaticPrintHtml(printCanvas);
-      }
-
-      const payload = {
-        templateType,
-        fullName: fullName.trim(),
-        position: position.trim() || undefined,
-        phone: phone.trim() || undefined,
-        email: email.trim() || undefined,
-        link: link.trim() || undefined,
-        address: address.trim() || undefined,
-        careerObjective: visibleSections.objective ? careerObjective.trim() : undefined,
-        education: visibleSections.education ? education.filter((e) => e.schoolName) : [],
-        workExperience: visibleSections.experience
-          ? workExperience.filter((w) => w.companyName)
-          : [],
-        skills: visibleSections.skills ? skills.filter((s) => s.name) : [],
-        activities: visibleSections.activities
-          ? activities.filter((a) => a.organizationName)
-          : [],
-        certificates: visibleSections.certificates
-          ? certificates.filter((c) => c.name)
-          : [],
-        awards: visibleSections.awards ? awards.filter((a) => a.name) : [],
-        sectionOrder,
-        fontFamily: fontFamilyId,
-        themeColor: themeColorId,
-        fontSize,
-        htmlContent,
-      };
-
-      if (isNew) {
-        await onlineCvApi.create(payload, accessToken);
-      } else {
-        await onlineCvApi.update(id, payload, accessToken);
-      }
-
+      const activeCvId = editorCvId || (!isNew ? id : null);
+      const payload = buildCvPayload(
+        payloadGenerationMode !== "EDITOR_ONLY",
+        payloadGenerationMode,
+        !activeCvId || payloadGenerationMode !== "EDITOR_ONLY",
+      );
+      const saved = activeCvId
+        ? await onlineCvApi.update(activeCvId, {
+            ...payload,
+            expectedContentVersion: contentVersionRef.current,
+          }, accessToken)
+        : await onlineCvApi.create(payload, accessToken);
+      if (!generationRequestContextIsCurrent()) return null;
+      setEditorCvId(saved._id);
+      contentVersionRef.current = saved.contentVersion || contentVersionRef.current;
+      setContentVersion(contentVersionRef.current);
+      setGenerationMode(saved.generationMode || generationMode);
       setIsDirty(false);
 
-      // Redirect to /my-cv
+      if (!redirectAfterSave) return saved._id;
+
       setTimeout(() => {
-        navigate('/my-cv');
-      }, 300);
-    } catch (error: any) {
-      alert(error.message || 'Không thể lưu CV. Vui lòng thử lại!');
+        const message = activeCvId
+          ? saveCopy("Đã cập nhật CV.", "CV updated.")
+          : saveCopy("Đã tạo CV.", "CV created.");
+        const description = saveCopy(
+          `Bản CV "${title.trim() || fullName}" đã được lưu vào danh sách của bạn.`,
+          `CV "${title.trim() || fullName}" has been saved to your list.`,
+        );
+        navigate("/my-cv", {
+          state: {
+            toast: {
+              type: "success",
+              message,
+              description,
+            },
+          },
+        });
+      }, 200);
+      return saved._id;
+    } catch {
+      toast.error(
+        saveCopy("Lỗi khi lưu CV", "Could not save CV"),
+        saveCopy("Không thể lưu CV. Vui lòng thử lại.", "The CV could not be saved. Please try again."),
+      );
+      return null;
     } finally {
       setIsSaving(false);
     }
   };
 
+  const handleSaveCV = () => {
+    void persistCv(true);
+  };
+
+  const handleGenerateWithAi = async () => {
+    setGenerationError(null);
+    setGenerationWarnings([]);
+    setGenerationStatus("GENERATING");
+    setGenerationJobStatus("QUEUED");
+
+    try {
+      if (isDirty) {
+        const savedId = await persistCv(false, generationMode);
+        if (!generationRequestContextIsCurrent()) return;
+        if (!savedId) throw new Error("cv_save_failed");
+      }
+      const cvId =
+        editorCvId ||
+        (!isNew ? id : null) ||
+        (await persistCv(false, "MANUAL"));
+      if (!generationRequestContextIsCurrent()) return;
+      if (!cvId) {
+        setGenerationStatus("FAILED");
+        setGenerationJobStatus("FAILED");
+        setGenerationError("NAME_REQUIRED");
+        return;
+      }
+
+      const response = await onlineCvApi.createGenerationJob(
+        cvId,
+        {
+          ...(generationJobId.trim() ? { jobId: generationJobId.trim() } : {}),
+          expectedContentVersion: contentVersionRef.current,
+        },
+        createIdempotencyKey(),
+        accessToken,
+      );
+      if (!generationRequestContextIsCurrent()) return;
+      if (!response.operationId || !response.onlineCvId) {
+        throw new Error("invalid_generation_response");
+      }
+      setEditorCvId(response.onlineCvId);
+      setShowAiModal(false);
+      persistGenerationQuery(response.onlineCvId, response.operationId);
+      startGenerationPolling(
+        response.onlineCvId,
+        response.operationId,
+        response.pollAfterSeconds,
+      );
+    } catch {
+      if (!generationRequestContextIsCurrent()) return;
+      setGenerationStatus("FAILED");
+      setGenerationJobStatus("FAILED");
+      setGenerationError("FAILED");
+    }
+  };
+
+  // Back button handler returning to previous page
+  const handleBack = () => {
+    if (
+      isDirty &&
+      !window.confirm("Bạn có thay đổi chưa lưu. Bạn có chắc muốn rời đi?")
+    ) {
+      return;
+    }
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate("/cv-templates");
+    }
+  };
 
   return (
     <div className="flex h-screen flex-col bg-slate-200 dark:bg-slate-950 font-sans overflow-hidden">
@@ -825,25 +1543,24 @@ export default function CVEditorPage() {
       <header className="h-16 shrink-0 border-b border-slate-200/80 bg-white px-4 sm:px-6 flex items-center justify-between z-30 shadow-xs dark:border-slate-800 dark:bg-slate-900 print:hidden">
         {/* Left: Back & Title */}
         <div className="flex items-center gap-3 min-w-0">
-          <Link
-            to="/my-cv"
-            onClick={(e) => {
-              if (isDirty && !window.confirm('Bạn có thay đổi chưa lưu. Bạn có chắc muốn rời đi?')) {
-                e.preventDefault();
-              }
-            }}
+          <button
+            type="button"
+            onClick={handleBack}
             className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer shrink-0"
-            title="Quay lại danh sách CV"
+            title="Quay lại trang trước"
+            aria-label="Quay lại"
           >
             <ArrowLeft className="h-4.5 w-4.5" />
-          </Link>
+          </button>
 
           {/* Editable CV Title */}
           <div className="flex items-center gap-2 min-w-0">
             <input
               type="text"
               value={title}
+              disabled={generationIsActive}
               onChange={(e) => {
+                setIsTitleManual(true);
                 setTitle(e.target.value);
                 markDirty();
               }}
@@ -851,7 +1568,10 @@ export default function CVEditorPage() {
               className="font-bold text-sm sm:text-base text-slate-900 dark:text-white bg-transparent border-b border-transparent hover:border-slate-300 focus:border-primary focus:outline-none px-1 py-0.5 max-w-[200px] sm:max-w-[320px] truncate"
             />
             {isDirty && (
-              <span className="flex h-2 w-2 rounded-full bg-amber-500 shrink-0" title="Có thay đổi chưa lưu" />
+              <span
+                className="flex h-2 w-2 rounded-full bg-amber-500 shrink-0"
+                title="Có thay đổi chưa lưu"
+              />
             )}
           </div>
         </div>
@@ -863,10 +1583,14 @@ export default function CVEditorPage() {
             type="button"
             onClick={toggleTheme}
             className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-100/80 text-slate-600 hover:bg-slate-200 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
-            title={theme === 'dark' ? 'Chuyển sang chế độ Sáng' : 'Chuyển sang chế độ Tối'}
+            title={
+              theme === "dark"
+                ? "Chuyển sang chế độ Sáng"
+                : "Chuyển sang chế độ Tối"
+            }
             aria-label="Toggle Theme"
           >
-            {theme === 'dark' ? (
+            {theme === "dark" ? (
               <Sun className="h-4.5 w-4.5 text-amber-400" />
             ) : (
               <Moon className="h-4.5 w-4.5 text-slate-600" />
@@ -877,30 +1601,65 @@ export default function CVEditorPage() {
           <button
             type="button"
             onClick={handleSaveCV}
-            disabled={isSaving}
+            disabled={isSaving || isAutoSaving || generationIsActive}
             className="flex h-10 items-center gap-2 rounded-xl bg-primary px-4 sm:px-6 text-xs sm:text-sm font-extrabold text-white shadow-md shadow-primary/25 transition hover:bg-primary-dark active:scale-98 cursor-pointer disabled:opacity-50"
           >
             <Save className="h-4 w-4" />
-            <span>{isSaving ? 'Đang lưu...' : 'Lưu CV'}</span>
+            <span>
+              {isSaving
+                ? "Đang lưu..."
+                : isAutoSaving
+                  ? "Đang tự lưu..."
+                  : "Lưu CV"}
+            </span>
           </button>
         </div>
       </header>
 
       {/* 2. MAIN WORKSPACE */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
+        {generationIsActive && (
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-6 backdrop-blur-[2px]"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="w-full max-w-sm rounded-2xl border border-white/20 bg-white/95 p-6 text-center shadow-2xl dark:border-slate-700 dark:bg-slate-900/95">
+              <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
+              <p className="mt-3 text-sm font-bold text-slate-900 dark:text-white">
+                {localizedGenerationStatus(generationJobStatus, uiLocale)}
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {uiVi
+                  ? "Bạn có thể hủy yêu cầu, nội dung hiện tại vẫn được giữ nguyên."
+                  : "You can cancel the request; your current content will be kept."}
+              </p>
+              <button
+                type="button"
+                onClick={() => void cancelGeneration()}
+                className="mt-5 inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-rose-200 px-4 text-xs font-bold text-rose-700 transition hover:bg-rose-50 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30"
+              >
+                <X className="h-4 w-4" />
+                {uiVi ? "Hủy tạo bản nháp" : "Cancel generation"}
+              </button>
+            </div>
+          </div>
+        )}
         {/* SIDEBAR TOOLBAR (Icons Column - 64px) */}
-        <aside className="w-16 shrink-0 border-r border-slate-200/80 bg-white py-4 flex flex-col items-center justify-between dark:border-slate-800 dark:bg-slate-900 z-20 print:hidden">
+        <aside inert={generationIsActive} aria-hidden={generationIsActive} className="w-16 shrink-0 border-r border-slate-200/80 bg-white py-4 flex flex-col items-center justify-between dark:border-slate-800 dark:bg-slate-900 z-20 print:hidden">
           <div className="flex flex-col items-center gap-2">
             {/* Tool 1: Design & Font */}
             <button
               type="button"
               onClick={() =>
-                setActiveSidebarTool((prev) => (prev === 'design' ? null : 'design'))
+                setActiveSidebarTool((prev) =>
+                  prev === "design" ? null : "design",
+                )
               }
               className={`flex h-11 w-11 flex-col items-center justify-center rounded-xl text-[10px] font-bold transition-all cursor-pointer ${
-                activeSidebarTool === 'design'
-                  ? 'bg-primary text-white shadow-md shadow-primary/25'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+                activeSidebarTool === "design"
+                  ? "bg-primary text-white shadow-md shadow-primary/25"
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
               }`}
               title="Thiết kế & Font chữ"
             >
@@ -912,12 +1671,14 @@ export default function CVEditorPage() {
             <button
               type="button"
               onClick={() =>
-                setActiveSidebarTool((prev) => (prev === 'sections' ? null : 'sections'))
+                setActiveSidebarTool((prev) =>
+                  prev === "sections" ? null : "sections",
+                )
               }
               className={`flex h-11 w-11 flex-col items-center justify-center rounded-xl text-[10px] font-bold transition-all cursor-pointer ${
-                activeSidebarTool === 'sections'
-                  ? 'bg-primary text-white shadow-md shadow-primary/25'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+                activeSidebarTool === "sections"
+                  ? "bg-primary text-white shadow-md shadow-primary/25"
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
               }`}
               title="Thêm mục"
             >
@@ -929,12 +1690,14 @@ export default function CVEditorPage() {
             <button
               type="button"
               onClick={() =>
-                setActiveSidebarTool((prev) => (prev === 'templates' ? null : 'templates'))
+                setActiveSidebarTool((prev) =>
+                  prev === "templates" ? null : "templates",
+                )
               }
               className={`flex h-11 w-11 flex-col items-center justify-center rounded-xl text-[10px] font-bold transition-all cursor-pointer ${
-                activeSidebarTool === 'templates'
-                  ? 'bg-primary text-white shadow-md shadow-primary/25'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+                activeSidebarTool === "templates"
+                  ? "bg-primary text-white shadow-md shadow-primary/25"
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
               }`}
               title="Đổi mẫu CV"
             >
@@ -946,12 +1709,14 @@ export default function CVEditorPage() {
             <button
               type="button"
               onClick={() =>
-                setActiveSidebarTool((prev) => (prev === 'language' ? null : 'language'))
+                setActiveSidebarTool((prev) =>
+                  prev === "language" ? null : "language",
+                )
               }
               className={`flex h-11 w-11 flex-col items-center justify-center rounded-xl text-[10px] font-bold transition-all cursor-pointer ${
-                activeSidebarTool === 'language'
-                  ? 'bg-primary text-white shadow-md shadow-primary/25'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+                activeSidebarTool === "language"
+                  ? "bg-primary text-white shadow-md shadow-primary/25"
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
               }`}
               title="Ngôn ngữ CV (Việt / Anh)"
             >
@@ -959,15 +1724,17 @@ export default function CVEditorPage() {
               <span className="mt-0.5 scale-90">Ngôn ngữ</span>
             </button>
 
-            {/* Tool 5: AI Career Assistant (Premium) */}
+            {/* Tool 5: AI CV generation */}
             <button
               type="button"
               onClick={() => setShowAiModal(true)}
               className="flex h-11 w-11 flex-col items-center justify-center rounded-xl text-[10px] font-bold text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-all cursor-pointer relative"
-              title="AI Hỗ trợ viết CV (Gói Premium)"
+              title={uiVi ? "Tạo CV bằng AI" : "Create a CV with AI"}
             >
               <Sparkles className="h-4.5 w-4.5 text-amber-500" />
-              <span className="mt-0.5 scale-90 text-amber-600 dark:text-amber-400">AI</span>
+              <span className="mt-0.5 scale-90 text-amber-600 dark:text-amber-400">
+                AI
+              </span>
               <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] text-white font-bold">
                 <Crown className="h-2.5 w-2.5" />
               </span>
@@ -977,12 +1744,14 @@ export default function CVEditorPage() {
             <button
               type="button"
               onClick={() =>
-                setActiveSidebarTool((prev) => (prev === 'library' ? null : 'library'))
+                setActiveSidebarTool((prev) =>
+                  prev === "library" ? null : "library",
+                )
               }
               className={`flex h-11 w-11 flex-col items-center justify-center rounded-xl text-[10px] font-bold transition-all cursor-pointer ${
-                activeSidebarTool === 'library'
-                  ? 'bg-primary text-white shadow-md shadow-primary/25'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+                activeSidebarTool === "library"
+                  ? "bg-primary text-white shadow-md shadow-primary/25"
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
               }`}
               title="Thư viện CV của bạn"
             >
@@ -996,6 +1765,8 @@ export default function CVEditorPage() {
         <AnimatePresence>
           {activeSidebarTool && (
             <motion.div
+              inert={generationIsActive}
+              aria-hidden={generationIsActive}
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: 300, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
@@ -1005,11 +1776,11 @@ export default function CVEditorPage() {
               {/* Header */}
               <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 dark:border-slate-800">
                 <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">
-                  {activeSidebarTool === 'design' && 'Thiết kế & Font chữ'}
-                  {activeSidebarTool === 'sections' && 'Bật / Tắt mục CV'}
-                  {activeSidebarTool === 'templates' && 'Đổi mẫu giao diện'}
-                  {activeSidebarTool === 'language' && 'Ngôn ngữ CV'}
-                  {activeSidebarTool === 'library' && 'Thư viện CV của bạn'}
+                  {activeSidebarTool === "design" && "Thiết kế & Font chữ"}
+                  {activeSidebarTool === "sections" && "Bật / Tắt mục CV"}
+                  {activeSidebarTool === "templates" && "Đổi mẫu giao diện"}
+                  {activeSidebarTool === "language" && "Ngôn ngữ CV"}
+                  {activeSidebarTool === "library" && "Thư viện CV của bạn"}
                 </h3>
                 <button
                   type="button"
@@ -1020,8 +1791,26 @@ export default function CVEditorPage() {
                 </button>
               </div>
 
+              <fieldset disabled={generationIsActive || isLoadingExistingCv} className="mb-5 space-y-3 border-b border-slate-200 pb-5 text-xs dark:border-slate-700">
+                <label className="block font-bold" htmlFor="cv-expected-salary">
+                  {cvLanguage === 'en' ? 'Expected salary (optional, VND/month)' : 'Lương mong muốn (không bắt buộc, VND/tháng)'}
+                </label>
+                <input id="cv-expected-salary" type="number" min="0" max="2147483647" step="1"
+                  value={expectedSalary} aria-invalid={!salaryValid} aria-describedby="cv-salary-help"
+                  onChange={(e) => { setExpectedSalary(e.target.value); markDirty(); }}
+                  className="w-full rounded-xl border border-slate-300 bg-transparent p-3 dark:border-slate-700" />
+                {!salaryValid && <p role="alert" className="text-red-600">{cvLanguage === 'en' ? 'Use a whole number from 0 to 2,147,483,647.' : 'Nhập số nguyên từ 0 đến 2.147.483.647.'}</p>}
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={shareExpectedSalary}
+                    onChange={(e) => { setShareExpectedSalary(e.target.checked); markDirty(); }} />
+                  {cvLanguage === 'en' ? 'Allow recruiters to filter this searchable CV by my expected salary.' : 'Cho phép nhà tuyển dụng lọc CV có thể tìm kiếm này theo lương mong muốn của tôi.'}
+                </label>
+                <p id="cv-salary-help" className="text-slate-500">{cvLanguage === 'en'
+                  ? 'Sharing is off by default. Leave the amount blank to clear it. This applies to structured online CV data, not salary text in uploaded files.'
+                  : 'Mặc định không chia sẻ. Để trống để xóa mức lương. Chỉ áp dụng cho dữ liệu CV online có cấu trúc, không phải nội dung lương trong file tải lên.'}</p>
+              </fieldset>
               {/* TOOL 1: Design & Font */}
-              {activeSidebarTool === 'design' && (
+              {activeSidebarTool === "design" && (
                 <div className="space-y-5 text-xs">
                   {/* Font Selection */}
                   <div>
@@ -1039,12 +1828,16 @@ export default function CVEditorPage() {
                           }}
                           className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left font-medium transition cursor-pointer ${
                             fontFamilyId === font.id
-                              ? 'bg-primary/10 text-primary border border-primary/30 font-bold dark:bg-primary/20'
-                              : 'bg-slate-50 text-slate-700 hover:bg-slate-100 dark:bg-slate-800/60 dark:text-slate-300'
+                              ? "bg-primary/10 text-primary border border-primary/30 font-bold dark:bg-primary/20"
+                              : "bg-slate-50 text-slate-700 hover:bg-slate-100 dark:bg-slate-800/60 dark:text-slate-300"
                           }`}
                         >
-                          <span style={{ fontFamily: font.family }}>{font.name}</span>
-                          {fontFamilyId === font.id && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                          <span style={{ fontFamily: font.family }}>
+                            {font.name}
+                          </span>
+                          {fontFamilyId === font.id && (
+                            <CheckCircle2 className="h-4 w-4 text-primary" />
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1066,13 +1859,15 @@ export default function CVEditorPage() {
                           }}
                           className={`h-9 w-full rounded-xl transition-all flex items-center justify-center cursor-pointer ${
                             themeColorId === theme.id
-                              ? 'ring-2 ring-primary ring-offset-2 scale-105 shadow-md'
-                              : 'hover:scale-105 opacity-85 hover:opacity-100'
+                              ? "ring-2 ring-primary ring-offset-2 scale-105 shadow-md"
+                              : "hover:scale-105 opacity-85 hover:opacity-100"
                           }`}
                           style={{ backgroundColor: theme.color }}
                           title={theme.name}
                         >
-                          {themeColorId === theme.id && <CheckCircle2 className="h-4 w-4 text-white" />}
+                          {themeColorId === theme.id && (
+                            <CheckCircle2 className="h-4 w-4 text-white" />
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1081,13 +1876,19 @@ export default function CVEditorPage() {
                   {/* Font Size Slider */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label className="font-bold text-slate-700 dark:text-slate-300">Cỡ chữ cơ sở</label>
+                      <label className="font-bold text-slate-700 dark:text-slate-300">
+                        Cỡ chữ cơ sở
+                      </label>
                       <span className="text-slate-500 font-semibold capitalize">
-                        {fontSize === 'small' ? 'Nhỏ (~13px)' : fontSize === 'medium' ? 'Vừa (~14px)' : 'Lớn (~16px)'}
+                        {fontSize === "small"
+                          ? "Nhỏ (~13px)"
+                          : fontSize === "medium"
+                            ? "Vừa (~14px)"
+                            : "Lớn (~16px)"}
                       </span>
                     </div>
                     <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-                      {(['small', 'medium', 'large'] as const).map((s) => (
+                      {(["small", "medium", "large"] as const).map((s) => (
                         <button
                           key={s}
                           type="button"
@@ -1097,11 +1898,15 @@ export default function CVEditorPage() {
                           }}
                           className={`py-1.5 rounded-lg text-center font-bold text-xs transition cursor-pointer ${
                             fontSize === s
-                              ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
-                              : 'text-slate-500 hover:text-slate-800'
+                              ? "bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white"
+                              : "text-slate-500 hover:text-slate-800"
                           }`}
                         >
-                          {s === 'small' ? 'Nhỏ' : s === 'medium' ? 'Vừa' : 'Lớn'}
+                          {s === "small"
+                            ? "Nhỏ"
+                            : s === "medium"
+                              ? "Vừa"
+                              : "Lớn"}
                         </button>
                       ))}
                     </div>
@@ -1110,8 +1915,12 @@ export default function CVEditorPage() {
                   {/* Line Spacing */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label className="font-bold text-slate-700 dark:text-slate-300">Khoảng cách dòng</label>
-                      <span className="text-slate-500 font-semibold">{lineSpacing}</span>
+                      <label className="font-bold text-slate-700 dark:text-slate-300">
+                        Khoảng cách dòng
+                      </label>
+                      <span className="text-slate-500 font-semibold">
+                        {lineSpacing}
+                      </span>
                     </div>
                     <input
                       type="range"
@@ -1130,21 +1939,22 @@ export default function CVEditorPage() {
               )}
 
               {/* TOOL 2: Add / Remove & Reorder Sections */}
-              {activeSidebarTool === 'sections' && (
+              {activeSidebarTool === "sections" && (
                 <div className="space-y-2 text-xs">
                   <p className="text-slate-500 text-[11px] mb-2">
-                    Bật tắt & sắp xếp thứ tự hiển thị các khối thông tin trên CV:
+                    Bật tắt &amp; sắp xếp thứ tự hiển thị các khối thông tin trên
+                    CV:
                   </p>
 
                   {sectionOrder.map((secId, idx) => {
                     const labelMap: Record<string, string> = {
-                      objective: 'Mục tiêu nghề nghiệp',
-                      education: 'Học vấn',
-                      experience: 'Kinh nghiệm làm việc',
-                      skills: 'Kỹ năng chuyên môn',
-                      activities: 'Hoạt động & Dự án',
-                      certificates: 'Chứng chỉ',
-                      awards: 'Giải thưởng & Danh hiệu',
+                      objective: "Mục tiêu nghề nghiệp",
+                      education: "Học vấn",
+                      experience: "Kinh nghiệm làm việc",
+                      skills: "Kỹ năng chuyên môn",
+                      activities: "Hoạt động & Dự án",
+                      certificates: "Chứng chỉ",
+                      awards: "Giải thưởng & Danh hiệu",
                     };
                     const label = labelMap[secId] || secId;
                     return (
@@ -1158,7 +1968,7 @@ export default function CVEditorPage() {
                             <button
                               type="button"
                               disabled={idx === 0}
-                              onClick={() => moveSection(secId, 'up')}
+                              onClick={() => moveSection(secId, "up")}
                               className="p-0.5 rounded text-slate-400 hover:text-primary disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
                               title="Di chuyển lên"
                             >
@@ -1167,7 +1977,7 @@ export default function CVEditorPage() {
                             <button
                               type="button"
                               disabled={idx === sectionOrder.length - 1}
-                              onClick={() => moveSection(secId, 'down')}
+                              onClick={() => moveSection(secId, "down")}
                               className="p-0.5 rounded text-slate-400 hover:text-primary disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
                               title="Di chuyển xuống"
                             >
@@ -1181,7 +1991,11 @@ export default function CVEditorPage() {
 
                         <input
                           type="checkbox"
-                          checked={visibleSections[secId as keyof typeof visibleSections]}
+                          checked={
+                            visibleSections[
+                              secId as keyof typeof visibleSections
+                            ]
+                          }
                           onChange={(e) => {
                             setVisibleSections((prev) => ({
                               ...prev,
@@ -1198,17 +2012,17 @@ export default function CVEditorPage() {
               )}
 
               {/* TOOL 3: Switch Template */}
-              {activeSidebarTool === 'templates' && (
+              {activeSidebarTool === "templates" && (
                 <div className="space-y-4 text-xs">
                   <div
                     onClick={() => {
-                      setTemplateType('template1');
+                      setTemplateType("template1");
                       markDirty();
                     }}
                     className={`p-3 rounded-2xl border-2 transition cursor-pointer ${
-                      templateType === 'template1'
-                        ? 'border-primary bg-primary/5 dark:bg-primary/10'
-                        : 'border-slate-200 hover:border-slate-300 dark:border-slate-800'
+                      templateType === "template1"
+                        ? "border-primary bg-primary/5 dark:bg-primary/10"
+                        : "border-slate-200 hover:border-slate-300 dark:border-slate-800"
                     }`}
                   >
                     <p className="font-extrabold text-slate-900 dark:text-white">
@@ -1221,18 +2035,30 @@ export default function CVEditorPage() {
 
                   <div
                     onClick={() => {
-                      setTemplateType('template2');
+                      if (!user?.isPremium) {
+                        toast.info(
+                          "Mẫu CV Cao Cấp (Premium)",
+                          "Mẫu Hiện đại 2 Cột chỉ dành riêng cho tài khoản Candidate Premium. Vui lòng nâng cấp để mở khóa.",
+                        );
+                        return;
+                      }
+                      setTemplateType("template2");
                       markDirty();
                     }}
-                    className={`p-3 rounded-2xl border-2 transition cursor-pointer ${
-                      templateType === 'template2'
-                        ? 'border-primary bg-primary/5 dark:bg-primary/10'
-                        : 'border-slate-200 hover:border-slate-300 dark:border-slate-800'
+                    className={`p-3 rounded-2xl border-2 transition cursor-pointer relative ${
+                      templateType === "template2"
+                        ? "border-primary bg-primary/5 dark:bg-primary/10"
+                        : "border-slate-200 hover:border-slate-300 dark:border-slate-800"
                     }`}
                   >
-                    <p className="font-extrabold text-slate-900 dark:text-white">
-                      Mẫu 2: Hiện đại 2 Cột (Modern Timeline)
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <p className="font-extrabold text-slate-900 dark:text-white">
+                        Mẫu 2: Hiện đại 2 Cột (Modern Timeline)
+                      </p>
+                      <span className="rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-black text-amber-700 dark:text-amber-300">
+                        👑 PREMIUM
+                      </span>
+                    </div>
                     <p className="text-slate-500 mt-1 text-[11px]">
                       Bố cục 2 cột năng động với dòng thời gian trực quan.
                     </p>
@@ -1241,14 +2067,15 @@ export default function CVEditorPage() {
               )}
 
               {/* TOOL 4: Language (Việt / Anh) */}
-              {activeSidebarTool === 'language' && (
+              {activeSidebarTool === "language" && (
                 <div className="space-y-4 text-xs">
                   <div>
                     <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">
                       Ngôn ngữ hiển thị tiêu đề CV
                     </label>
                     <p className="text-[11.5px] text-slate-500 mb-3 leading-relaxed">
-                      Chuyển đổi các tiêu đề mục lớn (Mục tiêu, Học vấn, Kinh nghiệm, Kỹ năng,...) giữa Tiếng Việt và Tiếng Anh.
+                      Chuyển đổi các tiêu đề mục lớn (Mục tiêu, Học vấn, Kinh
+                      nghiệm, Kỹ năng,...) giữa Tiếng Việt và Tiếng Anh.
                     </p>
                   </div>
 
@@ -1256,75 +2083,99 @@ export default function CVEditorPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        setCvLanguage('vi');
+                        setCvLanguage("vi");
                         markDirty();
                       }}
                       className={`w-full flex items-center justify-between p-3.5 rounded-2xl border-2 transition cursor-pointer ${
-                        cvLanguage === 'vi'
-                          ? 'border-primary bg-primary/5 dark:bg-primary/10 text-slate-900 dark:text-white font-bold shadow-xs'
-                          : 'border-slate-200 hover:border-slate-300 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                        cvLanguage === "vi"
+                          ? "border-primary bg-primary/5 dark:bg-primary/10 text-slate-900 dark:text-white font-bold shadow-xs"
+                          : "border-slate-200 hover:border-slate-300 dark:border-slate-800 text-slate-700 dark:text-slate-300"
                       }`}
                     >
                       <div className="flex items-center gap-2.5">
                         <span className="text-xl">🇻🇳</span>
                         <div className="text-left">
-                          <p className="font-bold text-xs text-slate-900 dark:text-white">Tiếng Việt</p>
-                          <p className="text-[10.5px] text-slate-400">Mục tiêu, Học vấn, Kinh nghiệm, Kỹ năng...</p>
+                          <p className="font-bold text-xs text-slate-900 dark:text-white">
+                            Tiếng Việt
+                          </p>
+                          <p className="text-[10.5px] text-slate-400">
+                            Mục tiêu, Học vấn, Kinh nghiệm, Kỹ năng...
+                          </p>
                         </div>
                       </div>
-                      {cvLanguage === 'vi' && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                      {cvLanguage === "vi" && (
+                        <CheckCircle2 className="h-4 w-4 text-primary" />
+                      )}
                     </button>
 
                     <button
                       type="button"
                       onClick={() => {
-                        setCvLanguage('en');
+                        setCvLanguage("en");
                         markDirty();
                       }}
                       className={`w-full flex items-center justify-between p-3.5 rounded-2xl border-2 transition cursor-pointer ${
-                        cvLanguage === 'en'
-                          ? 'border-primary bg-primary/5 dark:bg-primary/10 text-slate-900 dark:text-white font-bold shadow-xs'
-                          : 'border-slate-200 hover:border-slate-300 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                        cvLanguage === "en"
+                          ? "border-primary bg-primary/5 dark:bg-primary/10 text-slate-900 dark:text-white font-bold shadow-xs"
+                          : "border-slate-200 hover:border-slate-300 dark:border-slate-800 text-slate-700 dark:text-slate-300"
                       }`}
                     >
                       <div className="flex items-center gap-2.5">
                         <span className="text-xl">🇬🇧</span>
                         <div className="text-left">
-                          <p className="font-bold text-xs text-slate-900 dark:text-white">English (Tiếng Anh)</p>
-                          <p className="text-[10.5px] text-slate-400">Objective, Education, Experience, Skills...</p>
+                          <p className="font-bold text-xs text-slate-900 dark:text-white">
+                            English (Tiếng Anh)
+                          </p>
+                          <p className="text-[10.5px] text-slate-400">
+                            Objective, Education, Experience, Skills...
+                          </p>
                         </div>
                       </div>
-                      {cvLanguage === 'en' && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                      {cvLanguage === "en" && (
+                        <CheckCircle2 className="h-4 w-4 text-primary" />
+                      )}
                     </button>
                   </div>
                 </div>
               )}
 
               {/* TOOL 5: Existing CVs */}
-              {activeSidebarTool === 'library' && (
+              {activeSidebarTool === "library" && (
                 <div className="space-y-3 text-xs">
-                  <p className="text-slate-500 text-[11px]">Các CV bạn đã lưu:</p>
+                  <p className="text-slate-500 text-[11px]">
+                    Các CV bạn đã lưu:
+                  </p>
                   {existingCvs.length === 0 ? (
-                    <p className="italic text-slate-400">Chưa có CV nào khác.</p>
+                    <p className="italic text-slate-400">
+                      Chưa có CV nào khác.
+                    </p>
                   ) : (
                     existingCvs.map((cv) => (
                       <button
                         key={cv._id}
                         type="button"
                         onClick={() => {
-                          if (isDirty && !window.confirm('Rời khỏi CV hiện tại mà không lưu?')) return;
+                          if (
+                            isDirty &&
+                            !window.confirm(
+                              "Rời khỏi CV hiện tại mà không lưu?",
+                            )
+                          )
+                            return;
                           navigate(`/cv-editor/${cv._id}`);
                         }}
                         className={`w-full p-2.5 text-left rounded-xl border transition cursor-pointer ${
                           cv._id === id
-                            ? 'border-primary bg-primary/10 text-primary font-bold'
-                            : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                            ? "border-primary bg-primary/10 text-primary font-bold"
+                            : "border-slate-200 hover:bg-slate-50 dark:border-slate-800 text-slate-700 dark:text-slate-300"
                         }`}
                       >
-                        <p className="font-bold truncate">{cv.fullName || 'CV không tên'}</p>
+                        <p className="font-bold truncate">
+                          {cv.title || cv.fullName || "CV không tên"}
+                        </p>
                         <p className="text-[10px] text-slate-400 mt-0.5">
-                          {cv.templateType === 'template1' ? 'Mẫu 1' : 'Mẫu 2'} &bull;{' '}
-                          {new Date(cv.createdAt).toLocaleDateString('vi-VN')}
+                          {cv.templateType === "template1" ? "Mẫu 1" : "Mẫu 2"}{" "}
+                          &bull; {formatDate(cv.createdAt)}
                         </p>
                       </button>
                     ))
@@ -1336,7 +2187,7 @@ export default function CVEditorPage() {
         </AnimatePresence>
 
         {/* 3. CENTER WYSIWYG A4 CANVAS (Interactive In-Place Editing) */}
-        <div className="flex-1 overflow-auto flex flex-col items-center py-6 px-4 sm:px-8 relative select-none">
+        <div inert={generationIsActive} aria-hidden={generationIsActive} className="flex-1 overflow-auto flex flex-col items-center py-6 px-4 sm:px-8 relative select-none">
           {/* Zoom & Canvas Floating Controls */}
           <div className="sticky top-2 z-20 mb-6 flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/90 px-4 py-1.5 shadow-lg shadow-slate-900/10 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/90 print:hidden select-none">
             <button
@@ -1374,1863 +2225,185 @@ export default function CVEditorPage() {
             <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-700 mx-1.5" />
 
             <span className="text-[11px] text-slate-400 italic hidden sm:inline">
-              💡 Rê chuột vào từng ô để định dạng cỡ chữ, màu sắc, font, in đậm/nghiêng
+              💡 Rê chuột vào từng ô để định dạng cỡ chữ, màu sắc, font, in
+              đậm/nghiêng
             </span>
           </div>
+
+          {!generationIsActive &&
+            (generationJobStatus === "STALE" ||
+              generationJobStatus === "FAILED" ||
+              generationJobStatus === "CANCELLED") &&
+            generationError && (
+              <div
+                className="mb-4 flex w-full max-w-[210mm] items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-xs text-amber-900 shadow-sm dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200"
+                role="status"
+                aria-live="polite"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{generationError}</span>
+              </div>
+            )}
+
+          {generationMode === "EDITOR_ONLY" && (
+            <section
+              aria-labelledby="cv-generation-notice-title"
+              className={`mb-4 w-full max-w-[210mm] shrink-0 rounded-xl border p-4 text-left text-sm leading-6 shadow-sm ${
+                hasGenerationBannerWarning
+                  ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200"
+                  : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                {hasGenerationBannerWarning ? (
+                  <AlertTriangle aria-hidden="true" className="mt-1 h-5 w-5 shrink-0" />
+                ) : (
+                  <Info aria-hidden="true" className="mt-1 h-5 w-5 shrink-0" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <h2 id="cv-generation-notice-title" className="font-semibold">
+                    {uiVi
+                      ? hasGenerationBannerWarning ? "Bản nháp CV cần rà soát" : "Bản nháp CV từ AI"
+                      : hasGenerationBannerWarning ? "CV draft needs review" : "AI CV draft"}
+                  </h2>
+                  <p className="mt-1">
+                    {generationProvenance === "mixed"
+                      ? uiVi
+                        ? "Một số nội dung dùng bản dự phòng từ hồ sơ, kết hợp với nội dung AI. Hãy kiểm tra trước khi sử dụng."
+                        : "This draft combines AI content with profile-based fallback content. Review it before use."
+                      : generationProvenance === "fallback"
+                        ? uiVi
+                          ? "Bản nháp dùng nội dung dự phòng từ hồ sơ. Hãy kiểm tra và chỉnh sửa trước khi sử dụng."
+                          : "This draft uses profile-based fallback content. Review and edit it before use."
+                        : uiVi
+                          ? "Hãy kiểm tra thông tin và cách diễn đạt trước khi sử dụng CV."
+                          : "Check the facts and wording before using this CV."}
+                  </p>
+                </div>
+              </div>
+              {hasActionableGenerationWarnings && (
+                <div className="mt-3 border-t border-current/15 pt-2 sm:ml-8">
+                  <button
+                    type="button"
+                    aria-expanded={showGenerationWarnings}
+                    aria-controls="cv-generation-warning-details"
+                    onClick={() => setShowGenerationWarnings((shown) => !shown)}
+                    className="flex min-h-11 w-full items-center justify-between gap-3 rounded-md text-left font-medium hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
+                  >
+                    {uiVi
+                      ? `${showGenerationWarnings ? "Thu gọn" : "Xem"} ${visibleGenerationWarnings.length} lưu ý`
+                      : `${showGenerationWarnings ? "Hide" : "View"} review notes (${visibleGenerationWarnings.length})`}
+                    <ChevronDown aria-hidden="true" className={`h-4 w-4 shrink-0 ${showGenerationWarnings ? "rotate-180" : ""}`} />
+                  </button>
+                  <ul id="cv-generation-warning-details" hidden={!showGenerationWarnings} className="mt-2 list-disc space-y-2 break-words pl-5 pb-1">
+                    {visibleGenerationWarnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
 
           {/* ================= IN-PLACE A4 PAPER CANVAS ================= */}
           <div
             id="cv-print-area"
-            className="relative bg-white shadow-2xl transition-transform select-text overflow-visible rounded-md print:shadow-none print:rounded-none print:m-0"
+            ref={cvPaperRef}
+            className="relative bg-white shadow-2xl transition-all select-text overflow-visible rounded-md print:shadow-none print:rounded-none print:m-0 shrink-0 h-auto"
             style={{
               transform: zoomScale !== 1 ? `scale(${zoomScale})` : undefined,
-              transformOrigin: 'top center',
-              width: '210mm',
-              minHeight: '297mm',
+              transformOrigin: "top center",
+              width: "210mm",
+              minHeight: "297mm",
+              height: "auto",
               fontFamily: currentFont.family,
               lineHeight: lineSpacing,
-              color: '#1E293B',
+              color: "#1E293B",
             }}
           >
-            {/* ================= TEMPLATE 1: CLASSIC SINGLE-COLUMN ATS ================= */}
-            {templateType === 'template1' && (
-              <div className="p-10 sm:p-12 flex flex-col justify-between min-h-[297mm]">
-                <div>
-                  {/* Header: Name, Position, Contacts */}
+            {/* Dynamic Page Break Lines (When CV has 2+ pages) */}
+            {pageCount > 1 &&
+              Array.from({ length: pageCount - 1 }, (_, i) => i + 2).map(
+                (pageNum) => (
                   <div
-                    className="text-center pb-5 mb-6 border-b-2"
-                    style={{ borderColor: currentTheme.color }}
+                    key={pageNum}
+                    className="pointer-events-none absolute left-0 right-0 z-30 select-none print:hidden flex items-center"
+                    style={{
+                      top: `calc(297mm * ${pageNum - 1})`,
+                      transform: "translateY(-50%)",
+                    }}
                   >
-                    {/* Full Name */}
-                    <div className="mb-1 flex justify-center">
-                      <InlineText
-                        value={fullName}
-                        onChange={(v) => {
-                          setFullName(v);
-                          markDirty();
-                        }}
-                        placeholder="HỌ VÀ TÊN"
-                        asTitle={true}
-                        className="font-extrabold text-center tracking-wide max-w-full"
-                        style={{
-                          color: currentTheme.color,
-                          fontSize: `${1.8 * fontMultiplier}rem`,
-                        }}
-                        defaultFontSizePx={resolveFontSizePx(1.8 * fontMultiplier * 16)}
-                        defaultFontFamily={currentFont.family}
-                        defaultColor={currentTheme.color}
-                      />
+                    {/* Badge on left without line overlap */}
+                    <div className="shrink-0 -ml-3 sm:-ml-4 flex items-center pr-2">
+                      <span className="inline-flex items-center justify-center rounded-md bg-primary px-2.5 py-0.5 text-[11px] font-black text-white shadow-md shadow-primary/30 ring-2 ring-white dark:ring-slate-900 tracking-tight">
+                        Trang {pageNum}
+                      </span>
                     </div>
 
-                    {/* Position */}
-                    <div className="mb-3 flex justify-center">
-                      <InlineText
-                        value={position}
-                        onChange={(v) => {
-                          setPosition(v);
-                          markDirty();
-                        }}
-                        placeholder="Vị trí ứng tuyển"
-                        className="font-medium text-slate-600 text-center tracking-wide italic max-w-full"
-                        style={{ fontSize: `${1.05 * fontMultiplier}rem` }}
-                        defaultFontSizePx={resolveFontSizePx(1.05 * fontMultiplier * 16)}
-                        defaultFontFamily={currentFont.family}
-                        defaultColor="#475569"
-                      />
-                    </div>
-
-                    {/* Contact Info Items - Always Single Line */}
-                    <div
-                      className="flex flex-nowrap items-center justify-center gap-x-2 sm:gap-x-3.5 text-slate-600 max-w-full"
-                      style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                    >
-                      <div className="inline-flex items-center gap-1 shrink-0">
-                        <Phone className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={phone}
-                          onChange={(v) => {
-                            setPhone(v);
-                            markDirty();
-                          }}
-                          placeholder="0123 456 789"
-                          className="w-24 text-center"
-                          defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-
-                      <span className="text-slate-300 select-none">&bull;</span>
-
-                      <div className="inline-flex items-center gap-1 shrink-0">
-                        <Mail className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={email}
-                          onChange={(v) => {
-                            setEmail(v);
-                            markDirty();
-                          }}
-                          placeholder="email@example.com"
-                          className="w-40 text-center"
-                          defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-
-                      <span className="text-slate-300 select-none">&bull;</span>
-
-                      <div className="inline-flex items-center gap-1 shrink-0">
-                        <Globe className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={link}
-                          onChange={(v) => {
-                            setLink(v);
-                            markDirty();
-                          }}
-                          placeholder="linkedin.com/in/username"
-                          className="w-36 text-center"
-                          defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-
-                      <span className="text-slate-300 select-none">&bull;</span>
-
-                      <div className="inline-flex items-center gap-1 shrink-0">
-                        <MapPin className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={address}
-                          onChange={(v) => {
-                            setAddress(v);
-                            markDirty();
-                          }}
-                          placeholder="Hà Nội, Việt Nam"
-                          className="w-32 text-center"
-                          defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-                    </div>
+                    {/* Dashed Line spanning to the right */}
+                    <div className="flex-1 border-t-2 border-dashed border-primary dark:border-primary-light opacity-85" />
                   </div>
+                ),
+              )}
 
-                  {/* DYNAMIC SECTIONS ORDER (Controlled via sectionOrder state) */}
-                  {sectionOrder.map((sectionKey, secIdx) => {
-                    // 1. MỤC TIÊU NGHỀ NGHIỆP
-                    if (sectionKey === 'objective' && visibleSections.objective) {
-                      return (
-                        <div key="objective" className="mb-5 group/sec relative">
-                          <div className="flex items-center justify-between pb-1 mb-2 border-b border-slate-200">
-                            <h2
-                              className="font-bold uppercase tracking-wider"
-                              style={{
-                                color: currentTheme.color,
-                                fontSize: `${0.95 * fontMultiplier}rem`,
-                              }}
-                            >
-                              {SECTION_LABELS[cvLanguage].objective}
-                            </h2>
-                            <div className="flex items-center gap-1 opacity-0 group-hover/sec:opacity-100 transition-opacity print:hidden">
-                              {secIdx > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => moveSection('objective', 'up')}
-                                  className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                  title="Đưa mục này lên trên"
-                                >
-                                  <MoveUp className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                              {secIdx < sectionOrder.length - 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => moveSection('objective', 'down')}
-                                  className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                  title="Đưa mục này xuống dưới"
-                                >
-                                  <MoveDown className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          <InlineText
-                            multiline={true}
-                            rows={2}
-                            value={careerObjective}
-                            onChange={(v) => {
-                              setCareerObjective(v);
-                              markDirty();
-                            }}
-                            placeholder="Mục tiêu nghề nghiệp của bạn, bao gồm mục tiêu ngắn hạn và dài hạn..."
-                            className="text-slate-700 leading-relaxed text-justify"
-                            style={{ fontSize: `${0.875 * fontMultiplier}rem` }}
-                            defaultFontSizePx={resolveFontSizePx(0.875 * fontMultiplier * 16)}
-                            defaultFontFamily={currentFont.family}
-                          />
-                        </div>
-                      );
-                    }
-
-                    // 2. HỌC VẤN
-                    if (sectionKey === 'education' && visibleSections.education) {
-                      return (
-                        <div key="education" className="mb-5 group/sec relative">
-                          <div className="flex items-center justify-between pb-1 mb-2.5 border-b border-slate-200">
-                            <h2
-                              className="font-bold uppercase tracking-wider"
-                              style={{
-                                color: currentTheme.color,
-                                fontSize: `${0.95 * fontMultiplier}rem`,
-                              }}
-                            >
-                              {SECTION_LABELS[cvLanguage].education}
-                            </h2>
-                            <div className="flex items-center gap-1 print:hidden">
-                              <div className="flex items-center gap-1 opacity-0 group-hover/sec:opacity-100 transition-opacity">
-                                {secIdx > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('education', 'up')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này lên trên"
-                                  >
-                                    <MoveUp className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                                {secIdx < sectionOrder.length - 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('education', 'down')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này xuống dưới"
-                                  >
-                                    <MoveDown className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEducation((prev) => [
-                                    ...prev,
-                                    { schoolName: '', major: '', startDate: '', endDate: '', description: '' },
-                                  ]);
-                                  markDirty();
-                                }}
-                                className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 ml-1"
-                              >
-                                <Plus className="h-3 w-3" />
-                                <span>Thêm</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="space-y-3">
-                            {education.map((edu, idx) => (
-                              <div
-                                key={idx}
-                                className="group relative p-2 rounded-lg hover:bg-slate-50/80 transition-all border border-transparent hover:border-slate-200 pr-14"
-                              >
-                                {/* Floating Action Buttons */}
-                                <div className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-sm rounded-lg p-0.5 print:hidden">
-                                  {idx > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setEducation((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx - 1];
-                                          arr[idx - 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển lên"
-                                    >
-                                      <MoveUp className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  {idx < education.length - 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setEducation((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx + 1];
-                                          arr[idx + 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển xuống"
-                                    >
-                                      <MoveDown className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setEducation((prev) => prev.filter((_, i) => i !== idx));
-                                      markDirty();
-                                    }}
-                                    className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                                    title="Xóa mục này"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                </div>
-
-                                <div className="flex items-baseline justify-between gap-4">
-                                  <div className="flex-1 min-w-0">
-                                    <InlineText
-                                      value={edu.schoolName || ''}
-                                      onChange={(v) => {
-                                        setEducation((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, schoolName: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Tên trường học"
-                                      className="font-bold text-slate-900"
-                                      style={{ fontSize: `${0.9 * fontMultiplier}rem` }}
-                                      defaultFontSizePx={resolveFontSizePx(0.9 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-
-                                  <div className="flex items-center gap-1 text-slate-500 text-xs italic shrink-0">
-                                    <InlineText
-                                      value={edu.startDate || ''}
-                                      onChange={(v) => {
-                                        setEducation((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Bắt đầu"
-                                      className="w-16 text-right"
-                                      defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                    <span>-</span>
-                                    <InlineText
-                                      value={edu.endDate || ''}
-                                      onChange={(v) => {
-                                        setEducation((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Kết thúc"
-                                      className="w-16"
-                                      defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-                                </div>
-
-                                <InlineText
-                                  value={edu.major || ''}
-                                  onChange={(v) => {
-                                    setEducation((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, major: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Ngành học / Môn học"
-                                  className="font-medium text-slate-700 italic block mt-0.5"
-                                  style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-
-                                <InlineText
-                                  multiline={true}
-                                  rows={1}
-                                  value={edu.description || ''}
-                                  onChange={(v) => {
-                                    setEducation((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Mô tả quá trình học tập hoặc thành tích của bạn"
-                                  className="text-slate-600 mt-1 block"
-                                  style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // 3. KINH NGHIỆM LÀM VIỆC
-                    if (sectionKey === 'experience' && visibleSections.experience) {
-                      return (
-                        <div key="experience" className="mb-5 group/sec relative">
-                          <div className="flex items-center justify-between pb-1 mb-2.5 border-b border-slate-200">
-                            <h2
-                              className="font-bold uppercase tracking-wider"
-                              style={{
-                                color: currentTheme.color,
-                                fontSize: `${0.95 * fontMultiplier}rem`,
-                              }}
-                            >
-                              {SECTION_LABELS[cvLanguage].experience}
-                            </h2>
-                            <div className="flex items-center gap-1 print:hidden">
-                              <div className="flex items-center gap-1 opacity-0 group-hover/sec:opacity-100 transition-opacity">
-                                {secIdx > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('experience', 'up')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này lên trên"
-                                  >
-                                    <MoveUp className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                                {secIdx < sectionOrder.length - 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('experience', 'down')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này xuống dưới"
-                                  >
-                                    <MoveDown className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setWorkExperience((prev) => [
-                                    ...prev,
-                                    { companyName: '', position: '', startDate: '', endDate: '', description: '' },
-                                  ]);
-                                  markDirty();
-                                }}
-                                className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 ml-1"
-                              >
-                                <Plus className="h-3 w-3" />
-                                <span>Thêm</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="space-y-3.5">
-                            {workExperience.map((exp, idx) => (
-                              <div
-                                key={idx}
-                                className="group relative p-2 rounded-lg hover:bg-slate-50/80 transition-all border border-transparent hover:border-slate-200 pr-14"
-                              >
-                                {/* Floating Action Buttons */}
-                                <div className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-sm rounded-lg p-0.5 print:hidden">
-                                  {idx > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setWorkExperience((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx - 1];
-                                          arr[idx - 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển lên"
-                                    >
-                                      <MoveUp className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  {idx < workExperience.length - 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setWorkExperience((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx + 1];
-                                          arr[idx + 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển xuống"
-                                    >
-                                      <MoveDown className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setWorkExperience((prev) => prev.filter((_, i) => i !== idx));
-                                      markDirty();
-                                    }}
-                                    className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                                    title="Xóa mục này"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                </div>
-
-                                <div className="flex items-baseline justify-between gap-4">
-                                  <div className="flex-1 min-w-0">
-                                    <InlineText
-                                      value={exp.companyName || ''}
-                                      onChange={(v) => {
-                                        setWorkExperience((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, companyName: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Tên công ty"
-                                      className="font-bold text-slate-900"
-                                      style={{ fontSize: `${0.9 * fontMultiplier}rem` }}
-                                      defaultFontSizePx={resolveFontSizePx(0.9 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-
-                                  <div className="flex items-center gap-1 text-slate-500 text-xs italic shrink-0">
-                                    <InlineText
-                                      value={exp.startDate || ''}
-                                      onChange={(v) => {
-                                        setWorkExperience((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Bắt đầu"
-                                      className="w-16 text-right"
-                                      defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                    <span>-</span>
-                                    <InlineText
-                                      value={exp.endDate || ''}
-                                      onChange={(v) => {
-                                        setWorkExperience((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Kết thúc"
-                                      className="w-16"
-                                      defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-                                </div>
-
-                                <InlineText
-                                  value={exp.position || ''}
-                                  onChange={(v) => {
-                                    setWorkExperience((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, position: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Vị trí công việc"
-                                  className="font-semibold text-slate-700 italic block mt-0.5"
-                                  style={{
-                                    color: currentTheme.color,
-                                    fontSize: `${0.85 * fontMultiplier}rem`,
-                                  }}
-                                  defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                  defaultColor={currentTheme.color}
-                                />
-
-                                <InlineText
-                                  multiline={true}
-                                  rows={2}
-                                  value={exp.description || ''}
-                                  onChange={(v) => {
-                                    setWorkExperience((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Mô tả kinh nghiệm làm việc của bạn..."
-                                  className="text-slate-600 mt-1 block leading-relaxed text-justify"
-                                  style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // 4. KỸ NĂNG
-                    if (sectionKey === 'skills' && visibleSections.skills) {
-                      return (
-                        <div key="skills" className="mb-5 group/sec relative">
-                          <div className="flex items-center justify-between pb-1 mb-2.5 border-b border-slate-200">
-                            <h2
-                              className="font-bold uppercase tracking-wider"
-                              style={{
-                                color: currentTheme.color,
-                                fontSize: `${0.95 * fontMultiplier}rem`,
-                              }}
-                            >
-                              {SECTION_LABELS[cvLanguage].skills}
-                            </h2>
-                            <div className="flex items-center gap-1 print:hidden">
-                              <div className="flex items-center gap-1 opacity-0 group-hover/sec:opacity-100 transition-opacity">
-                                {secIdx > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('skills', 'up')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này lên trên"
-                                  >
-                                    <MoveUp className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                                {secIdx < sectionOrder.length - 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('skills', 'down')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này xuống dưới"
-                                  >
-                                    <MoveDown className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSkills((prev) => [...prev, { name: '', description: '' }]);
-                                  markDirty();
-                                }}
-                                className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 ml-1"
-                              >
-                                <Plus className="h-3 w-3" />
-                                <span>Thêm</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="space-y-1.5">
-                            {skills.map((skill, idx) => (
-                              <div
-                                key={idx}
-                                className="group relative flex items-center gap-3 p-1.5 rounded-lg hover:bg-slate-50/80 border border-transparent hover:border-slate-200 transition-all pr-14"
-                              >
-                                <div className="w-40 shrink-0">
-                                  <InlineText
-                                    value={skill.name || ''}
-                                    onChange={(v) => {
-                                      setSkills((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, name: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Tên kỹ năng"
-                                    className="font-bold text-slate-900"
-                                    style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                                    defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <InlineText
-                                    value={skill.description || ''}
-                                    onChange={(v) => {
-                                      setSkills((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Mô tả kỹ năng"
-                                    className="text-slate-600"
-                                    style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                                    defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-
-                                {/* Floating Action Buttons */}
-                                <div className="absolute right-1.5 top-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-sm rounded-lg p-0.5 print:hidden">
-                                  {idx > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setSkills((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx - 1];
-                                          arr[idx - 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển lên"
-                                    >
-                                      <MoveUp className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  {idx < skills.length - 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setSkills((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx + 1];
-                                          arr[idx + 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển xuống"
-                                    >
-                                      <MoveDown className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSkills((prev) => prev.filter((_, i) => i !== idx));
-                                      markDirty();
-                                    }}
-                                    className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                                    title="Xóa kỹ năng"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // 5. HOẠT ĐỘNG
-                    if (sectionKey === 'activities' && visibleSections.activities) {
-                      return (
-                        <div key="activities" className="mb-5 group/sec relative">
-                          <div className="flex items-center justify-between pb-1 mb-2.5 border-b border-slate-200">
-                            <h2
-                              className="font-bold uppercase tracking-wider"
-                              style={{
-                                color: currentTheme.color,
-                                fontSize: `${0.95 * fontMultiplier}rem`,
-                              }}
-                            >
-                              {SECTION_LABELS[cvLanguage].activities}
-                            </h2>
-                            <div className="flex items-center gap-1 print:hidden">
-                              <div className="flex items-center gap-1 opacity-0 group-hover/sec:opacity-100 transition-opacity">
-                                {secIdx > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('activities', 'up')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này lên trên"
-                                  >
-                                    <MoveUp className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                                {secIdx < sectionOrder.length - 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('activities', 'down')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này xuống dưới"
-                                  >
-                                    <MoveDown className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActivities((prev) => [
-                                    ...prev,
-                                    { organizationName: '', position: '', startDate: '', endDate: '', description: '' },
-                                  ]);
-                                  markDirty();
-                                }}
-                                className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 ml-1"
-                              >
-                                <Plus className="h-3 w-3" />
-                                <span>Thêm</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="space-y-3">
-                            {activities.map((act, idx) => (
-                              <div
-                                key={idx}
-                                className="group relative p-2 rounded-lg hover:bg-slate-50/80 transition-all border border-transparent hover:border-slate-200 pr-14"
-                              >
-                                <div className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-sm rounded-lg p-0.5 print:hidden">
-                                  {idx > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActivities((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx - 1];
-                                          arr[idx - 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển lên"
-                                    >
-                                      <MoveUp className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  {idx < activities.length - 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActivities((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx + 1];
-                                          arr[idx + 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển xuống"
-                                    >
-                                      <MoveDown className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActivities((prev) => prev.filter((_, i) => i !== idx));
-                                      markDirty();
-                                    }}
-                                    className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                                    title="Xóa mục này"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                </div>
-
-                                <div className="flex items-baseline justify-between gap-4">
-                                  <div className="flex-1 min-w-0">
-                                    <InlineText
-                                      value={act.organizationName || ''}
-                                      onChange={(v) => {
-                                        setActivities((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, organizationName: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Tên tổ chức"
-                                      className="font-bold text-slate-900"
-                                      style={{ fontSize: `${0.9 * fontMultiplier}rem` }}
-                                      defaultFontSizePx={resolveFontSizePx(0.9 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-
-                                  <div className="flex items-center gap-1 text-slate-500 text-xs italic shrink-0">
-                                    <InlineText
-                                      value={act.startDate || ''}
-                                      onChange={(v) => {
-                                        setActivities((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Bắt đầu"
-                                      className="w-16 text-right"
-                                      defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                    <span>-</span>
-                                    <InlineText
-                                      value={act.endDate || ''}
-                                      onChange={(v) => {
-                                        setActivities((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Kết thúc"
-                                      className="w-16"
-                                      defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-                                </div>
-
-                                <InlineText
-                                  value={act.position || ''}
-                                  onChange={(v) => {
-                                    setActivities((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, position: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Vị trí của bạn"
-                                  className="font-medium text-slate-700 italic block mt-0.5"
-                                  style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-
-                                <InlineText
-                                  multiline={true}
-                                  rows={1}
-                                  value={act.description || ''}
-                                  onChange={(v) => {
-                                    setActivities((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Mô tả hoạt động"
-                                  className="text-slate-600 mt-1 block"
-                                  style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // 6. CHỨNG CHỈ
-                    if (sectionKey === 'certificates' && visibleSections.certificates) {
-                      return (
-                        <div key="certificates" className="mb-5 group/sec relative">
-                          <div className="flex items-center justify-between pb-1 mb-2 border-b border-slate-200">
-                            <h2
-                              className="font-bold uppercase tracking-wider"
-                              style={{
-                                color: currentTheme.color,
-                                fontSize: `${0.95 * fontMultiplier}rem`,
-                              }}
-                            >
-                              {SECTION_LABELS[cvLanguage].certificates}
-                            </h2>
-                            <div className="flex items-center gap-1 print:hidden">
-                              <div className="flex items-center gap-1 opacity-0 group-hover/sec:opacity-100 transition-opacity">
-                                {secIdx > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('certificates', 'up')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này lên trên"
-                                  >
-                                    <MoveUp className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                                {secIdx < sectionOrder.length - 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('certificates', 'down')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này xuống dưới"
-                                  >
-                                    <MoveDown className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCertificates((prev) => [...prev, { name: '', date: '' }]);
-                                  markDirty();
-                                }}
-                                className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 ml-1"
-                              >
-                                + Thêm
-                              </button>
-                            </div>
-                          </div>
-                          <div className="space-y-1.5">
-                            {certificates.map((cert, idx) => (
-                              <div key={idx} className="group relative flex items-center gap-2 p-1 rounded hover:bg-slate-50/80 pr-8">
-                                <div className="flex-1 min-w-0">
-                                  <InlineText
-                                    value={cert.name || ''}
-                                    onChange={(v) => {
-                                      setCertificates((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, name: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Tên chứng chỉ"
-                                    className="text-slate-800 font-semibold"
-                                    style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                                    defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                                <div className="w-14 shrink-0">
-                                  <InlineText
-                                    value={cert.date || ''}
-                                    onChange={(v) => {
-                                      setCertificates((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, date: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Năm"
-                                    className="text-center text-slate-500 text-xs"
-                                    defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setCertificates((prev) => prev.filter((_, i) => i !== idx));
-                                    markDirty();
-                                  }}
-                                  className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-red-500 rounded bg-white print:hidden cursor-pointer"
-                                  title="Xóa chứng chỉ"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // 7. GIẢI THƯỞNG
-                    if (sectionKey === 'awards' && visibleSections.awards) {
-                      return (
-                        <div key="awards" className="mb-5 group/sec relative">
-                          <div className="flex items-center justify-between pb-1 mb-2 border-b border-slate-200">
-                            <h2
-                              className="font-bold uppercase tracking-wider"
-                              style={{
-                                color: currentTheme.color,
-                                fontSize: `${0.95 * fontMultiplier}rem`,
-                              }}
-                            >
-                              {SECTION_LABELS[cvLanguage].awards}
-                            </h2>
-                            <div className="flex items-center gap-1 print:hidden">
-                              <div className="flex items-center gap-1 opacity-0 group-hover/sec:opacity-100 transition-opacity">
-                                {secIdx > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('awards', 'up')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này lên trên"
-                                  >
-                                    <MoveUp className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                                {secIdx < sectionOrder.length - 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => moveSection('awards', 'down')}
-                                    className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                    title="Đưa mục này xuống dưới"
-                                  >
-                                    <MoveDown className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setAwards((prev) => [...prev, { name: '', date: '' }]);
-                                  markDirty();
-                                }}
-                                className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 ml-1"
-                              >
-                                + Thêm
-                              </button>
-                            </div>
-                          </div>
-                          <div className="space-y-1.5">
-                            {awards.map((award, idx) => (
-                              <div key={idx} className="group relative flex items-center gap-2 p-1 rounded hover:bg-slate-50/80 pr-8">
-                                <div className="flex-1 min-w-0">
-                                  <InlineText
-                                    value={award.name || ''}
-                                    onChange={(v) => {
-                                      setAwards((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, name: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Tên giải thưởng"
-                                    className="text-slate-800 font-semibold"
-                                    style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                                    defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                                <div className="w-14 shrink-0">
-                                  <InlineText
-                                    value={award.date || ''}
-                                    onChange={(v) => {
-                                      setAwards((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, date: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Năm"
-                                    className="text-center text-slate-500 text-xs"
-                                    defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setAwards((prev) => prev.filter((_, i) => i !== idx));
-                                    markDirty();
-                                  }}
-                                  className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-red-500 rounded bg-white print:hidden cursor-pointer"
-                                  title="Xóa giải thưởng"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    return null;
-                  })}
-                </div>
-
-                {/* Bottom Watermark (Free Tier) */}
-                <div className="mt-8 pt-3 border-t border-slate-200 flex items-center justify-between text-[10px] text-slate-400 select-none">
-                  <span>Trang 1 / 1</span>
-                  <span className="inline-flex items-center gap-1 font-semibold text-slate-500">
-                    <Sparkles className="h-3 w-3 text-primary" />
-                    Được tạo bởi <b className="text-slate-700">TalentPulse</b> — talentpulse.vn
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* ================= TEMPLATE 2: MODERN 2-COLUMN TIMELINE ================= */}
-            {templateType === 'template2' && (
-              <div className="p-8 sm:p-10 flex flex-col justify-between min-h-[297mm]">
-                <div>
-                  {/* Top Header */}
-                  <div className="flex flex-col sm:flex-row items-start justify-between gap-4 pb-5 mb-6 border-b-2 border-slate-200">
-                    <div className="flex-1 min-w-0">
-                      <InlineText
-                        value={fullName}
-                        onChange={(v) => {
-                          setFullName(v);
-                          markDirty();
-                        }}
-                        placeholder="HỌ VÀ TÊN"
-                        asTitle={true}
-                        className="font-black tracking-tight block"
-                        style={{
-                          color: currentTheme.color,
-                          fontSize: `${1.75 * fontMultiplier}rem`,
-                        }}
-                        defaultFontSizePx={resolveFontSizePx(1.75 * fontMultiplier * 16)}
-                        defaultFontFamily={currentFont.family}
-                        defaultColor={currentTheme.color}
-                      />
-                      <InlineText
-                        value={position}
-                        onChange={(v) => {
-                          setPosition(v);
-                          markDirty();
-                        }}
-                        placeholder="VỊ TRÍ ỨNG TUYỂN"
-                        className="font-bold text-slate-600 uppercase tracking-wider block mt-0.5"
-                        style={{ fontSize: `${0.95 * fontMultiplier}rem` }}
-                        defaultFontSizePx={resolveFontSizePx(0.95 * fontMultiplier * 16)}
-                        defaultFontFamily={currentFont.family}
-                      />
-                      {visibleSections.objective && (
-                        <InlineText
-                          multiline={true}
-                          rows={2}
-                          value={careerObjective}
-                          onChange={(v) => {
-                            setCareerObjective(v);
-                            markDirty();
-                          }}
-                          placeholder="Mục tiêu nghề nghiệp ngắn gọn..."
-                          className="text-slate-600 mt-2 block leading-relaxed"
-                          style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      )}
-                    </div>
-
-                    {/* Right Contacts Box */}
-                    <div
-                      className="rounded-xl p-3.5 space-y-1 text-xs text-slate-700 shrink-0 border border-slate-100"
-                      style={{
-                        backgroundColor: currentTheme.bgLight,
-                        fontSize: `${0.825 * fontMultiplier}rem`,
-                      }}
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <Phone className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={phone}
-                          onChange={(v) => {
-                            setPhone(v);
-                            markDirty();
-                          }}
-                          placeholder="0123 456 789"
-                          className="w-32"
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Mail className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={email}
-                          onChange={(v) => {
-                            setEmail(v);
-                            markDirty();
-                          }}
-                          placeholder="email@example.com"
-                          className="w-36"
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <MapPin className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={address}
-                          onChange={(v) => {
-                            setAddress(v);
-                            markDirty();
-                          }}
-                          placeholder="Hà Nội, VN"
-                          className="w-32"
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Globe className="h-3.5 w-3.5 shrink-0" style={{ color: currentTheme.color }} />
-                        <InlineText
-                          value={link}
-                          onChange={(v) => {
-                            setLink(v);
-                            markDirty();
-                          }}
-                          placeholder="linkedin.com"
-                          className="w-32"
-                          defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                          defaultFontFamily={currentFont.family}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 2-Column Grid */}
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-6">
-                    {/* Left Column (Work Experience & Activities - 7 cols) */}
-                    <div className="sm:col-span-7 space-y-6">
-                      {/* Work Experience */}
-                      {visibleSections.experience && (
-                        <div>
-                          <div className="flex items-center justify-between pb-1 mb-3.5 border-b border-slate-200">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="h-2 w-2 rounded-full"
-                                style={{ backgroundColor: currentTheme.color }}
-                              />
-                              <h2
-                                className="text-xs font-black uppercase tracking-wider"
-                                style={{
-                                  color: currentTheme.color,
-                                  fontSize: `${0.9 * fontMultiplier}rem`,
-                                }}
-                              >
-                                {SECTION_LABELS[cvLanguage].experience}
-                              </h2>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setWorkExperience((prev) => [
-                                  ...prev,
-                                  { companyName: '', position: '', startDate: '', endDate: '', description: '' },
-                                ]);
-                                markDirty();
-                              }}
-                              className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 print:hidden"
-                            >
-                              + Thêm
-                            </button>
-                          </div>
-
-                          <div className="space-y-3.5 relative pl-3 border-l-2 border-slate-200 ml-1">
-                            {workExperience.map((exp, idx) => (
-                              <div key={idx} className="relative group p-2 rounded-lg hover:bg-slate-50/80 pr-14">
-                                {/* Floating Action Buttons */}
-                                <div className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-sm rounded-lg p-0.5 print:hidden">
-                                  {idx > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setWorkExperience((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx - 1];
-                                          arr[idx - 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển lên"
-                                    >
-                                      <MoveUp className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  {idx < workExperience.length - 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setWorkExperience((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx + 1];
-                                          arr[idx + 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển xuống"
-                                    >
-                                      <MoveDown className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setWorkExperience((prev) => prev.filter((_, i) => i !== idx));
-                                      markDirty();
-                                    }}
-                                    className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                                    title="Xóa mục này"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                </div>
-
-                                <span
-                                  className="absolute -left-[19px] top-3 h-2.5 w-2.5 rounded-full border-2 border-white"
-                                  style={{ backgroundColor: currentTheme.color }}
-                                />
-                                <div className="flex items-baseline justify-between gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <InlineText
-                                      value={exp.position || ''}
-                                      onChange={(v) => {
-                                        setWorkExperience((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, position: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Vị trí công việc"
-                                      className="font-bold text-slate-900"
-                                      style={{ fontSize: `${0.875 * fontMultiplier}rem` }}
-                                      defaultFontSizePx={resolveFontSizePx(0.875 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-                                  <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0 italic">
-                                    <InlineText
-                                      value={exp.startDate || ''}
-                                      onChange={(v) => {
-                                        setWorkExperience((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Bắt đầu"
-                                      className="w-14 text-right"
-                                      defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                    <span>-</span>
-                                    <InlineText
-                                      value={exp.endDate || ''}
-                                      onChange={(v) => {
-                                        setWorkExperience((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Kết thúc"
-                                      className="w-14"
-                                      defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-                                </div>
-
-                                <InlineText
-                                  value={exp.companyName || ''}
-                                  onChange={(v) => {
-                                    setWorkExperience((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, companyName: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Tên công ty"
-                                  className="font-semibold text-xs mt-0.5 block"
-                                  style={{ color: currentTheme.color }}
-                                  defaultFontSizePx="12px"
-                                  defaultFontFamily={currentFont.family}
-                                  defaultColor={currentTheme.color}
-                                />
-
-                                <InlineText
-                                  multiline={true}
-                                  rows={2}
-                                  value={exp.description || ''}
-                                  onChange={(v) => {
-                                    setWorkExperience((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Mô tả công việc chi tiết..."
-                                  className="text-slate-600 text-xs mt-1 block leading-relaxed"
-                                  style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Activities */}
-                      {visibleSections.activities && (
-                        <div>
-                          <div className="flex items-center justify-between pb-1 mb-3.5 border-b border-slate-200">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="h-2 w-2 rounded-full"
-                                style={{ backgroundColor: currentTheme.color }}
-                              />
-                              <h2
-                                className="text-xs font-black uppercase tracking-wider"
-                                style={{
-                                  color: currentTheme.color,
-                                  fontSize: `${0.9 * fontMultiplier}rem`,
-                                }}
-                              >
-                                {SECTION_LABELS[cvLanguage].activities}
-                              </h2>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActivities((prev) => [
-                                  ...prev,
-                                  { organizationName: '', position: '', startDate: '', endDate: '', description: '' },
-                                ]);
-                                markDirty();
-                              }}
-                              className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 print:hidden"
-                            >
-                              + Thêm
-                            </button>
-                          </div>
-
-                          <div className="space-y-3 relative pl-3 border-l-2 border-slate-200 ml-1">
-                            {activities.map((act, idx) => (
-                              <div key={idx} className="relative group p-2 rounded-lg hover:bg-slate-50/80 pr-14">
-                                {/* Floating Action Buttons */}
-                                <div className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white border border-slate-200 shadow-sm rounded-lg p-0.5 print:hidden">
-                                  {idx > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActivities((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx - 1];
-                                          arr[idx - 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển lên"
-                                    >
-                                      <MoveUp className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  {idx < activities.length - 1 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActivities((prev) => {
-                                          const arr = [...prev];
-                                          const temp = arr[idx];
-                                          arr[idx] = arr[idx + 1];
-                                          arr[idx + 1] = temp;
-                                          return arr;
-                                        });
-                                        markDirty();
-                                      }}
-                                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                                      title="Di chuyển xuống"
-                                    >
-                                      <MoveDown className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActivities((prev) => prev.filter((_, i) => i !== idx));
-                                      markDirty();
-                                    }}
-                                    className="p-1 hover:bg-red-50 rounded text-red-500 cursor-pointer"
-                                    title="Xóa mục này"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                </div>
-
-                                <span
-                                  className="absolute -left-[19px] top-3 h-2.5 w-2.5 rounded-full border-2 border-white"
-                                  style={{ backgroundColor: currentTheme.color }}
-                                />
-                                <div className="flex items-baseline justify-between gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <InlineText
-                                      value={act.organizationName || ''}
-                                      onChange={(v) => {
-                                        setActivities((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, organizationName: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Tổ chức / Dự án"
-                                      className="font-bold text-slate-900"
-                                      style={{ fontSize: `${0.875 * fontMultiplier}rem` }}
-                                      defaultFontSizePx={resolveFontSizePx(0.875 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-                                  <div className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0 italic">
-                                    <InlineText
-                                      value={act.startDate || ''}
-                                      onChange={(v) => {
-                                        setActivities((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Bắt đầu"
-                                      className="w-14 text-right"
-                                      defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                    <span>-</span>
-                                    <InlineText
-                                      value={act.endDate || ''}
-                                      onChange={(v) => {
-                                        setActivities((prev) =>
-                                          prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
-                                        );
-                                        markDirty();
-                                      }}
-                                      placeholder="Kết thúc"
-                                      className="w-14"
-                                      defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                      defaultFontFamily={currentFont.family}
-                                    />
-                                  </div>
-                                </div>
-
-                                <InlineText
-                                  value={act.position || ''}
-                                  onChange={(v) => {
-                                    setActivities((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, position: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Vị trí tham gia"
-                                  className="font-medium text-xs text-slate-600 block mt-0.5 italic"
-                                  defaultFontSizePx="12px"
-                                  defaultFontFamily={currentFont.family}
-                                />
-
-                                <InlineText
-                                  multiline={true}
-                                  rows={1}
-                                  value={act.description || ''}
-                                  onChange={(v) => {
-                                    setActivities((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Mô tả đóng góp..."
-                                  className="text-slate-600 text-xs mt-1 block"
-                                  style={{ fontSize: `${0.8 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.8 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Right Column (Education, Skills, Certificates - 5 cols) */}
-                    <div className="sm:col-span-5 space-y-6">
-                      {/* Education */}
-                      {visibleSections.education && (
-                        <div>
-                          <div className="flex items-center justify-between pb-1 mb-3 border-b border-slate-200">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="h-2 w-2 rounded-full"
-                                style={{ backgroundColor: currentTheme.color }}
-                              />
-                              <h2
-                                className="text-xs font-black uppercase tracking-wider"
-                                style={{
-                                  color: currentTheme.color,
-                                  fontSize: `${0.9 * fontMultiplier}rem`,
-                                }}
-                              >
-                                {SECTION_LABELS[cvLanguage].education}
-                              </h2>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEducation((prev) => [
-                                  ...prev,
-                                  { schoolName: '', major: '', startDate: '', endDate: '', description: '' },
-                                ]);
-                                markDirty();
-                              }}
-                              className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 print:hidden"
-                            >
-                              + Thêm
-                            </button>
-                          </div>
-
-                          <div className="space-y-3">
-                            {education.map((edu, idx) => (
-                              <div
-                                key={idx}
-                                className="bg-slate-50/80 p-2.5 rounded-xl border border-slate-100 space-y-1"
-                              >
-                                <InlineText
-                                  value={edu.schoolName || ''}
-                                  onChange={(v) => {
-                                    setEducation((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, schoolName: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Tên trường học"
-                                  className="font-bold text-slate-900 block"
-                                  style={{ fontSize: `${0.85 * fontMultiplier}rem` }}
-                                  defaultFontSizePx={resolveFontSizePx(0.85 * fontMultiplier * 16)}
-                                  defaultFontFamily={currentFont.family}
-                                />
-                                <InlineText
-                                  value={edu.major || ''}
-                                  onChange={(v) => {
-                                    setEducation((prev) =>
-                                      prev.map((item, i) => (i === idx ? { ...item, major: v } : item)),
-                                    );
-                                    markDirty();
-                                  }}
-                                  placeholder="Chuyên ngành"
-                                  className="font-semibold text-xs block"
-                                  style={{ color: currentTheme.color }}
-                                  defaultFontSizePx="12px"
-                                  defaultFontFamily={currentFont.family}
-                                  defaultColor={currentTheme.color}
-                                />
-                                <div className="flex items-center gap-1 text-[11px] text-slate-500 italic">
-                                  <InlineText
-                                    value={edu.startDate || ''}
-                                    onChange={(v) => {
-                                      setEducation((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, startDate: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Bắt đầu"
-                                    className="w-14"
-                                    defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                  <span>-</span>
-                                  <InlineText
-                                    value={edu.endDate || ''}
-                                    onChange={(v) => {
-                                      setEducation((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, endDate: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Kết thúc"
-                                    className="w-14"
-                                    defaultFontSizePx={resolveFontSizePx(0.75 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Skills */}
-                      {visibleSections.skills && (
-                        <div>
-                          <div className="flex items-center justify-between pb-1 mb-3 border-b border-slate-200">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="h-2 w-2 rounded-full"
-                                style={{ backgroundColor: currentTheme.color }}
-                              />
-                              <h2
-                                className="text-xs font-black uppercase tracking-wider"
-                                style={{
-                                  color: currentTheme.color,
-                                  fontSize: `${0.9 * fontMultiplier}rem`,
-                                }}
-                              >
-                                {SECTION_LABELS[cvLanguage].skills}
-                              </h2>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSkills((prev) => [...prev, { name: '', description: '' }]);
-                                markDirty();
-                              }}
-                              className="text-[11px] font-bold text-primary hover:underline cursor-pointer opacity-70 hover:opacity-100 print:hidden"
-                            >
-                              + Thêm
-                            </button>
-                          </div>
-
-                          <div className="space-y-1.5">
-                            {skills.map((skill, idx) => (
-                              <div
-                                key={idx}
-                                className="group relative flex items-center gap-2 p-1 rounded hover:bg-slate-50 pr-8"
-                              >
-                                <div className="w-28 shrink-0">
-                                  <InlineText
-                                    value={skill.name || ''}
-                                    onChange={(v) => {
-                                      setSkills((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, name: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Kỹ năng"
-                                    className="font-bold text-slate-800"
-                                    style={{ fontSize: `${0.825 * fontMultiplier}rem` }}
-                                    defaultFontSizePx={resolveFontSizePx(0.825 * fontMultiplier * 16)}
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <InlineText
-                                    value={skill.description || ''}
-                                    onChange={(v) => {
-                                      setSkills((prev) =>
-                                        prev.map((item, i) => (i === idx ? { ...item, description: v } : item)),
-                                      );
-                                      markDirty();
-                                    }}
-                                    placeholder="Mô tả mức độ"
-                                    className="text-slate-600 text-xs"
-                                    defaultFontSizePx="12px"
-                                    defaultFontFamily={currentFont.family}
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSkills((prev) => prev.filter((_, i) => i !== idx));
-                                    markDirty();
-                                  }}
-                                  className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-red-500 rounded bg-white print:hidden cursor-pointer"
-                                  title="Xóa kỹ năng"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Bottom Watermark (Free Tier) */}
-                <div className="mt-8 pt-3 border-t border-slate-200 flex items-center justify-between text-[10px] text-slate-400 select-none">
-                  <span>Trang 1 / 1</span>
-                  <span className="inline-flex items-center gap-1 font-semibold text-slate-500">
-                    <Sparkles className="h-3 w-3 text-primary" />
-                    Được tạo bởi <b className="text-slate-700">TalentPulse</b> — talentpulse.vn
-                  </span>
-                </div>
-              </div>
-            )}
+            {/* ================= DYNAMIC CV TEMPLATE COMPONENT ================= */}
+            {(() => {
+              const SelectedTemplate =
+                CV_EDITOR_TEMPLATES[templateType] ||
+                CV_EDITOR_TEMPLATES.template1;
+              return (
+                <SelectedTemplate
+                  currentTheme={currentTheme}
+                  locale={cvLocale}
+                  labels={localeLabels}
+                  currentFont={currentFont}
+                  fontMultiplier={fontMultiplier}
+                  lineSpacing={lineSpacing}
+                  fullName={fullName}
+                  setFullName={setFullName}
+                  position={position}
+                  setPosition={setPosition}
+                  phone={phone}
+                  setPhone={setPhone}
+                  email={email}
+                  setEmail={setEmail}
+                  link={link}
+                  setLink={setLink}
+                  address={address}
+                  setAddress={setAddress}
+                  careerObjective={careerObjective}
+                  setCareerObjective={setCareerObjective}
+                  education={education}
+                  setEducation={setEducation}
+                  workExperience={workExperience}
+                  setWorkExperience={setWorkExperience}
+                  skills={skills}
+                  setSkills={setSkills}
+                  activities={activities}
+                  setActivities={setActivities}
+                  projects={projects}
+                  setProjects={setProjects}
+                  certificates={certificates}
+                  setCertificates={setCertificates}
+                  awards={awards}
+                  setAwards={setAwards}
+                  visibleSections={visibleSections}
+                  sectionOrder={sectionOrder}
+                  moveSection={moveSection}
+                  sectionLabels={
+                    SECTION_LABELS[cvLanguage] || SECTION_LABELS.vi
+                  }
+                  markDirty={markDirty}
+                  pageCount={pageCount}
+                  bulletDescriptions={generationMode === "EDITOR_ONLY"}
+                />
+              );
+            })()}
           </div>
         </div>
       </div>
 
-      {/* AI Premium Modal */}
+      {/* AI CV generation modal */}
       <AnimatePresence>
         {showAiModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -3238,7 +2411,9 @@ export default function CVEditorPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowAiModal(false)}
+              onClick={() =>
+                !generationIsActive && setShowAiModal(false)
+              }
               className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm"
             />
 
@@ -3251,55 +2426,85 @@ export default function CVEditorPage() {
               <button
                 type="button"
                 onClick={() => setShowAiModal(false)}
+                aria-label={uiVi ? "Đóng" : "Close"}
                 className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
 
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lg shadow-amber-500/30">
-                <Crown className="h-8 w-8" />
+                <Sparkles className="h-8 w-8" />
               </div>
 
               <div className="mt-4 text-center">
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-3 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-400">
                   <Sparkles className="h-3.5 w-3.5" />
-                  Tính năng Candidate Premium
+                  {uiVi ? "Bản nháp có thể chỉnh sửa" : "Editable draft"}
                 </span>
 
                 <h3 className="mt-2 text-lg font-black text-slate-900 dark:text-white">
-                  Trợ lý AI Tối ưu hóa CV
+                  {uiVi ? "Tạo CV bằng AI" : "Create a CV with AI"}
                 </h3>
 
                 <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-                  Trí tuệ nhân tạo của TalentPulse sẽ tự động phân tích mô tả công việc (JD), gợi ý từ khóa chuẩn ATS, chỉnh sửa câu văn chuyên nghiệp và tăng 85% cơ hội được gọi phỏng vấn.
+                  {uiVi ? "AI sẽ dùng dữ liệu CV hiện tại để tạo một bản nháp có cấu trúc. Bạn có thể rà soát và chỉnh sửa trực tiếp trong trình biên tập." : "AI will use your current CV data to create a structured draft. You can review and edit it in the editor."}
                 </p>
 
-                <div className="mt-4 rounded-2xl bg-amber-50/70 p-3 text-left text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 border border-amber-200/60 dark:border-amber-800/60 space-y-1.5">
-                  <p className="font-bold flex items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5 text-amber-600" />
-                    Đặc quyền gói Premium:
-                  </p>
-                  <p>• Viết lại kinh nghiệm làm việc chuẩn mô hình STAR.</p>
-                  <p>• Chấm điểm độ tương thích CV với mọi vị trí tuyển dụng.</p>
-                  <p>• Xuất file PDF sạch 100% không watermark logo.</p>
+                <div className="mt-5 text-left">
+                  <label
+                    className="text-xs font-bold text-slate-700 dark:text-slate-300"
+                    htmlFor="cv-generation-job-id"
+                  >
+                    {uiVi ? "Mã công việc mục tiêu" : "Target job ID"}{" "}
+                    <span className="font-normal text-slate-400">
+                      {uiVi ? "(không bắt buộc)" : "(optional)"}
+                    </span>
+                  </label>
+                  <input
+                    id="cv-generation-job-id"
+                    type="text"
+                    value={generationJobId}
+                    onChange={(event) => setGenerationJobId(event.target.value)}
+                    placeholder={uiVi ? "Dán job ID nếu muốn tối ưu theo một vị trí cụ thể" : "Paste a job ID to tailor the draft to a role"}
+                    disabled={generationIsActive}
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
                 </div>
+
+                {generationError && (
+                  <div className="mt-4 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-left text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{generationError}</span>
+                  </div>
+                )}
 
                 <div className="mt-6 flex items-center gap-3">
                   <button
                     type="button"
+                    disabled={generationIsActive}
                     onClick={() => setShowAiModal(false)}
-                    className="flex-1 h-11 rounded-xl bg-slate-100 font-bold text-xs text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 cursor-pointer"
+                    className="flex-1 h-11 rounded-xl bg-slate-100 font-bold text-xs text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 cursor-pointer disabled:opacity-50"
                   >
-                    Đóng
+                    {uiVi ? "Đóng" : "Close"}
                   </button>
-                  <a
-                    href="/#premium"
-                    onClick={() => setShowAiModal(false)}
-                    className="flex-1 h-11 flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 font-bold text-xs text-white shadow-lg shadow-amber-500/25 hover:from-amber-600 hover:to-amber-700 transition cursor-pointer"
+                  <button
+                    type="button"
+                    disabled={generationIsActive || isSaving || isAutoSaving}
+                    onClick={() => void handleGenerateWithAi()}
+                    className="flex-1 h-11 flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 font-bold text-xs text-white shadow-lg shadow-amber-500/25 hover:from-amber-600 hover:to-amber-700 transition cursor-pointer disabled:opacity-60"
                   >
-                    <Crown className="h-4 w-4" />
-                    <span>Nâng cấp ngay</span>
-                  </a>
+                    {generationIsActive ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>{uiVi ? "Đang tạo bản nháp..." : "Creating draft..."}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-4 w-4" />
+                        <span>{uiVi ? "Tạo bản nháp" : "Create draft"}</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             </motion.div>

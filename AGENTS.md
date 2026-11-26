@@ -27,11 +27,13 @@ The project contains specialized skills located in `.agents/skills/`:
 | **`backend`** | [.agents/skills/backend/SKILL.md](file:///.agents/skills/backend/SKILL.md) | NestJS, TypeORM, PostgreSQL, Redis, Elasticsearch patterns. |
 | **`frontend`** | [.agents/skills/frontend/SKILL.md](file:///.agents/skills/frontend/SKILL.md) | Mobile and web frontend architecture, state management, API integration. |
 | **`design-system`** | [.agents/skills/design-system/SKILL.md](file:///.agents/skills/design-system/SKILL.md) | UI/UX aesthetic rules, color tokens, typography, animations. |
+| **`anti-ai-writing`** | [.agents/skills/anti-ai-writing/SKILL.md](file:///.agents/skills/anti-ai-writing/SKILL.md) | Eliminates AI clichés, stilted syntax, and marketing puffery in UI copy and docs. |
 
 ---
 
 ## 3. General Development Rules
 
 - **Code Quality**: Ensure zero TypeScript errors (`npm run build`) and clean formatting (`npm run lint`).
+- **Natural Human Content**: Strictly adhere to `.agents/rules/anti-ai-writing.md` for all UI copy, markdown documentation, and commit messages. Never output AI slop or banned clichés.
 - **Data Integrity**: Preserve UUID `_id` structure for entity contracts and soft deletion with `deletedAt`/`isDeleted`.
 - **Infrastructure**: Use the multi-service Docker Compose stack located in `backend/environment/docker-compose.yml`.

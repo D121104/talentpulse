@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Bell,
   MessageSquare,
   ChevronDown,
   Briefcase,
@@ -12,30 +11,38 @@ import {
   ShieldCheck,
   Crown,
   LogOut,
-  CheckCircle2,
   Send,
   Sparkles,
-  SlidersHorizontal,
   FileCheck,
   Eye,
   UserCog,
   KeyRound,
   Settings2,
+  Receipt,
+  Clock,
+  Heart,
+  ChevronRight,
+  LayoutDashboard,
 } from 'lucide-react';
+import { formatDate, parseDate } from '../../lib/dateUtils';
 import { useAuth } from '../../auth/AuthContext';
 import { UserAvatar } from '../common/UserAvatar';
+import { NotificationDropdown } from '../notifications/NotificationDropdown';
+import { useChat } from '../../context/ChatContext';
 
 export function UserDropdownMenu() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
+  const { unreadCount: chatUnreadCount } = useChat();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [isOpen, setIsOpen] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     jobs: true,
     cv: true,
     notifications: false,
-    security: false,
+    security: location.pathname.startsWith('/settings'),
     upgrade: false,
   });
 
@@ -86,27 +93,23 @@ export function UserDropdownMenu() {
 
   return (
     <div className="flex items-center gap-1.5 sm:gap-2.5">
-      {/* Quick Action: Notifications Icon */}
-      <button
-        type="button"
-        className="relative flex h-10 w-10 items-center justify-center rounded-full bg-slate-100/80 text-slate-600 transition hover:bg-primary/10 hover:text-primary dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-primary/20 dark:hover:text-primary-light cursor-pointer"
-        aria-label={t('userMenu.notifications')}
-        title={t('userMenu.notifications')}
-      >
-        <Bell className="h-5 w-5" />
-        {/* Subtle unread badge dot in Primary Blue */}
-        <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-primary ring-2 ring-white dark:ring-slate-900" />
-      </button>
+      {/* Quick Action: Notifications Dropdown (Candidate & HR) */}
+      <NotificationDropdown />
 
       {/* Quick Action: Messages Icon */}
-      <button
-        type="button"
+      <Link
+        to="/messages"
         className="relative flex h-10 w-10 items-center justify-center rounded-full bg-slate-100/80 text-slate-600 transition hover:bg-primary/10 hover:text-primary dark:bg-slate-800/80 dark:text-slate-300 dark:hover:bg-primary/20 dark:hover:text-primary-light cursor-pointer"
-        aria-label={t('userMenu.messages')}
-        title={t('userMenu.messages')}
+        aria-label={t('userMenu.messages', 'Tin nhắn')}
+        title={t('userMenu.messages', 'Tin nhắn')}
       >
         <MessageSquare className="h-5 w-5" />
-      </button>
+        {chatUnreadCount > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-black text-white shadow-sm ring-2 ring-white dark:ring-slate-900 animate-pulse">
+            {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
+          </span>
+        )}
+      </Link>
 
       {/* Avatar Dropdown Wrapper */}
       <div
@@ -165,11 +168,44 @@ export function UserDropdownMenu() {
                       </h3>
                     </div>
 
-                    <div className="mt-0.5 flex items-center gap-1.5 text-[13.5px]">
-                      <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
-                      <span className="font-semibold text-primary dark:text-primary-light">
-                        {t('userMenu.verifiedAccount')}
-                      </span>
+                    <div className="mt-1 flex flex-col gap-1 text-[13px]">
+                      {user.isPremium ? (
+                        <>
+                          <div className="flex items-center gap-1.5">
+                            <Crown className="h-4 w-4 text-amber-500 shrink-0" />
+                            <span className="font-extrabold text-amber-600 dark:text-amber-400">
+                              {user.role === 'HR' ? 'HR Premium' : 'Candidate Premium'}
+                            </span>
+                          </div>
+                          {user.premiumExpiresAt && (() => {
+                            const exp = parseDate(user.premiumExpiresAt);
+                            if (!exp) return null;
+                            const now = new Date();
+                            const diffDays = Math.max(0, Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+                            const formatted = formatDate(exp);
+                            return (
+                              <div className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300 w-fit">
+                                <Clock className="h-3 w-3 text-amber-500 shrink-0" />
+                                <span>Hạn dùng: <strong>{formatted}</strong> ({diffDays > 0 ? `Còn ${diffDays} ngày` : 'Hết hạn'})</span>
+                              </div>
+                            );
+                          })()}
+                        </>
+                      ) : user.isVerified ? (
+                        <div className="flex items-center gap-1.5">
+                          <ShieldCheck className="h-4 w-4 text-sky-500 shrink-0" />
+                          <span className="font-semibold text-sky-600 dark:text-sky-400">
+                            {t('userMenu.verifiedAccount', 'Tài khoản đã xác thực')}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <span className="h-2 w-2 rounded-full bg-amber-400 shrink-0" />
+                          <span className="font-medium text-slate-500 dark:text-slate-400">
+                            Tài khoản thường (Chưa xác thực)
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     <p className="mt-1 truncate text-[13px] text-slate-400 dark:text-slate-500">
@@ -178,6 +214,28 @@ export function UserDropdownMenu() {
                   </div>
                 </div>
               </div>
+
+              {/* Admin Portal Shortcut if user is ADMIN */}
+              {user.role === 'ADMIN' && (
+                <div className="px-3 pt-3 pb-1">
+                  <Link
+                    to="/admin/dashboard"
+                    onClick={() => setIsOpen(false)}
+                    className="group relative flex items-center justify-between overflow-hidden rounded-xl bg-gradient-to-r from-violet-600 via-indigo-600 to-purple-600 p-3 text-white shadow-md shadow-indigo-500/20 transition-all duration-200 hover:shadow-lg hover:shadow-indigo-500/30 hover:scale-[1.01]"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/20 backdrop-blur-sm">
+                        <LayoutDashboard className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="text-left">
+                        <p className="text-[13px] font-bold tracking-tight">Cổng Quản Trị Hệ Thống</p>
+                        <p className="text-[11px] text-indigo-100">Bảng điều khiển & quản trị TalentPulse</p>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-white/80 transition-transform group-hover:translate-x-0.5" />
+                  </Link>
+                </div>
+              )}
 
               {/* 2. Menu Sections */}
               <div className="py-3 space-y-1">
@@ -221,12 +279,12 @@ export function UserDropdownMenu() {
                         <span>{t('userMenu.matchingJobs')}</span>
                       </Link>
                       <Link
-                        to="/job-alerts"
+                        to="/saved-jobs"
                         onClick={() => setIsOpen(false)}
                         className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
                       >
-                        <SlidersHorizontal className="h-4 w-4 text-slate-400" />
-                        <span>{t('userMenu.jobAlertSettings')}</span>
+                        <Heart className="h-4 w-4 text-rose-500" />
+                        <span>{t('userMenu.savedJobs')}</span>
                       </Link>
                     </div>
                   )}
@@ -333,17 +391,25 @@ export function UserDropdownMenu() {
                       <Link
                         to="/settings/profile"
                         onClick={() => setIsOpen(false)}
-                        className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
+                        className={`flex items-center gap-2.5 py-2 transition-colors ${
+                          location.pathname === '/settings/profile'
+                            ? 'text-primary font-bold dark:text-primary-light'
+                            : 'text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light'
+                        }`}
                       >
-                        <UserCog className="h-4 w-4 text-slate-400" />
+                        <UserCog className={`h-4 w-4 ${location.pathname === '/settings/profile' ? 'text-primary dark:text-primary-light' : 'text-slate-400'}`} />
                         <span>{t('userMenu.updateProfile')}</span>
                       </Link>
                       <Link
                         to="/settings/password"
                         onClick={() => setIsOpen(false)}
-                        className="flex items-center gap-2.5 py-2 text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light transition-colors"
+                        className={`flex items-center gap-2.5 py-2 transition-colors ${
+                          location.pathname === '/settings/password'
+                            ? 'text-primary font-bold dark:text-primary-light'
+                            : 'text-slate-600 hover:text-primary dark:text-slate-400 dark:hover:text-primary-light'
+                        }`}
                       >
-                        <KeyRound className="h-4 w-4 text-slate-400" />
+                        <KeyRound className={`h-4 w-4 ${location.pathname === '/settings/password' ? 'text-primary dark:text-primary-light' : 'text-slate-400'}`} />
                         <span>{t('userMenu.changePassword')}</span>
                       </Link>
                     </div>
@@ -372,14 +438,36 @@ export function UserDropdownMenu() {
 
                   {openSections.upgrade && (
                     <div className="ml-10 mt-1 space-y-0.5 border-l-2 border-slate-100 dark:border-slate-800 pl-4 pb-1 text-[14px]">
-                      <a
-                        href="#premium"
+                      <Link
+                        to={user.role === 'HR' ? '/dashboard?tab=premium' : '/premium'}
                         onClick={() => setIsOpen(false)}
-                        className="flex items-center gap-2.5 py-2 font-bold text-amber-600 dark:text-amber-400 hover:underline transition-colors"
+                        className="flex items-center justify-between py-2 font-bold text-amber-600 dark:text-amber-400 hover:underline transition-colors"
                       >
-                        <Crown className="h-4 w-4" />
-                        <span>{user.role === 'HR' ? t('userMenu.hrPremium') : t('userMenu.candidatePremium')}</span>
-                      </a>
+                        <div className="flex items-center gap-2">
+                          <Crown className="h-4 w-4" />
+                          <span>{user.role === 'HR' ? t('userMenu.hrPremium', 'Gói HR Premium') : t('userMenu.candidatePremium', 'Gói Candidate Premium')}</span>
+                        </div>
+                        {user.isPremium && user.premiumExpiresAt && (() => {
+                          const exp = parseDate(user.premiumExpiresAt);
+                          if (!exp) return null;
+                          const now = new Date();
+                          const diffDays = Math.max(0, Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+                          return (
+                            <span className="text-[10.5px] font-extrabold px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                              {diffDays > 0 ? `Còn ${diffDays}d` : 'Hết hạn'}
+                            </span>
+                          );
+                        })()}
+                      </Link>
+
+                      <Link
+                        to={user.role === 'HR' ? '/dashboard?tab=payments' : '/payment-history'}
+                        onClick={() => setIsOpen(false)}
+                        className="flex items-center gap-2.5 py-2 font-bold text-slate-700 dark:text-slate-300 hover:text-primary dark:hover:text-primary-light transition-colors"
+                      >
+                        <Receipt className="h-4 w-4" />
+                        <span>Lịch sử thanh toán</span>
+                      </Link>
                     </div>
                   )}
                 </div>

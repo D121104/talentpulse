@@ -7,7 +7,10 @@ import {
   IsNotEmptyObject,
   IsNumber,
   IsObject,
+  IsOptional,
   IsString,
+  Max,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Company } from 'src/users/dto/create-user.dto';
@@ -37,6 +40,24 @@ export class CreateJobDto {
   @IsNotEmpty()
   level: string;
 
+  @IsString()
+  @IsOptional()
+  workingModel?: string;
+
+  @IsString()
+  @IsOptional()
+  education?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  benefits?: string[];
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  categories?: string[];
+
   @IsDate()
   @Transform(({ value }) => new Date(value))
   @IsNotEmpty()
@@ -49,6 +70,18 @@ export class CreateJobDto {
   @IsNotEmpty()
   location: string;
 
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  @IsOptional()
+  lat?: number;
+
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  @IsOptional()
+  lon?: number;
+
   @Transform(({ value }) => new Date(value))
   @IsNotEmpty()
   endDate: Date;
@@ -56,4 +89,13 @@ export class CreateJobDto {
   @IsBoolean()
   @IsNotEmpty()
   isActive: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  isHot?: boolean;
+
+  @IsDate()
+  @IsOptional()
+  @Transform(({ value }) => (value ? new Date(value) : undefined))
+  boostedAt?: Date;
 }

@@ -1,5 +1,8 @@
+import 'dotenv/config';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { LoggerModule } from 'nestjs-pino';
+import { validateEnvironment } from './config/environment.validation';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -25,8 +28,26 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RedisModule } from './redis/redis.module';
 import { AIMatchingModule } from './ai-matching/ai-matching.module';
 import { OnlineCVsModule } from './online-cvs/online-cvs.module';
+import { CandidateCareerProfileModule } from './candidate-career-profile/candidate-career-profile.module';
+import { ActiveJobsModule } from './active-jobs/active-jobs.module';
+import { AiCvConsentsModule } from './ai-consents/ai-cv-consents.module';
+import { PaymentsModule } from './payments/payments.module';
+import { CandidateAccessModule } from './candidate-access/candidate-access.module';
+import { CandidateAssistantModule } from './candidate-assistant/candidate-assistant.module';
+import { ElasticsearchModule } from './elasticsearch/elasticsearch.module';
+import { SavedJobsModule } from './saved-jobs/saved-jobs.module';
+import { ChatModule } from './chat/chat.module';
+import { AdminModule } from './admin/admin.module';
+import { areQueueWorkersEnabled, isRedisEnabled } from './config/runtime-flags';
+import { createRedisConnectionOptions } from './redis/redis.module';
+import { createPostgresSslOptions } from './database/postgres-ssl';
+import { JobIndexingModule } from './job-indexing/job-indexing.module';
+import { JobIndexingSubscriber } from './job-indexing/job-indexing.subscriber';
+import { createPinoLoggerOptions } from './observability/observability.logger';
+import { ObservabilityModule } from './observability/observability.module';
 
-const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
+const redisEnabled = isRedisEnabled();
+const queueWorkersEnabled = areQueueWorkersEnabled();
 
 @Module({
   imports: [
@@ -34,6 +55,15 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      validate: validateEnvironment,
+    }),
+
+    // Structured logging
+    LoggerModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) =>
+        createPinoLoggerOptions(configService),
+      inject: [ConfigService],
     }),
 
     // Throttle (Rate limiting)
@@ -44,30 +74,27 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
       },
     ]),
 
-    // Lambda executions are short lived, so cron jobs run in a separate worker.
-    ...(runBackgroundJobs ? [ScheduleModule.forRoot()] : []),
+    // Schedule (Cron jobs)
+    ...(queueWorkersEnabled ? [ScheduleModule.forRoot()] : []),
 
     // Bull Queue with Redis
-    BullModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        redis: {
-          host: configService.get<string>('REDIS_HOST') || 'localhost',
-          port: configService.get<number>('REDIS_PORT') || 6379,
-          password: configService.get<string>('REDIS_PASSWORD') || undefined,
-          tls:
-            configService.get<string>('REDIS_TLS') === 'true'
-              ? {}
-              : undefined,
-        },
-      }),
-      inject: [ConfigService],
-    }),
+    ...(redisEnabled
+      ? [
+          BullModule.forRootAsync({
+            imports: [ConfigModule],
+            useFactory: async (configService: ConfigService) => ({
+              redis: {
+                ...createRedisConnectionOptions(configService),
+              },
+            }),
+            inject: [ConfigService],
+          }),
+        ]
+      : []),
 
     // PostgreSQL with TypeORM
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      inject: [ConfigService],
       useFactory: async (configService: ConfigService) => ({
         type: 'postgres',
         host: configService.get<string>('DB_HOST', 'localhost'),
@@ -75,17 +102,19 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres123'),
         database: configService.get<string>('DB_DATABASE', 'recruitment_db'),
-
         autoLoadEntities: true,
-
+        subscribers: [JobIndexingSubscriber],
         synchronize:
-          configService.get<string>('DB_SYNCHRONIZE', 'true') === 'true',
-
-        ssl:
-          process.env.NODE_ENV === 'production'
-            ? { rejectUnauthorized: false }
-            : false,
+          configService.get<string>(
+            'DB_SYNCHRONIZE',
+            process.env.NODE_ENV === 'production' ? 'false' : 'true',
+          ) === 'true',
+        ssl: createPostgresSslOptions({
+          NODE_ENV: configService.get<string>('NODE_ENV', 'development'),
+          DB_SSL_CA_FILE: configService.get<string>('DB_SSL_CA_FILE'),
+        }),
       }),
+      inject: [ConfigService],
     }),
 
     // Feature modules
@@ -105,6 +134,18 @@ const runBackgroundJobs = process.env.RUN_BACKGROUND_JOBS !== 'false';
     RedisModule,
     AIMatchingModule,
     OnlineCVsModule,
+    CandidateCareerProfileModule,
+    ActiveJobsModule,
+    AiCvConsentsModule,
+    PaymentsModule,
+    CandidateAccessModule,
+    CandidateAssistantModule,
+    JobIndexingModule,
+    ElasticsearchModule,
+    SavedJobsModule,
+    ChatModule,
+    AdminModule,
+    ObservabilityModule,
   ],
   controllers: [AppController],
   providers: [AppService],

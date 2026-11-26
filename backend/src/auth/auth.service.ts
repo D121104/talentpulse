@@ -23,6 +23,8 @@ import {
   NotificationType,
 } from 'src/notifications/entities/notification.entity';
 import { RedisService } from 'src/redis/redis.service';
+import { MailService } from 'src/mail/mail.service';
+import { requiredSecret } from './required-secret';
 
 interface GoogleProfile {
   email: string;
@@ -41,6 +43,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly notificationsService: NotificationsService,
     private readonly redisService: RedisService,
+    private readonly mailService: MailService,
   ) {}
 
   async validateUser(email: string, password: string): Promise<IUser | null> {
@@ -54,10 +57,33 @@ export class AuthService {
     return this.serializeUser(user);
   }
 
+  async forgotPassword(email: string) {
+    const cleanEmail = email?.trim().toLowerCase();
+    if (!cleanEmail) {
+      throw new BadRequestException('Vui lòng nhập địa chỉ email');
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { email: cleanEmail, isDeleted: false },
+    });
+
+    if (!user) {
+      throw new BadRequestException(
+        'Không tìm thấy tài khoản với địa chỉ email này',
+      );
+    }
+
+    return await this.usersService.requestForgotPasswordOtp(cleanEmail);
+  }
+
   async resetPassword(token: string, password: string) {
+    if (!password || password.length < 8) {
+      throw new BadRequestException('Mật khẩu mới phải có tối thiểu 8 ký tự');
+    }
+
     const user = await this.usersService.forgotPassword(token);
     if (!user) {
-      throw new BadRequestException('Invalid token');
+      throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
     }
 
     await this.userRepo.update(user._id, {
@@ -65,7 +91,9 @@ export class AuthService {
       refreshToken: null as any,
     });
 
-    return { message: 'Password reset successfully' };
+    return {
+      message: 'Đặt lại mật khẩu thành công! Bạn có thể đăng nhập ngay.',
+    };
   }
 
   async login(user: IUser, response: Response) {
@@ -80,6 +108,21 @@ export class AuthService {
     return this.createSession(currentUser, response);
   }
 
+  private generateVerificationToken(user: User): string {
+    const secret = requiredSecret(this.configService, 'JWT_SECRET');
+    return this.jwtService.sign(
+      {
+        sub: user._id,
+        email: user.email,
+        type: 'account_verification',
+      },
+      {
+        secret,
+        expiresIn: '24h',
+      },
+    );
+  }
+
   async register(createUserDto: CreateUserDto) {
     const email = this.normalizeEmail(createUserDto.email);
     await this.ensureEmailIsAvailable(email);
@@ -89,10 +132,149 @@ export class AuthService {
       email,
       password: this.usersService.hashPassword(createUserDto.password),
       role: Role.USER,
+      isVerified: false,
     });
     const savedUser = await this.userRepo.save(newUser);
 
-    return { user: this.serializeUser(savedUser) };
+    const verificationToken = this.generateVerificationToken(savedUser);
+    savedUser.verificationToken = verificationToken;
+    await this.userRepo.save(savedUser);
+
+    // Send account verification email asynchronously
+    this.mailService
+      .sendAccountVerificationEmail(
+        savedUser.email,
+        savedUser.name || 'Bạn',
+        verificationToken,
+      )
+      .catch((err) => {
+        console.error('Failed to send verification email on register:', err);
+      });
+
+    return {
+      user: this.serializeUser(savedUser),
+      message:
+        'Đăng ký thành công! Vui lòng kiểm tra email để xác thực tài khoản.',
+    };
+  }
+
+  async verifyAccount(token: string) {
+    if (!token || typeof token !== 'string') {
+      throw new BadRequestException('Mã xác thực không hợp lệ');
+    }
+
+    const secret = requiredSecret(this.configService, 'JWT_SECRET');
+
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(token.trim(), { secret });
+    } catch {
+      // Fallback: check if it's a legacy hex token
+      const userWithHex = await this.userRepo.findOne({
+        where: { verificationToken: token.trim(), isDeleted: false },
+      });
+      if (userWithHex) {
+        userWithHex.isVerified = true;
+        userWithHex.verifiedAt = new Date();
+        userWithHex.verificationToken = null as any;
+        const saved = await this.userRepo.save(userWithHex);
+        return {
+          message:
+            'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
+          user: this.serializeUser(saved),
+        };
+      }
+      throw new BadRequestException(
+        'Liên kết xác thực không hợp lệ hoặc đã hết hạn (sau 24h). Vui lòng yêu cầu gửi lại email mới.',
+      );
+    }
+
+    if (
+      payload.type !== 'account_verification' ||
+      !payload.sub ||
+      !payload.email
+    ) {
+      throw new BadRequestException(
+        'Mã xác thực không đúng định dạng bảo mật.',
+      );
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { _id: payload.sub, email: payload.email, isDeleted: false },
+    });
+
+    if (!user) {
+      throw new BadRequestException(
+        'Không tìm thấy tài khoản người dùng tương ứng.',
+      );
+    }
+
+    // IDEMPOTENCY: If user is already verified, return success safely (avoids duplicate call failures)
+    if (user.isVerified) {
+      return {
+        message: 'Tài khoản của bạn đã được xác thực thành công.',
+        user: this.serializeUser(user),
+        alreadyVerified: true,
+      };
+    }
+
+    // Check if the token was superseded by a newer resend request
+    if (user.verificationToken && user.verificationToken !== token.trim()) {
+      throw new BadRequestException(
+        'Liên kết xác thực này đã bị thay thế bởi yêu cầu gửi lại mới nhất. Vui lòng kiểm tra email mới nhất.',
+      );
+    }
+
+    user.isVerified = true;
+    user.verifiedAt = new Date();
+    user.verificationToken = null as any;
+
+    const updatedUser = await this.userRepo.save(user);
+
+    return {
+      message:
+        'Xác thực tài khoản thành công! Bạn đã mở khóa cấp Đã Xác Thực (tối đa 6 CV, 1 lần đẩy Top/tuần).',
+      user: this.serializeUser(updatedUser),
+    };
+  }
+
+  async resendVerification(email?: string, userId?: string) {
+    let user: User | null = null;
+
+    if (userId) {
+      user = await this.userRepo.findOne({
+        where: { _id: userId, isDeleted: false },
+      });
+    } else if (email) {
+      user = await this.findUserByEmail(email);
+    }
+
+    if (!user) {
+      throw new BadRequestException(
+        'Không tìm thấy tài khoản người dùng với email này.',
+      );
+    }
+
+    if (user.isVerified) {
+      throw new BadRequestException(
+        'Tài khoản này đã được xác thực thành công trước đó.',
+      );
+    }
+
+    const verificationToken = this.generateVerificationToken(user);
+    user.verificationToken = verificationToken;
+    await this.userRepo.save(user);
+
+    await this.mailService.sendAccountVerificationEmail(
+      user.email,
+      user.name || 'Bạn',
+      verificationToken,
+    );
+
+    return {
+      message:
+        'Đã gửi lại email xác thực thành công. Vui lòng kiểm tra hòm thư của bạn.',
+    };
   }
 
   async registerHr(createHrDto: CreateHrDto) {
@@ -149,6 +331,8 @@ export class AuthService {
           name: [profile.firstName, profile.lastName].filter(Boolean).join(' '),
           avatar: profile.picture,
           role: Role.USER,
+          isVerified: true, // Google OAuth automatically verifies the Gmail address
+          verifiedAt: new Date(),
           password: this.usersService.hashPassword(
             crypto.randomBytes(32).toString('hex'),
           ),
@@ -158,6 +342,11 @@ export class AuthService {
       this.assertUserCanAuthenticate(user);
 
       const updates: Partial<User> = {};
+      if (!user.isVerified) {
+        updates.isVerified = true;
+        updates.verifiedAt = user.verifiedAt || new Date();
+        updates.verificationToken = null as any;
+      }
       if (!user.name && (profile.firstName || profile.lastName)) {
         updates.name = [profile.firstName, profile.lastName]
           .filter(Boolean)
@@ -168,6 +357,7 @@ export class AuthService {
       }
       if (Object.keys(updates).length > 0) {
         await this.userRepo.update(user._id, updates);
+        user = { ...user, ...updates };
       }
     }
 
@@ -181,7 +371,9 @@ export class AuthService {
     const userId = await this.redisService.getValue<string>(key);
 
     if (!userId) {
-      throw new BadRequestException('Mã đăng nhập Google đã hết hạn hoặc đã được sử dụng');
+      throw new BadRequestException(
+        'Mã đăng nhập Google đã hết hạn hoặc đã được sử dụng',
+      );
     }
 
     await this.redisService.deleteValue(key);
@@ -208,7 +400,7 @@ export class AuthService {
   async generateNewToken(refreshToken: string, response: Response) {
     try {
       const payload = await this.jwtService.verifyAsync(refreshToken, {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        secret: requiredSecret(this.configService, 'JWT_REFRESH_SECRET'),
       });
       const user = await this.userRepo.findOne({
         where: { _id: payload._id, refreshToken },
@@ -220,7 +412,10 @@ export class AuthService {
 
       return this.createSession(user, response);
     } catch (error) {
-      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof ForbiddenException
+      ) {
         throw error;
       }
       throw new UnauthorizedException('Refresh token không hợp lệ');
@@ -238,16 +433,20 @@ export class AuthService {
 
     const payload = this.createTokenPayload(user);
     const refreshToken = this.jwtService.sign(payload, {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      secret: requiredSecret(this.configService, 'JWT_REFRESH_SECRET'),
       expiresIn: this.getRefreshTokenExpirationSeconds(),
     });
     const accessToken = this.jwtService.sign(payload, {
-      secret: this.configService.get<string>('JWT_SECRET'),
+      secret: requiredSecret(this.configService, 'JWT_SECRET'),
       expiresIn: this.getAccessTokenExpirationSeconds(),
     });
 
     await this.usersService.updateUserToken(refreshToken, user._id);
-    response.cookie('refresh_token', refreshToken, this.getRefreshCookieOptions());
+    response.cookie(
+      'refresh_token',
+      refreshToken,
+      this.getRefreshCookieOptions(),
+    );
 
     return {
       accessToken,
@@ -277,6 +476,17 @@ export class AuthService {
       avatar: user.avatar,
       company: user.company,
       isApproved: user.isApproved,
+      isPremium: user.isPremium || false,
+      premiumPlan: user.premiumPlan || 'FREE',
+      premiumExpiresAt: user.premiumExpiresAt || undefined,
+      premiumPackageId: user.premiumPackageId || undefined,
+      isVerified: user.isVerified || false,
+      verifiedAt: user.verifiedAt || undefined,
+      lastBoostedAt: user.lastBoostedAt || undefined,
+      boostExpiresAt: user.boostExpiresAt || undefined,
+      isJobSeeking: user.isJobSeeking ?? true,
+      isJobRecommendation: user.isJobRecommendation ?? true,
+      allowRecruiterSearch: user.allowRecruiterSearch ?? true,
     };
   }
 
@@ -287,7 +497,9 @@ export class AuthService {
   }
 
   private async findUserByEmail(email: string) {
-    return this.userRepo.findOne({ where: { email: this.normalizeEmail(email) } });
+    return this.userRepo.findOne({
+      where: { email: this.normalizeEmail(email) },
+    });
   }
 
   private normalizeEmail(email: string) {
@@ -325,7 +537,8 @@ export class AuthService {
     return {
       httpOnly: true,
       secure,
-      sameSite: sameSite === 'none' ? 'none' : sameSite === 'strict' ? 'strict' : 'lax',
+      sameSite:
+        sameSite === 'none' ? 'none' : sameSite === 'strict' ? 'strict' : 'lax',
       maxAge: ms(
         this.configService.get<string>('JWT_REFRESH_EXPIRES_IN', '7d'),
       ),

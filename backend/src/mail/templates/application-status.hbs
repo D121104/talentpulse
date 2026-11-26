@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Thông báo kết quả tuyển dụng - TalentPulse</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; -webkit-font-smoothing: antialiased;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); border: 1px solid #e2e8f0;">
+          
+          <!-- Brand Header Banner -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #2563eb 100%); padding: 30px 32px; text-align: left;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td align="left" style="vertical-align: middle;">
+                    <div style="display: inline-flex; align-items: center; gap: 8px;">
+                      <span style="display: inline-block; width: 34px; height: 34px; line-height: 34px; background: #ffffff; color: #2563eb; border-radius: 10px; text-align: center; font-weight: 900; font-size: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.15);">T</span>
+                      <span style="font-size: 24px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; margin-left: 8px; vertical-align: middle;">TalentPulse</span>
+                    </div>
+                  </td>
+                  <td align="right" style="vertical-align: middle;">
+                    <span style="color: #93c5fd; font-size: 13px; font-weight: 600; letter-spacing: 0.2px; text-transform: uppercase;">
+                      Tiếp lợi thế - Nối thành công
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          
+          <!-- Main Content Body -->
+          <tr>
+            <td style="padding: 40px 32px 32px;">
+              <!-- Title -->
+              <h2 style="color: #0f172a; margin: 0 0 24px; font-size: 22px; font-weight: 800; text-align: center; letter-spacing: -0.3px;">
+                Thông báo kết quả tuyển dụng
+              </h2>
+
+              <!-- Greeting -->
+              <p style="color: #0f172a; font-size: 16px; line-height: 1.6; margin: 0 0 16px;">
+                Xin chào <strong style="color: #2563eb;">{{candidateName}}</strong>,
+              </p>
+
+              <!-- Intro -->
+              <p style="color: #334155; font-size: 15px; line-height: 1.7; margin: 0 0 20px;">
+                Cảm ơn bạn đã dành thời gian tham gia ứng tuyển cho vị trí <strong>{{jobTitle}}</strong> tại <strong>{{companyName}}</strong>.
+              </p>
+
+              <!-- Status Box -->
+              {{#if isApproved}}
+              <div style="background-color: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 0 14px 14px 0; padding: 18px 20px; margin: 0 0 22px;">
+                <p style="color: #166534; font-size: 15px; line-height: 1.7; margin: 0 0 10px;">
+                  Sau khi xem xét các hồ sơ ứng tuyển nhận được cho vị trí này, nhà tuyển dụng đã đánh giá CV của bạn là: 
+                  <strong style="color: #16a34a; font-size: 17px; text-transform: uppercase; letter-spacing: 0.3px;">Phù hợp</strong>
+                </p>
+                <p style="color: #14532d; font-size: 14px; line-height: 1.6; margin: 0 0 8px;">
+                  Điều này thể hiện rằng CV của bạn phù hợp với nhu cầu của NTD, tuy nhiên, để đi tới quyết định cuối cùng còn phụ thuộc nhiều yếu tố khác của Doanh nghiệp.
+                </p>
+                <p style="color: #166534; font-size: 14px; font-style: italic; font-weight: 600; margin: 0;">
+                  Hãy chuẩn bị sẵn sàng để nhận liên hệ từ NTD trong trường hợp bạn được lựa chọn đi tiếp vòng sau nhé!
+                </p>
+              </div>
+              {{else if isConsidering}}
+              <div style="background-color: #fffbeb; border-left: 4px solid #d97706; border-radius: 0 14px 14px 0; padding: 18px 20px; margin: 0 0 22px;">
+                <p style="color: #92400e; font-size: 15px; line-height: 1.7; margin: 0 0 10px;">
+                  Sau khi xem xét các hồ sơ ứng tuyển nhận được cho vị trí này, nhà tuyển dụng đã đánh giá CV của bạn là: 
+                  <strong style="color: #d97706; font-size: 17px; text-transform: uppercase; letter-spacing: 0.3px;">Cân nhắc</strong>
+                </p>
+                <p style="color: #78350f; font-size: 14px; line-height: 1.6; margin: 0 0 8px;">
+                  Điều này thể hiện rằng hồ sơ của bạn đang được nhà tuyển dụng lưu tâm và tiếp tục xem xét cùng các ứng viên tiềm năng khác cho vị trí này.
+                </p>
+                <p style="color: #92400e; font-size: 14px; font-style: italic; font-weight: 600; margin: 0;">
+                  Hãy chuẩn bị sẵn sàng để nhận liên hệ từ NTD khi có kết quả chính thức cho các bước tiếp theo nhé!
+                </p>
+              </div>
+              {{else if isRejected}}
+              <div style="background-color: #fff1f2; border-left: 4px solid #e11d48; border-radius: 0 14px 14px 0; padding: 18px 20px; margin: 0 0 22px;">
+                <p style="color: #9f1239; font-size: 15px; line-height: 1.7; margin: 0 0 10px;">
+                  Sau khi xem xét kỹ lưỡng các hồ sơ ứng tuyển, nhà tuyển dụng đánh giá CV của bạn là: 
+                  <strong style="color: #e11d48; font-size: 17px; text-transform: uppercase; letter-spacing: 0.3px;">Chưa phù hợp</strong>
+                </p>
+                <p style="color: #881337; font-size: 14px; line-height: 1.6; margin: 0 0 8px;">
+                  Dù chưa thể đồng hành cùng bạn trong đợt tuyển dụng lần này, hồ sơ của bạn đã được ghi nhận trong kho nhân tài TalentPulse để ưu tiên kết nối cho các cơ hội nghề nghiệp thích hợp hơn trong tương lai.
+                </p>
+                <p style="color: #9f1239; font-size: 14px; font-style: italic; font-weight: 600; margin: 0;">
+                  Chúc bạn luôn giữ vững nhiệt huyết và sớm tìm được công việc ưng ý nhất!
+                </p>
+              </div>
+              {{/if}}
+
+              <!-- Guidance Advice -->
+              <p style="color: #475569; font-size: 14px; line-height: 1.7; margin: 0 0 28px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px;">
+                💡 <strong>Mẹo tìm việc:</strong> Bạn hãy luôn duy trì bật <span style="color: #2563eb; font-weight: 600;">Trạng thái tìm việc</span> và chế độ <span style="color: #2563eb; font-weight: 600;">Cho phép Nhà tuyển dụng tìm kiếm CV</span> trên TalentPulse để các nhà tuyển dụng hàng đầu có thể chủ động kết nối ngay nhé.
+              </p>
+
+              <!-- CTA Button -->
+              <div style="text-align: center; margin: 30px 0 10px;">
+                <a href="{{myCvLink}}" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: #ffffff; text-decoration: none; padding: 14px 36px; border-radius: 12px; font-size: 15px; font-weight: 700; box-shadow: 0 6px 18px rgba(37, 99, 235, 0.35); letter-spacing: 0.2px;">
+                  Xem hồ sơ & Theo dõi ứng tuyển →
+                </a>
+              </div>
+            </td>
+          </tr>
+          
+          <!-- Brand Footer -->
+          <tr>
+            <td style="background-color: #0f172a; padding: 32px 24px; text-align: center; border-top: 1px solid #1e293b;">
+              <!-- Mini Brand -->
+              <div style="margin-bottom: 16px;">
+                <span style="font-size: 18px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px;">TalentPulse</span>
+                <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 0;">Nền tảng Tuyển dụng & Kết nối Việc làm Thông minh với AI</p>
+              </div>
+
+              <!-- Social Links Mock -->
+              <div style="margin-bottom: 20px;">
+                <a href="#" style="display: inline-block; width: 32px; height: 32px; line-height: 32px; background: #1e293b; color: #38bdf8; border-radius: 50%; text-decoration: none; font-weight: bold; margin: 0 4px; font-size: 13px;">fb</a>
+                <a href="#" style="display: inline-block; width: 32px; height: 32px; line-height: 32px; background: #1e293b; color: #60a5fa; border-radius: 50%; text-decoration: none; font-weight: bold; margin: 0 4px; font-size: 13px;">in</a>
+                <a href="#" style="display: inline-block; width: 32px; height: 32px; line-height: 32px; background: #1e293b; color: #f43f5e; border-radius: 50%; text-decoration: none; font-weight: bold; margin: 0 4px; font-size: 13px;">tt</a>
+              </div>
+
+              <!-- Address & Copyright -->
+              <div style="border-top: 1px solid #1e293b; padding-top: 16px;">
+                <p style="color: #64748b; font-size: 12px; margin: 0 0 6px; line-height: 1.5;">
+                  Tòa nhà TalentPulse Innovation Hub, Quận Cầu Giấy, TP. Hà Nội
+                </p>
+                <p style="color: #475569; font-size: 12px; margin: 0;">
+                  © 2024-2026 TalentPulse Ecosystem. All rights reserved.
+                </p>
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -3,8 +3,9 @@ import { MailerService } from '@nestjs-modules/mailer';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Subscriber } from 'src/subscribers/entities/subscriber.entity';
-import { Job } from 'src/jobs/entities/job.entity';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { ApplicationStatus } from 'src/applications/entities/application.entity';
+import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
 
 @Injectable()
 export class MailService {
@@ -15,8 +16,7 @@ export class MailService {
     private readonly mailerService: MailerService,
     @InjectRepository(Subscriber)
     private readonly subscriberRepo: Repository<Subscriber>,
-    @InjectRepository(Job)
-    private readonly jobRepo: Repository<Job>,
+    private readonly activeJobQueryService: ActiveJobQueryService,
   ) {}
 
   // Send OTP verification email to user
@@ -33,12 +33,22 @@ export class MailService {
 
   // Send password reset email with token link
   async sendForgotPassword(email: string, token: string) {
+    const frontendUrl = (
+      process.env.URL_FRONTEND || 'http://localhost:5173'
+    ).replace(/\/$/, '');
+    const resetLink = `${frontendUrl}/reset-password?token=${encodeURIComponent(
+      token,
+    )}&email=${encodeURIComponent(email)}`;
+
     await this.mailerService.sendMail({
       to: email,
-      subject: 'Đặt lại mật khẩu',
+      subject: '🔐 [TalentPulse] Yêu cầu đặt lại mật khẩu của bạn',
       template: 'forgot-password',
       context: {
-        link: `${process.env.URL_FRONTEND}/reset-password?token=${token}`,
+        otp: token,
+        link: resetLink,
+        email,
+        currentYear: new Date().getFullYear(),
       },
     });
   }
@@ -60,6 +70,65 @@ export class MailService {
       template: 'welcome',
       context: {
         name,
+      },
+    });
+  }
+
+  // Send account verification email for candidate
+  async sendAccountVerificationEmail(
+    email: string,
+    name: string,
+    token: string,
+  ) {
+    const frontendUrl = process.env.URL_FRONTEND || 'http://localhost:5173';
+    const verifyUrl = `${frontendUrl}/verify-account?token=${token}`;
+
+    await this.mailerService.sendMail({
+      to: email,
+      subject:
+        '🛡️ [TalentPulse] Xác thực tài khoản ứng viên để mở khóa quyền lợi Đã Xác Thực',
+      template: 'verify-account',
+      context: {
+        name: name || 'Bạn',
+        verifyUrl,
+        currentYear: new Date().getFullYear(),
+      },
+    });
+  }
+
+  // Send application status notification email (Suitable, Considering, Unsuitable)
+  async sendApplicationStatusEmail(data: {
+    candidateEmail: string;
+    candidateName: string;
+    jobTitle: string;
+    companyName: string;
+    status: ApplicationStatus;
+    note?: string;
+  }) {
+    const isApproved = data.status === ApplicationStatus.APPROVED;
+    const isConsidering = data.status === ApplicationStatus.CONSIDERING;
+    const isRejected = data.status === ApplicationStatus.REJECTED;
+
+    let statusText = 'Phù hợp';
+    if (isConsidering) statusText = 'Cân nhắc';
+    if (isRejected) statusText = 'Chưa phù hợp';
+
+    const subject = `[TalentPulse] Thông báo kết quả tuyển dụng vị trí ${data.jobTitle} - ${data.companyName}`;
+
+    await this.mailerService.sendMail({
+      to: data.candidateEmail,
+      subject,
+      template: 'application-status',
+      context: {
+        candidateName: data.candidateName || 'Bạn',
+        jobTitle: data.jobTitle,
+        companyName: data.companyName,
+        statusText,
+        isApproved,
+        isConsidering,
+        isRejected,
+        note: data.note,
+        myCvLink: `${process.env.URL_FRONTEND || 'http://localhost:5173'}/cv`,
       },
     });
   }
@@ -148,11 +217,7 @@ export class MailService {
     );
 
     const now = new Date();
-    const queryBuilder = this.jobRepo
-      .createQueryBuilder('job')
-      .where('job.isActive = :isActive', { isActive: true })
-      .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('job.endDate > :now', { now });
+    const queryBuilder = this.activeJobQueryService.createActiveQuery(now);
 
     const conditions = skillNames.map(
       (name, idx) =>
@@ -201,11 +266,7 @@ export class MailService {
       if (skillNames.length === 0) continue;
 
       const now = new Date();
-      const queryBuilder = this.jobRepo
-        .createQueryBuilder('job')
-        .where('job.isActive = :isActive', { isActive: true })
-        .andWhere('job.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('job.endDate > :now', { now });
+      const queryBuilder = this.activeJobQueryService.createActiveQuery(now);
 
       const conditions = skillNames.map(
         (name, idx) =>
@@ -234,5 +295,54 @@ export class MailService {
         });
       }
     }
+  }
+
+  // Send premium subscription success confirmation email
+  async sendPremiumSuccessEmail(data: {
+    userEmail: string;
+    userName: string;
+    orderCode: number;
+    planType: string;
+    billingCycle: string;
+    durationDays: number;
+    amount: number;
+    expiryDate: string;
+    transactionReference?: string;
+  }) {
+    const isCandidate = data.planType === 'CANDIDATE_PREMIUM';
+    const planName = isCandidate ? 'CANDIDATE PREMIUM' : 'HR ENTERPRISE';
+    const planTitle = isCandidate
+      ? 'Candidate Premium'
+      : 'HR Premium Enterprise';
+
+    const cycleTextMap: Record<string, string> = {
+      monthly: '1 Tháng',
+      semi_annual: '6 Tháng (Ưu đãi 15%)',
+      annual: '1 Năm (Ưu đãi 33% ⭐)',
+    };
+
+    const frontendUrl = process.env.URL_FRONTEND || 'http://localhost:5173';
+    const actionUrl = isCandidate
+      ? `${frontendUrl}/my-cv`
+      : `${frontendUrl}/dashboard?tab=jobs`;
+
+    await this.mailerService.sendMail({
+      to: data.userEmail,
+      subject: `👑 [TalentPulse] Xác nhận nâng cấp ${planTitle} thành công (Đơn #${data.orderCode})`,
+      template: 'premium-success',
+      context: {
+        userName: data.userName,
+        orderCode: data.orderCode,
+        planName,
+        planTitle,
+        isCandidate,
+        cycleText: cycleTextMap[data.billingCycle] || data.billingCycle,
+        durationDays: data.durationDays,
+        formattedAmount: Number(data.amount).toLocaleString('vi-VN'),
+        expiryDate: data.expiryDate,
+        transactionReference: data.transactionReference,
+        actionUrl,
+      },
+    });
   }
 }

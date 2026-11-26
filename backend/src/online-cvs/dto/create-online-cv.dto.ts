@@ -1,16 +1,27 @@
 import {
   IsArray,
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsIn,
   IsOptional,
   IsString,
+  IsInt,
+  Min,
+  Max,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { OnlineCvGenerationMode } from '../entities/online-cv.entity';
 
 export class EducationEntryDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  degree?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -127,11 +138,84 @@ export class AwardEntryDto {
   date?: string;
 }
 
+export class ProjectEntryDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  projectName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  role?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  startDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  endDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  technologies?: string[];
+}
+
 export class CreateOnlineCVDto {
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Expected salary in VND/month; null clears it. No currency conversion.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(2147483647)
+  expectedSalaryVndMonthly?: number | null;
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'Explicit consent to recruiter salary filtering on this searchable CV.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  shareExpectedSalary?: boolean;
+
   @ApiProperty({ enum: ['template1', 'template2'] })
   @IsNotEmpty()
   @IsEnum(['template1', 'template2'])
   templateType: string;
+
+  @ApiPropertyOptional({ enum: ['vi-VN', 'en-US'], default: 'vi-VN' })
+  @IsOptional()
+  @IsIn(['vi-VN', 'en-US'])
+  locale?: 'vi-VN' | 'en-US';
+
+  @ApiPropertyOptional({
+    enum: OnlineCvGenerationMode,
+    default: OnlineCvGenerationMode.MANUAL,
+  })
+  @IsOptional()
+  @IsEnum(OnlineCvGenerationMode)
+  generationMode?: OnlineCvGenerationMode;
+
+  @ApiPropertyOptional({
+    description: 'Tên / Tiêu đề của CV (vd: CV - Senior Developer)',
+  })
+  @IsOptional()
+  @IsString()
+  title?: string;
 
   @ApiProperty()
   @IsNotEmpty()
@@ -215,7 +299,17 @@ export class CreateOnlineCVDto {
   @Type(() => AwardEntryDto)
   awards?: AwardEntryDto[];
 
-  @ApiPropertyOptional({ type: [String], example: ['objective', 'skills', 'experience', 'education'] })
+  @ApiPropertyOptional({ type: [ProjectEntryDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ProjectEntryDto)
+  projects?: ProjectEntryDto[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['objective', 'skills', 'experience', 'education'],
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
@@ -240,8 +334,23 @@ export class CreateOnlineCVDto {
   @IsOptional()
   customFormatting?: any;
 
-  @ApiPropertyOptional({ description: 'HTML snapshot of CV canvas for pixel-perfect PDF export' })
+  @ApiPropertyOptional({
+    description: 'HTML snapshot of CV canvas for pixel-perfect PDF export',
+  })
   @IsOptional()
   @IsString()
   htmlContent?: string;
+
+  @ApiPropertyOptional({
+    description: 'Cho phép Nhà Tuyển Dụng tìm kiếm CV này',
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isSearchable?: boolean;
+
+  @ApiPropertyOptional({ description: 'Đặt làm CV chính', default: false })
+  @IsOptional()
+  @IsBoolean()
+  isPrimary?: boolean;
 }

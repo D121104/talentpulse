@@ -21,4 +21,11 @@ export class AppController {
   getHealthCheck() {
     return this.appService.getHealthCheck();
   }
+
+  @Get('health/ready')
+  @Public()
+  @ResponseMessage('Readiness check')
+  getReadiness() {
+    return this.appService.getReadiness();
+  }
 }

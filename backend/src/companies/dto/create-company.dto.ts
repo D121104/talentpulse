@@ -11,6 +11,15 @@ export class CreateCompanyDto {
   address?: string;
 
   @IsOptional()
+  lat?: number;
+
+  @IsOptional()
+  lon?: number;
+
+  @IsOptional()
+  website?: string;
+
+  @IsOptional()
   logo?: string;
 
   @IsOptional()
