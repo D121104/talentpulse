@@ -36,6 +36,9 @@ export interface JobItem {
   savedAt?: string | Date;
   isSaved?: boolean;
   _score?: number;
+  lat?: number;
+  lon?: number;
+  distanceKm?: number;
 }
 
 export interface SearchJobsParams {
@@ -458,3 +461,30 @@ export async function unfollowCompanyApi(companyId: string, accessToken: string)
     accessToken,
   });
 }
+
+export interface SearchJobsByLocationParams {
+  lat: number;
+  lon: number;
+  radius?: number;
+  query?: string;
+  page?: number;
+  limit?: number;
+}
+
+export async function searchJobsByLocationApi(
+  params: SearchJobsByLocationParams,
+  accessToken?: string | null,
+): Promise<SearchJobsResponse> {
+  const query = new URLSearchParams();
+  query.set('lat', String(params.lat));
+  query.set('lon', String(params.lon));
+  if (params.radius) query.set('radius', String(params.radius));
+  if (params.query?.trim()) query.set('query', params.query.trim());
+  if (params.page) query.set('page', String(params.page));
+  if (params.limit) query.set('limit', String(params.limit));
+
+  return apiRequest<SearchJobsResponse>(`/jobs/map-search?${query.toString()}`, {
+    accessToken,
+  });
+}
+

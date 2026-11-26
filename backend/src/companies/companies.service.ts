@@ -548,16 +548,31 @@ export class CompaniesService {
       !isNaN(Number(updateCompanyDto.lat)) &&
       !isNaN(Number(updateCompanyDto.lon))
     ) {
+      const nextLat = Number(updateCompanyDto.lat);
+      const nextLon = Number(updateCompanyDto.lon);
+      updatePayload.lat = nextLat;
+      updatePayload.lon = nextLon;
       updatePayload.location = {
         type: 'Point',
-        coordinates: [
-          Number(updateCompanyDto.lon),
-          Number(updateCompanyDto.lat),
-        ],
+        coordinates: [nextLon, nextLat],
       };
     }
 
     const result = await this.companyRepo.update(id, updatePayload);
+
+    if (updatePayload.location) {
+      await this.jobRepo
+        .createQueryBuilder()
+        .update(Job)
+        .set({
+          lat: updatePayload.lat,
+          lon: updatePayload.lon,
+          locationPoint: updatePayload.location,
+        })
+        .where("company->>'_id' = :companyId", { companyId: id })
+        .andWhere('isDeleted = false')
+        .execute();
+    }
 
     await this.redisService.invalidateCompaniesCache();
     await this.enqueueCompanyJobs(id);
