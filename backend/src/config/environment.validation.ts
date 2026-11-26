@@ -1,3 +1,13 @@
+const ALLOWED_LOG_LEVELS = [
+  'fatal',
+  'error',
+  'warn',
+  'info',
+  'debug',
+  'trace',
+  'silent',
+] as const;
+
 export interface ServiceJwtConfig {
   issuer: string;
   audience: string;
@@ -65,6 +75,36 @@ export function validateEnvironment(
     true,
     'RUN_BACKGROUND_JOBS',
   );
+  const rawLogLevel = config.LOG_LEVEL;
+  const logLevel =
+    rawLogLevel === undefined || rawLogLevel === null || rawLogLevel === ''
+      ? 'info'
+      : String(rawLogLevel).trim().toLowerCase();
+  if (
+    !ALLOWED_LOG_LEVELS.includes(logLevel as typeof ALLOWED_LOG_LEVELS[number])
+  ) {
+    throw new Error(
+      `LOG_LEVEL must be one of: ${ALLOWED_LOG_LEVELS.join(', ')}`,
+    );
+  }
+  const logDir = String(config.LOG_DIR ?? '').trim();
+  if (logDir && (logDir.length > 512 || /[\r\n\0]/.test(logDir))) {
+    throw new Error('LOG_DIR must be a bounded directory path');
+  }
+  const logFileEnabled = parseBoolean(
+    config.LOG_FILE_ENABLED,
+    true,
+    'LOG_FILE_ENABLED',
+  );
+  const metricsBearerToken = String(config.METRICS_BEARER_TOKEN ?? '').trim();
+  if (
+    metricsBearerToken &&
+    (metricsBearerToken.length > 512 || /[\s\r\n\0]/.test(metricsBearerToken))
+  ) {
+    throw new Error(
+      'METRICS_BEARER_TOKEN must be a bounded token without whitespace',
+    );
+  }
   const port = parsePort(config.DB_PORT);
   const consentVersion = String(
     config.AI_CV_CONSENT_VERSION ?? 'phase0-v1',
@@ -220,6 +260,10 @@ export function validateEnvironment(
     DB_SYNCHRONIZE: String(synchronize),
     REDIS_ENABLED: String(redisEnabled),
     RUN_BACKGROUND_JOBS: String(runBackgroundJobs),
+    LOG_LEVEL: logLevel,
+    LOG_FILE_ENABLED: String(logFileEnabled),
+    ...(logDir ? { LOG_DIR: logDir } : {}),
+    ...(metricsBearerToken ? { METRICS_BEARER_TOKEN: metricsBearerToken } : {}),
     AI_CV_CONSENT_VERSION: consentVersion,
     AI_CV_GENERATION_CONSENT_VERSION: generationConsentVersion,
     AI_SERVICE_JWT_SUBJECT: serviceSubject,

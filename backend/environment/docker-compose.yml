@@ -7,11 +7,21 @@ services:
     ports:
       - '5432:5432'
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
-      POSTGRES_DB: recruitment_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-recruitment_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-recruitment_db}"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     networks:
       - backend-net
 
@@ -22,9 +32,19 @@ services:
     restart: unless-stopped
     ports:
       - '6379:6379'
-    command: redis-server --appendonly yes --requirepass redis123
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
     volumes:
       - redis_data:/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'redis-cli -a "${REDIS_PASSWORD:-redis123}" --no-auth-warning ping | grep -q PONG',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     networks:
       - backend-net
 
@@ -41,73 +61,226 @@ services:
       - cluster.name=es-docker-cluster
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - 'ES_JAVA_OPTS=-Xms512m -Xmx512m'
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - 'CMD'
+        - 'bash'
+        - '-c'
+        - 'if command -v curl >/dev/null 2>&1; then curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null; else exec 3<>/dev/tcp/127.0.0.1/9200 && printf "GET /_cluster/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q "^HTTP/1.1 200" <&3; fi'
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    networks:
+      - backend-net
+
+  # PostgreSQL Exporter
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.21.1
+    container_name: postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres123}@postgres:5432/${POSTGRES_DB:-recruitment_db}?sslmode=disable
+    expose:
+      - '9187'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend-net
+
+  # Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.99.0
+    container_name: redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+    expose:
+      - '9121'
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend-net
+
+  # Elasticsearch Exporter
+  elasticsearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.11.0
+    container_name: elasticsearch-exporter
+    restart: unless-stopped
+    command:
+      - '--es.uri=http://elasticsearch:9200'
+      - '--es.all'
+      - '--es.indices'
+      - '--es.shards'
+    expose:
+      - '9114'
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - backend-net
+
+  # cAdvisor (container CPU/memory/network metrics)
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.61.1
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - '8088:8080'
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    command:
+      - '--housekeeping_interval=15s'
+      - '--docker_only=true'
     networks:
       - backend-net
 
   # Prometheus
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.16.0
     container_name: prometheus
     restart: unless-stopped
     ports:
       - '9090:9090'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus-rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9090/-/ready >/dev/null']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - backend-net
 
-  # Grafana
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
+  # Alertmanager
+  alertmanager:
+    image: prom/alertmanager:v0.35.1
+    container_name: alertmanager
     restart: unless-stopped
     ports:
-      - '3001:3000'
+      - '9093:9093'
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-#alerts}
+      SLACK_USERNAME: ${SLACK_USERNAME:-TalentPulse Alerts}
     volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
-      - loki
+      - ./config/alertmanager.yml.tmpl:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - alertmanager_data:/alertmanager
+    entrypoint:
+      - '/bin/sh'
+      - '-ec'
+      - |
+        export SLACK_WEBHOOK_URL="$${SLACK_WEBHOOK_URL:-http://127.0.0.1:9099/slack-disabled}"
+        export SLACK_CHANNEL="$${SLACK_CHANNEL:-#alerts}"
+        export SLACK_USERNAME="$${SLACK_USERNAME:-TalentPulse Alerts}"
+        awk '
+        function rep(s, pat, val,    i, out, n) {
+          out = ""
+          n = length(pat)
+          while ((i = index(s, pat)) > 0) {
+            out = out substr(s, 1, i - 1) val
+            s = substr(s, i + n)
+          }
+          return out s
+        }
+        {
+          line = $$0
+          line = rep(line, "__SLACK_WEBHOOK_URL__", ENVIRON["SLACK_WEBHOOK_URL"])
+          line = rep(line, "__SLACK_CHANNEL__", ENVIRON["SLACK_CHANNEL"])
+          line = rep(line, "__SLACK_USERNAME__", ENVIRON["SLACK_USERNAME"])
+          print line
+        }' /etc/alertmanager/alertmanager.yml.tmpl > /tmp/alertmanager.yml
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager --web.listen-address=:9093
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9093/-/ready >/dev/null']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - backend-net
 
   # Loki
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.7.10
     container_name: loki
     restart: unless-stopped
     ports:
       - '3100:3100'
     volumes:
       - ./config/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - ./config/loki-rules:/loki/rules:ro
       - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ['CMD', '/usr/bin/loki', '-health']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
     networks:
       - backend-net
 
   # Promtail
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.6.11
     container_name: promtail
     restart: unless-stopped
+    ports:
+      - '9080:9080'
     volumes:
       - ./config/promtail-config.yml:/etc/promtail/config.yml:ro
-      - /var/log:/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ../logs:/var/log/talentpulse:ro
+      - promtail_positions:/tmp/positions
     command: -config.file=/etc/promtail/config.yml
     depends_on:
+      loki:
+        condition: service_started
+    networks:
+      - backend-net
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:13.2.7
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - '3001:3000'
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_UNIFIED_ALERTING_ENABLED=true
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
       - loki
+      - alertmanager
     networks:
       - backend-net
 
@@ -172,9 +345,13 @@ volumes:
     driver: local
   prometheus_data:
     driver: local
+  alertmanager_data:
+    driver: local
   grafana_data:
     driver: local
   loki_data:
+    driver: local
+  promtail_positions:
     driver: local
   qdrant_data:
     driver: local

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { LoggerModule } from 'nestjs-pino';
 import { validateEnvironment } from './config/environment.validation';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -42,6 +43,8 @@ import { createRedisConnectionOptions } from './redis/redis.module';
 import { createPostgresSslOptions } from './database/postgres-ssl';
 import { JobIndexingModule } from './job-indexing/job-indexing.module';
 import { JobIndexingSubscriber } from './job-indexing/job-indexing.subscriber';
+import { createPinoLoggerOptions } from './observability/observability.logger';
+import { ObservabilityModule } from './observability/observability.module';
 
 const redisEnabled = isRedisEnabled();
 const queueWorkersEnabled = areQueueWorkersEnabled();
@@ -53,6 +56,14 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
       isGlobal: true,
       envFilePath: '.env',
       validate: validateEnvironment,
+    }),
+
+    // Structured logging
+    LoggerModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) =>
+        createPinoLoggerOptions(configService),
+      inject: [ConfigService],
     }),
 
     // Throttle (Rate limiting)
@@ -134,6 +145,7 @@ const queueWorkersEnabled = areQueueWorkersEnabled();
     SavedJobsModule,
     ChatModule,
     AdminModule,
+    ObservabilityModule,
   ],
   controllers: [AppController],
   providers: [AppService],

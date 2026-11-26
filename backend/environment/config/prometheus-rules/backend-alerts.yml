@@ -1,0 +1,201 @@
+groups:
+  - name: talentpulse-backend-api
+    rules:
+      - alert: BackendDown
+        expr: up{job="nestjs-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: talentpulse-backend
+        annotations:
+          summary: 'NestJS backend target is unreachable'
+          description: 'Prometheus cannot scrape {{ $labels.instance }} (job={{ $labels.job }}) for more than 1 minute.'
+
+      - alert: BackendHigh5xxErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="nestjs-backend", status_code=~"5.."}[5m]))
+          /
+          (sum(rate(http_requests_total{job="nestjs-backend"}[5m])) > 0.1)
+          > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          service: talentpulse-backend
+        annotations:
+          summary: 'High 5xx error rate on NestJS backend'
+          description: 'Backend 5xx response ratio is {{ $value | humanizePercentage }} over the last 5 minutes.'
+
+      - alert: BackendHigh4xxErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="nestjs-backend", status_code=~"4.."}[5m]))
+          /
+          (sum(rate(http_requests_total{job="nestjs-backend"}[5m])) > 0.2)
+          > 0.20
+        for: 5m
+        labels:
+          severity: warning
+          service: talentpulse-backend
+        annotations:
+          summary: 'High 4xx error rate on NestJS backend'
+          description: 'Backend 4xx response ratio is {{ $value | humanizePercentage }} over the last 5 minutes.'
+
+      - alert: BackendHighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="nestjs-backend"}[5m]))
+          ) > 1.5
+          and
+          sum(rate(http_request_duration_seconds_count{job="nestjs-backend"}[5m])) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+          service: talentpulse-backend
+        annotations:
+          summary: 'High P95 request latency on NestJS backend'
+          description: 'Backend P95 HTTP request latency is {{ printf "%.2f" $value }}s (threshold: 1.5s).'
+
+  - name: talentpulse-backend-runtime-queues
+    rules:
+      - alert: BackendHighEventLoopLag
+        expr: nodejs_eventloop_lag_p99_seconds{job="nestjs-backend"} > 0.25
+        for: 2m
+        labels:
+          severity: warning
+          service: talentpulse-backend
+        annotations:
+          summary: 'High Node.js event loop lag on backend'
+          description: 'P99 event loop lag on {{ $labels.instance }} is {{ printf "%.3f" $value }}s (threshold: 0.25s).'
+
+      - alert: BackendHighMemoryUsage
+        expr: process_resident_memory_bytes{job="nestjs-backend"} > 1073741824
+        for: 5m
+        labels:
+          severity: warning
+          service: talentpulse-backend
+        annotations:
+          summary: 'High backend resident memory usage'
+          description: 'Backend RSS memory on {{ $labels.instance }} reached {{ $value | humanize1024 }}B (threshold: 1GiB).'
+
+      - alert: BackendDependencyDown
+        expr: backend_dependency_up{job="nestjs-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: talentpulse-backend
+        annotations:
+          summary: 'Backend reported dependency down ({{ $labels.dependency }})'
+          description: 'Backend health probe reports dependency {{ $labels.dependency }} down on {{ $labels.instance }}.'
+
+      - alert: BullQueueFailedJobsSpike
+        expr: |
+          delta(bull_queue_jobs{state="failed"}[5m]) > 5
+          or
+          bull_queue_jobs{state="failed"} > 10
+        for: 1m
+        labels:
+          severity: warning
+          service: talentpulse-backend
+        annotations:
+          summary: 'Bull queue failed jobs spike ({{ $labels.queue }})'
+          description: 'Queue {{ $labels.queue }} exceeded failed job threshold (value: {{ $value }}).'
+
+      - alert: BullQueueBacklogHigh
+        expr: bull_queue_jobs{state="waiting"} > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: talentpulse-backend
+        annotations:
+          summary: 'High Bull queue waiting backlog ({{ $labels.queue }})'
+          description: 'Queue {{ $labels.queue }} has {{ $value }} waiting jobs for more than 5 minutes.'
+
+  - name: talentpulse-backend-infrastructure
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: postgres
+        annotations:
+          summary: 'PostgreSQL instance is down'
+          description: 'postgres-exporter reports pg_up == 0 on {{ $labels.instance }}.'
+
+      - alert: PostgresHighConnectionUsage
+        expr: |
+          sum by (job, instance) (pg_stat_activity_count)
+          /
+          sum by (job, instance) (pg_settings_max_connections > 0)
+          > 0.8
+        for: 3m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: 'PostgreSQL connection pool saturation'
+          description: 'PostgreSQL connections on {{ $labels.instance }} reached {{ $value | humanizePercentage }} of max_connections.'
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: 'Redis instance is down'
+          description: 'redis-exporter reports redis_up == 0 on {{ $labels.instance }}.'
+
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / (redis_memory_max_bytes > 0) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: 'Redis memory usage above 85%'
+          description: 'Redis memory usage on {{ $labels.instance }} is {{ $value | humanizePercentage }} of maxmemory.'
+
+      - alert: ElasticsearchDown
+        expr: elasticsearch_clusterinfo_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: elasticsearch
+        annotations:
+          summary: 'Elasticsearch cluster is unreachable'
+          description: 'elasticsearch-exporter reports elasticsearch_clusterinfo_up == 0 on {{ $labels.instance }}.'
+
+      - alert: ElasticsearchClusterRed
+        expr: elasticsearch_cluster_health_status{color="red"} == 1
+        for: 1m
+        labels:
+          severity: critical
+          service: elasticsearch
+        annotations:
+          summary: 'Elasticsearch cluster status is RED ({{ $labels.cluster }})'
+          description: 'Elasticsearch cluster {{ $labels.cluster }} has unassigned primary shards.'
+
+      - alert: ContainerHighMemoryUsage
+        expr: |
+          container_memory_working_set_bytes{name!=""}
+          /
+          (container_spec_memory_limit_bytes{name!=""} > 0)
+          > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: containers
+        annotations:
+          summary: 'Container memory usage high ({{ $labels.name }})'
+          description: 'Container {{ $labels.name }} working set is at {{ $value | humanizePercentage }} of its memory limit.'
+
+      - alert: ScrapeTargetDown
+        expr: up{job!="nestjs-backend"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: '{{ $labels.job }}'
+        annotations:
+          summary: 'Prometheus scrape target down ({{ $labels.job }})'
+          description: 'Target {{ $labels.instance }} for job {{ $labels.job }} has been down for 2 minutes.'
