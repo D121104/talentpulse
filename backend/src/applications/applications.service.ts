@@ -32,7 +32,7 @@ import {
   MatchAnalysisResponse,
 } from './dto/match-analysis.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, IsNull, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Application, ApplicationStatus } from './entities/application.entity';
@@ -60,6 +60,7 @@ import {
 import { CVProcessingService } from 'src/ai-matching/cv-processing.service';
 import { getJobSourceVersion } from 'src/job-indexing/job-indexing.normalization';
 import { JobsService } from 'src/jobs/jobs.service';
+import { Job } from 'src/jobs/entities/job.entity';
 import {
   ICandidateMatchResult,
   IAIRankingResponse,
@@ -312,6 +313,7 @@ export class ApplicationsService implements OnModuleInit {
       .leftJoinAndSelect('app.company', 'company')
       .leftJoinAndSelect('app.job', 'job')
       .where('app.isDeleted = :isDeleted', { isDeleted: false });
+    this.includeSoftDeletedRelations(queryBuilder);
 
     if (user.role === Role.HR) {
       if (!userInfo.company || !userInfo.company._id) {
@@ -361,38 +363,7 @@ export class ApplicationsService implements OnModuleInit {
     const formatted = applications.map((app) => ({
       ...this.applicationListFields(app),
       aiScore: scores.get(app._id),
-      cvId: app.cv
-        ? {
-            _id: app.cv._id,
-            url: app.cv.url,
-            title: app.cv.title,
-            fileType: app.cv.fileType,
-            onlineCvId: app.cv.onlineCvId,
-          }
-        : app.cvId,
-      userId: app.user
-        ? {
-            _id: app.user._id,
-            name: app.user.name,
-            email: app.user.email,
-            avatar: app.user.avatar,
-          }
-        : app.userId,
-      companyId: app.company
-        ? {
-            _id: app.company._id,
-            name: app.company.name,
-            logo: app.company.logo,
-          }
-        : app.companyId,
-      jobId: app.job
-        ? {
-            _id: app.job._id,
-            name: app.job.name,
-            salary: app.job.salary,
-            level: app.job.level,
-          }
-        : app.jobId,
+      ...this.formatSafeApplicationRelations(app),
     }));
 
     return {
@@ -441,7 +412,9 @@ export class ApplicationsService implements OnModuleInit {
       .leftJoinAndSelect('app.user', 'user')
       .where('app.jobId = :jobId', { jobId })
       .leftJoinAndSelect('app.company', 'company')
+      .leftJoinAndSelect('app.job', 'job')
       .andWhere('app.isDeleted = :isDeleted', { isDeleted: false });
+    this.includeSoftDeletedRelations(queryBuilder);
 
     if (qs.status) {
       queryBuilder.andWhere('app.status = :status', { status: qs.status });
@@ -462,24 +435,7 @@ export class ApplicationsService implements OnModuleInit {
     const formatted = applications.map((app) => ({
       ...this.applicationListFields(app),
       aiScore: scores.get(app._id),
-      cvId: app.cv
-        ? {
-            _id: app.cv._id,
-            url: app.cv.url,
-            title: app.cv.title,
-            fileType: app.cv.fileType,
-            onlineCvId: app.cv.onlineCvId,
-          }
-        : app.cvId,
-      userId: app.user
-        ? {
-            _id: app.user._id,
-            name: app.user.name,
-            email: app.user.email,
-            address: app.user.address,
-            gender: app.user.gender,
-          }
-        : app.userId,
+      ...this.formatSafeApplicationRelations(app, job),
     }));
 
     return {
@@ -562,57 +518,19 @@ export class ApplicationsService implements OnModuleInit {
     return summaries;
   }
 
-  // Get user's own applications
-  async findByUser(user: IUser) {
-    const applications = await this.applicationRepo.find({
-      where: { userId: user._id, isDeleted: false },
-      relations: ['cv', 'company', 'job'],
-      order: { createdAt: 'DESC' },
-    });
-
-    return applications.map((app) => ({
-      ...app,
-      cvId: app.cv
-        ? {
-            _id: app.cv._id,
-            url: app.cv.url,
-            title: app.cv.title,
-            fileType: app.cv.fileType,
-            onlineCvId: app.cv.onlineCvId,
-          }
-        : app.cvId,
-      companyId: app.company
-        ? {
-            _id: app.company._id,
-            name: app.company.name,
-            logo: app.company.logo,
-          }
-        : app.companyId,
-      jobId: app.job
-        ? {
-            _id: app.job._id,
-            name: app.job.name,
-            salary: app.job.salary,
-            level: app.job.level,
-            location: app.job.location,
-          }
-        : app.jobId,
-    }));
+  private includeSoftDeletedRelations(queryBuilder: any): void {
+    if (typeof queryBuilder?.withDeleted === 'function') {
+      queryBuilder.withDeleted();
+      queryBuilder.andWhere('app.deletedAt IS NULL');
+    }
   }
 
-  // Get one application
-  async findOne(id: string) {
-    const app = await this.applicationRepo.findOne({
-      where: { _id: id, isDeleted: false },
-      relations: ['cv', 'user', 'company', 'job'],
-    });
-
-    if (!app) {
-      throw new NotFoundException('Đơn ứng tuyển không tồn tại');
-    }
-
+  private formatSafeApplicationRelations(
+    app: Application,
+    fallbackJob?: Partial<Job> | null,
+  ) {
+    const effectiveJob = app.job || fallbackJob;
     return {
-      ...app,
       cvId: app.cv
         ? {
             _id: app.cv._id,
@@ -620,6 +538,14 @@ export class ApplicationsService implements OnModuleInit {
             title: app.cv.title,
             fileType: app.cv.fileType,
             onlineCvId: app.cv.onlineCvId,
+            skills: Array.isArray(app.cv.skills) ? app.cv.skills : [],
+            education: Array.isArray(app.cv.education) ? app.cv.education : [],
+            experience: Array.isArray(app.cv.experience)
+              ? app.cv.experience
+              : [],
+            certificates: Array.isArray(app.cv.certificates)
+              ? app.cv.certificates
+              : [],
           }
         : app.cvId,
       userId: app.user
@@ -629,6 +555,8 @@ export class ApplicationsService implements OnModuleInit {
             email: app.user.email,
             avatar: app.user.avatar,
             address: app.user.address,
+            gender: app.user.gender,
+            age: app.user.age,
           }
         : app.userId,
       companyId: app.company
@@ -638,23 +566,62 @@ export class ApplicationsService implements OnModuleInit {
             logo: app.company.logo,
           }
         : app.companyId,
-      jobId: app.job
+      jobId: effectiveJob
         ? {
-            _id: app.job._id,
-            name: app.job.name,
-            salary: app.job.salary,
-            level: app.job.level,
-            location: app.job.location,
+            _id: effectiveJob._id,
+            name: effectiveJob.name,
+            salary: effectiveJob.salary,
+            level: effectiveJob.level,
+            location: effectiveJob.location,
+            workingModel: effectiveJob.workingModel,
+            isDeleted: Boolean(
+              effectiveJob.isDeleted || effectiveJob.deletedAt,
+            ),
+            deletedAt: effectiveJob.deletedAt ?? null,
           }
         : app.jobId,
+    };
+  }
+
+  // Get user's own applications
+  async findByUser(user: IUser) {
+    const applications = await this.applicationRepo.find({
+      where: { userId: user._id, isDeleted: false, deletedAt: IsNull() },
+      relations: ['cv', 'company', 'job'],
+      withDeleted: true,
+      order: { createdAt: 'DESC' },
+    });
+
+    return applications.map((app) => ({
+      ...app,
+      ...this.formatSafeApplicationRelations(app),
+    }));
+  }
+
+  // Get one application
+  async findOne(id: string) {
+    const app = await this.applicationRepo.findOne({
+      where: { _id: id, isDeleted: false, deletedAt: IsNull() },
+      relations: ['cv', 'user', 'company', 'job'],
+      withDeleted: true,
+    });
+
+    if (!app) {
+      throw new NotFoundException('Đơn ứng tuyển không tồn tại');
+    }
+
+    return {
+      ...app,
+      ...this.formatSafeApplicationRelations(app),
     };
   }
 
   // Mark application as viewed by HR (transitions from PENDING -> REVIEWING and sends realtime socket notification)
   async markAsViewed(id: string, user: IUser) {
     const application = await this.applicationRepo.findOne({
-      where: { _id: id, isDeleted: false },
+      where: { _id: id, isDeleted: false, deletedAt: IsNull() },
       relations: ['job', 'company', 'user'],
+      withDeleted: true,
     });
 
     if (!application) {
@@ -714,8 +681,9 @@ export class ApplicationsService implements OnModuleInit {
     user: IUser,
   ) {
     const application = await this.applicationRepo.findOne({
-      where: { _id: id, isDeleted: false },
+      where: { _id: id, isDeleted: false, deletedAt: IsNull() },
       relations: ['job', 'company', 'user'],
+      withDeleted: true,
     });
 
     if (!application) {

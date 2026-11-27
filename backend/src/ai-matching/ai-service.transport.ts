@@ -2,6 +2,9 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { createPrivateKey, createSign, randomUUID } from 'crypto';
+import { existsSync, readFileSync } from 'fs';
+import * as https from 'https';
+import { isAbsolute, resolve } from 'path';
 import {
   AiServiceError,
   isRecord,
@@ -77,6 +80,7 @@ export class AiServiceTransport {
   private readonly privateKey?: string;
   private readonly keyId?: string;
   private readonly subject: string;
+  private readonly httpsAgent?: https.Agent;
   readonly scopes: {
     parse: string;
     match: string;
@@ -144,6 +148,23 @@ export class AiServiceTransport {
         DEFAULT_JOB_INDEX_SCOPE,
       ),
     };
+    const caCertPath = config.get<string>('AI_SERVICE_CA_CERT_PATH')?.trim();
+    if (caCertPath && this.baseUrl?.startsWith('https://')) {
+      const candidates = isAbsolute(caCertPath)
+        ? [caCertPath]
+        : [
+            resolve(process.cwd(), caCertPath),
+            resolve(process.cwd(), 'backend', caCertPath),
+          ];
+      const matchedPath = candidates.find((candidate) => existsSync(candidate));
+      if (matchedPath) {
+        this.httpsAgent = new https.Agent({ ca: readFileSync(matchedPath) });
+      } else {
+        this.logger.warn(
+          `AI_SERVICE_CA_CERT_PATH does not exist: ${candidates[0]}`,
+        );
+      }
+    }
   }
 
   async checkReadiness(timeoutMs = 1000): Promise<boolean> {
@@ -158,6 +179,7 @@ export class AiServiceTransport {
         url: `${this.baseUrl}/health`,
         timeout: boundedTimeout,
         validateStatus: () => true,
+        ...(this.httpsAgent ? { httpsAgent: this.httpsAgent } : {}),
       });
       return response.status >= 200 && response.status < 300;
     } catch {
@@ -225,6 +247,7 @@ export class AiServiceTransport {
       maxContentLength: 2 * 1024 * 1024,
       maxBodyLength: 8 * 1024 * 1024,
       validateStatus: () => true,
+      ...(this.httpsAgent ? { httpsAgent: this.httpsAgent } : {}),
       headers: {
         Authorization: `Bearer ${this.createServiceToken(scope)}`,
         'Content-Type': 'application/json',

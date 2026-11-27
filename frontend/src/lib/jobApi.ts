@@ -48,6 +48,7 @@ export interface SearchJobsParams {
   skills?: string[];
   minSalary?: number;
   maxSalary?: number;
+  negotiable?: boolean;
   isHot?: boolean;
   isFeatured?: boolean;
   isUrgent?: boolean;
@@ -88,6 +89,9 @@ export async function searchJobsApi(
   }
   if (params.maxSalary !== undefined) {
     queryParams.append('maxSalary', params.maxSalary.toString());
+  }
+  if (params.negotiable !== undefined) {
+    queryParams.append('negotiable', params.negotiable ? 'true' : 'false');
   }
   if (params.isHot !== undefined) {
     queryParams.append('isHot', params.isHot ? 'true' : 'false');
@@ -196,6 +200,23 @@ export function formatSalary(
     return `Tới ${millions} triệu`;
   }
   return `${num.toLocaleString('vi-VN')} đ`;
+}
+
+const LEVEL_LABELS: Record<string, string> = {
+  INTERN: 'Thực tập sinh',
+  FRESHER: 'Fresher',
+  JUNIOR: 'Junior',
+  MIDDLE: 'Middle',
+  SENIOR: 'Senior',
+  LEAD: 'Trưởng nhóm',
+  MANAGER: 'Quản lý',
+  DIRECTOR: 'Giám đốc',
+};
+
+export function formatJobLevel(level?: string): string {
+  if (!level) return '';
+  const trimmed = level.trim();
+  return LEVEL_LABELS[trimmed.toUpperCase()] ?? trimmed;
 }
 
 export function getCompanyInitial(name?: string): string {
@@ -467,6 +488,11 @@ export interface SearchJobsByLocationParams {
   lon: number;
   radius?: number;
   query?: string;
+  level?: string;
+  workingModel?: string;
+  minSalary?: number;
+  maxSalary?: number;
+  negotiable?: boolean;
   page?: number;
   limit?: number;
 }
@@ -480,6 +506,15 @@ export async function searchJobsByLocationApi(
   query.set('lon', String(params.lon));
   if (params.radius) query.set('radius', String(params.radius));
   if (params.query?.trim()) query.set('query', params.query.trim());
+  if (params.level && params.level !== 'Tất cả cấp bậc') query.set('level', params.level);
+  if (params.workingModel && params.workingModel !== 'Tất cả hình thức') {
+    query.set('workingModel', params.workingModel);
+  }
+  if (params.minSalary !== undefined) query.set('minSalary', String(params.minSalary));
+  if (params.maxSalary !== undefined) query.set('maxSalary', String(params.maxSalary));
+  if (params.negotiable !== undefined) {
+    query.set('negotiable', params.negotiable ? 'true' : 'false');
+  }
   if (params.page) query.set('page', String(params.page));
   if (params.limit) query.set('limit', String(params.limit));
 

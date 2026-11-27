@@ -75,15 +75,83 @@ export class RedisService {
     return this.getValue(key);
   }
 
-  // Invalidate cache
+  // Invalidate cache by key prefix so auth sessions, refresh tokens, and rate limits stay intact
+  private async invalidateByPrefixes(prefixes: string[]): Promise<void> {
+    const store: any = (this.cacheManager as any)?.store;
+
+    if (store && typeof store.getClient === 'function') {
+      const client = store.getClient();
+      if (client && typeof client.scan === 'function') {
+        for (const prefix of prefixes) {
+          await this.scanAndDeleteRedisKeys(client, `${prefix}*`);
+        }
+        return;
+      }
+    }
+
+    if (store && typeof store.keys === 'function') {
+      const keys = await this.getStoreKeys(store);
+      const matchingKeys = keys.filter((key) =>
+        prefixes.some((prefix) => key.startsWith(prefix)),
+      );
+      if (matchingKeys.length > 0) {
+        await Promise.all(
+          matchingKeys.map((key) => this.cacheManager.del(key)),
+        );
+      }
+    }
+  }
+
+  private scanAndDeleteRedisKeys(client: any, pattern: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const scanNext = (cursor: string) => {
+        client.scan(
+          cursor,
+          'MATCH',
+          pattern,
+          'COUNT',
+          '100',
+          (err: Error | null, reply: [string, string[]]) => {
+            if (err) {
+              return reject(err);
+            }
+            const [nextCursor, keys] = reply || ['0', []];
+            const advance = () => {
+              if (!nextCursor || nextCursor === '0') {
+                return resolve();
+              }
+              scanNext(nextCursor);
+            };
+
+            if (Array.isArray(keys) && keys.length > 0) {
+              client.del(keys, (delErr: Error | null) => {
+                if (delErr) {
+                  return reject(delErr);
+                }
+                advance();
+              });
+              return;
+            }
+            advance();
+          },
+        );
+      };
+
+      scanNext('0');
+    });
+  }
+
+  private async getStoreKeys(store: any): Promise<string[]> {
+    const result = await store.keys();
+    return Array.isArray(result) ? result : [];
+  }
+
   async invalidateJobsCache(): Promise<void> {
-    // Note: This is a simplified version. In production, you might want to use Redis KEYS command
-    // or maintain a list of cached keys
-    await this.clearCache();
+    await this.invalidateByPrefixes(['jobs:', 'job:']);
   }
 
   async invalidateCompaniesCache(): Promise<void> {
-    await this.clearCache();
+    await this.invalidateByPrefixes(['companies:', 'company:']);
   }
 
   // User session management

@@ -104,7 +104,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
       premium: {
         title: 'HR Premium Enterprise',
         sub: 'Tuyển dụng không giới hạn & AI Sourcing đỉnh cao',
-        badge: 'Lựa Chọn Hàng Đầu Của HR Pro',
+        badge: 'Lựa Chọn Hàng Đầu Của HR Premium',
         monthly: { price: 299000, original: 299000, periodText: '/ tháng', discount: '' },
         semi_annual: { price: 1490000, original: 1794000, periodText: '/ 6 tháng (248.000đ/tháng)', discount: 'Tiết kiệm 17%' },
         annual: { price: 2390000, original: 3588000, periodText: '/ 1 năm (199.000đ/tháng)', discount: 'Tiết kiệm 33%' },
@@ -213,7 +213,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
         { name: 'Ưu tiên đẩy Top hiển thị với NTD', free: false, verified: '1 lần/tháng', premium: '1 lần/ngày (Top 1 Search)' },
         { name: 'Biểu tượng tích xanh xác minh', free: false, verified: true, premium: true },
         { name: 'Sử dụng 100% mẫu CV Cao Cấp', free: false, verified: false, premium: true },
-        { name: 'Sử dụng mẫu Cover Letter chuẩn Pro', free: false, verified: false, premium: true },
+        { name: 'Sử dụng mẫu Cover Letter Premium', free: false, verified: false, premium: true },
         { name: 'Xóa Watermark / Thương hiệu trên CV', free: false, verified: false, premium: true },
       ],
     },
@@ -441,7 +441,7 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
               </li>
               <li className="flex items-center gap-2 text-slate-400">
                 <CloseIcon className="h-4 w-4 text-slate-300 dark:text-slate-600 shrink-0" />
-                <span>{isCandidate ? 'Chưa mở khóa trọn bộ mẫu CV Pro' : 'Vẫn giới hạn 5 tin tuyển dụng/ngày'}</span>
+                <span>{isCandidate ? 'Chưa mở khóa trọn bộ mẫu CV Premium' : 'Giới hạn tối đa 6 tin tuyển dụng đang mở'}</span>
               </li>
             </ul>
           </div>
@@ -471,12 +471,12 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
                 <span>{isCandidate ? 'Candidate Premium' : 'HR Premium'}</span>
               </h3>
               <span className="rounded-full bg-amber-400 text-slate-950 px-2.5 py-0.5 text-[11px] font-black shadow-2xs">
-                PRO
+                PREMIUM
               </span>
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-300 font-medium min-h-[36px]">
               {isCandidate
-                ? 'Mở khóa 100% đặc quyền: AI Chấm điểm, Mẫu CV Pro & Đẩy Top mỗi ngày.'
+                ? 'Mở khóa 100% đặc quyền: AI Chấm điểm, Mẫu CV Premium & Đẩy Top mỗi ngày.'
                 : 'Đăng tin KHÔNG GIỚI HẠN, Mở khóa SĐT ứng viên & AI Sourcing tự động.'}
             </p>
 
@@ -522,14 +522,14 @@ export const PremiumPricingTable: React.FC<PremiumPricingTableProps> = ({
                   <Check className="h-3.5 w-3.5" />
                 </div>
                 <strong className="text-primary dark:text-primary-light">
-                  {isCandidate ? 'Đẩy Top hồ sơ 1 lần/ngày' : 'Đăng tin KHÔNG GIỚI HẠN (bỏ giới hạn 5 tin)'}
+                  {isCandidate ? 'Đẩy Top hồ sơ 1 lần/ngày' : 'Đăng tin KHÔNG GIỚI HẠN (gỡ giới hạn 6 tin)'}
                 </strong>
               </li>
               <li className="flex items-center gap-2">
                 <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-white shrink-0 shadow-2xs">
                   <Check className="h-3.5 w-3.5" />
                 </div>
-                <span>{isCandidate ? 'Mở khóa 50+ mẫu CV & Cover Letter Pro' : 'Mở khóa 100% SĐT, Email ứng viên trực tiếp'}</span>
+                <span>{isCandidate ? 'Mở khóa 50+ mẫu CV & Cover Letter Premium' : 'Mở khóa 100% SĐT, Email ứng viên trực tiếp'}</span>
               </li>
               <li className="flex items-center gap-2">
                 <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-white shrink-0 shadow-2xs">

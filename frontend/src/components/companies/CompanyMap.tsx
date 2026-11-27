@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ExternalLink, Navigation } from 'lucide-react';
+import { searchVietnamPlaces } from '../../lib/geocoding';
 
 interface CompanyMapProps {
   companyName: string;
@@ -52,19 +53,14 @@ export default function CompanyMap({
     let isMounted = true;
     setIsGeocoding(true);
 
+    const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const query = encodeURIComponent(address.trim());
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`,
-          {
-            headers: {
-              'Accept-Language': 'vi,en',
-            },
-          },
-        );
-        const data = await res.json();
-        if (isMounted && Array.isArray(data) && data.length > 0) {
+        const data = await searchVietnamPlaces(address.trim(), {
+          limit: 1,
+          signal: controller.signal,
+        });
+        if (isMounted && data.length > 0) {
           const parsedLat = parseFloat(data[0].lat);
           const parsedLon = parseFloat(data[0].lon);
           if (!isNaN(parsedLat) && !isNaN(parsedLon)) {
@@ -82,6 +78,7 @@ export default function CompanyMap({
     return () => {
       isMounted = false;
       clearTimeout(timer);
+      controller.abort();
     };
   }, [lat, lon, address]);
 

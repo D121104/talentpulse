@@ -369,7 +369,7 @@ export default function CompanyDetailPage() {
           <div className="relative h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center text-center pb-8 sm:pb-12">
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-xs font-black text-white shadow-lg tracking-wide uppercase">
               <Sparkles className="w-3.5 h-3.5 text-sky-300" />
-              <span>TalentPulse Pro &bull; Doanh nghiệp uy tín</span>
+              <span>TalentPulse Premium &bull; Doanh nghiệp uy tín</span>
             </div>
             <p className="mt-2 text-xs sm:text-sm md:text-base font-bold text-sky-100/90 drop-shadow-sm max-w-lg">
               Lợi thế cho Ứng viên chất &bull; Gia nhập Doanh nghiệp hàng đầu
@@ -399,12 +399,12 @@ export default function CompanyDetailPage() {
                     </div>
                   )}
 
-                  {/* PRO Badge on Logo */}
+                  {/* PREMIUM Badge on Logo */}
                   {company.isPremium && (
                     <div className="absolute top-1 right-1">
                       <span className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 px-1.5 py-0.2 text-[9px] font-black text-white shadow-xs">
                         <Crown className="w-2.5 h-2.5 fill-current" />
-                        PRO
+                        PREMIUM
                       </span>
                     </div>
                   )}
@@ -419,7 +419,7 @@ export default function CompanyDetailPage() {
                     {company.isPremium && (
                       <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-xs font-black text-amber-600 dark:text-amber-400">
                         <Crown className="w-3 h-3 fill-current" />
-                        <span>DOANH NGHIỆP PRO</span>
+                        <span>DOANH NGHIỆP PREMIUM</span>
                       </span>
                     )}
                   </div>

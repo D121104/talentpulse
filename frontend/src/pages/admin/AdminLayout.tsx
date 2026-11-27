@@ -40,7 +40,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     label: 'Gói Premium & AI Quota',
     icon: Crown,
     desc: 'Quản lý giá, thời hạn sử dụng, quota và đồng bộ PayOS',
-    badge: 'PRO',
+    badge: 'PREMIUM',
     badgeColor: 'bg-amber-400 text-slate-950 font-black',
   },
   {

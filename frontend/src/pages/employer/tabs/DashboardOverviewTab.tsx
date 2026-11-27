@@ -78,36 +78,81 @@ export function DashboardOverviewTab({
   const dailyStats = stats?.dailyApplicationStats || [];
   const maxDailyCount = Math.max(...dailyStats.map((d) => d.count), 5);
 
-  const maxDailyJobs = stats?.maxDailyJobs ?? 5;
+  const isPremium = Boolean(data?.isPremium || (stats?.maxDailyJobs ?? 0) >= 999);
+  const maxActiveJobs = stats?.maxActiveJobs ?? stats?.maxDailyJobs ?? 6;
+  const maxDailyJobs = stats?.maxDailyJobs ?? 6;
+  const hotJobLimit = stats?.hotJobLimit ?? (isPremium ? 3 : 0);
+  const packageName = stats?.packageName || (isPremium ? 'HR Premium' : 'Gói HR Free');
+  const formattedExpiresAt = data?.premiumExpiresAt
+    ? new Date(data.premiumExpiresAt).toLocaleDateString('vi-VN')
+    : null;
 
   return (
     <div className="space-y-6 pb-12">
-      {/* 1. Top Policy & Benefits Announcement Bar */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 rounded-2xl bg-gradient-to-r from-blue-900 via-primary-dark to-slate-900 px-5 py-3.5 text-white shadow-md shadow-blue-950/20">
-        <div className="flex items-center gap-3 text-xs sm:text-sm font-medium">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-primary-light backdrop-blur-sm">
-            <Zap className="h-4 w-4" />
-          </span>
-          <div>
-            <span className="font-semibold text-blue-200">{t('employer.sidebar.freeTierTitle')}:</span> {t('employer.dashboardTab.policyNotice')}
+      {/* 1. Top Policy & Subscription Status Bar */}
+      {isPremium ? (
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-gradient-to-r from-amber-950/90 via-slate-900 to-blue-950 px-5 py-3.5 text-white shadow-md shadow-amber-950/20">
+          <div className="flex items-center gap-3 text-xs sm:text-sm font-medium">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-400/20 text-amber-300 border border-amber-400/30">
+              <Crown className="h-4 w-4" />
+            </span>
+            <div>
+              <span className="font-bold text-amber-300">{packageName}:</span>{' '}
+              Đăng tin tuyển dụng không giới hạn &bull; Đẩy HOT tối đa {hotJobLimit} tin
+              {formattedExpiresAt ? ` • Hạn dùng đến ${formattedExpiresAt}` : ''}
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => onNavigateTab('jobs')}
+              className="text-xs font-semibold text-white/90 hover:text-white underline underline-offset-4 cursor-pointer"
+            >
+              {t('employer.sidebar.menuJobs', 'Chiến dịch tuyển dụng')}
+            </button>
+            <span className="text-white/40">&bull;</span>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('premium')}
+              className="text-xs font-bold text-amber-300 hover:text-amber-200 cursor-pointer"
+            >
+              Gói HR Premium &rarr;
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onNavigateTab('jobs')}
-            className="text-xs font-semibold text-white/90 hover:text-white underline underline-offset-4 cursor-pointer"
-          >
-            {t('employer.sidebar.menuJobs')}
-          </button>
-          <span className="text-white/40">&bull;</span>
-          <button
-            onClick={() => onNavigateTab('company')}
-            className="text-xs font-semibold text-blue-300 hover:text-blue-200 cursor-pointer"
-          >
-            {t('employer.sidebar.menuCompany')} &rarr;
-          </button>
+      ) : (
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 rounded-2xl bg-gradient-to-r from-blue-900 via-primary-dark to-slate-900 px-5 py-3.5 text-white shadow-md shadow-blue-950/20">
+          <div className="flex items-center gap-3 text-xs sm:text-sm font-medium">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/10 text-primary-light backdrop-blur-sm">
+              <Zap className="h-4 w-4" />
+            </span>
+            <div>
+              <span className="font-semibold text-blue-200">{t('employer.sidebar.freeTierTitle', 'Gói HR Free')}:</span>{' '}
+              {t(
+                'employer.dashboardTab.policyNotice',
+                `Bạn được duy trì tối đa ${maxActiveJobs} tin tuyển dụng đang hoạt động cùng lúc.`,
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => onNavigateTab('jobs')}
+              className="text-xs font-semibold text-white/90 hover:text-white underline underline-offset-4 cursor-pointer"
+            >
+              {t('employer.sidebar.menuJobs', 'Chiến dịch tuyển dụng')}
+            </button>
+            <span className="text-white/40">&bull;</span>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('premium')}
+              className="text-xs font-bold text-amber-300 hover:text-amber-200 cursor-pointer"
+            >
+              Nâng cấp HR Premium &rarr;
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 2. Incomplete Company Profile Banner Gate */}
       {(!hasCompany || !isProfileComplete) && (
@@ -190,12 +235,12 @@ export function DashboardOverviewTab({
           <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
             <span>{maxDailyJobs >= 999 ? 'Gói tuyển dụng:' : 'Tin đang hoạt động:'}</span>
             <span className="font-bold text-slate-800 dark:text-slate-200">
-              {maxDailyJobs >= 999 ? (
+              {isPremium || maxDailyJobs >= 999 ? (
                 <span className="text-amber-600 dark:text-amber-400 font-extrabold flex items-center gap-1">
                   <Crown className="h-3.5 w-3.5" /> Không giới hạn
                 </span>
               ) : (
-                `${stats?.activeJobs ?? 0}/6 tin`
+                `${stats?.activeJobs ?? 0}/${maxActiveJobs} tin`
               )}
             </span>
           </div>
@@ -514,11 +559,21 @@ export function DashboardOverviewTab({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-extrabold text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">
                       <Users className="h-3 w-3" />
                       {job.applicationsCount} {t('employer.dashboardTab.applicantsCount')}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onNavigateTab('candidates', { filterJobId: job._id, openAiRank: true })
+                      }
+                      className="rounded-lg p-1.5 text-indigo-600 hover:bg-indigo-100 dark:text-indigo-400 dark:hover:bg-indigo-950/60 cursor-pointer"
+                      title="AI Xếp hạng ứng viên"
+                    >
+                      <Sparkles className="h-4 w-4" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => onNavigateTab('candidates', { filterJobId: job._id })}

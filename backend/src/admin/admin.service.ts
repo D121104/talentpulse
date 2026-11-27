@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import { Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { Company } from '../companies/entities/company.entity';
@@ -7,6 +9,10 @@ import { Job } from '../jobs/entities/job.entity';
 import { Application } from '../applications/entities/application.entity';
 import { Role } from '../decorator/customize';
 import { PaymentsService } from '../payments/payments.service';
+import { RedisService } from '../redis/redis.service';
+import { ElasticsearchService } from '../elasticsearch/elasticsearch.service';
+import { JobSyncPayload } from '../elasticsearch/job-sync.processor';
+import { JobIndexingService } from '../job-indexing/job-indexing.service';
 
 @Injectable()
 export class AdminService {
@@ -20,6 +26,15 @@ export class AdminService {
     @InjectRepository(Application)
     private readonly applicationRepo: Repository<Application>,
     private readonly paymentsService: PaymentsService,
+    @Optional()
+    private readonly redisService?: RedisService,
+    @Optional()
+    private readonly elasticsearchService?: ElasticsearchService,
+    @Optional()
+    private readonly jobIndexingService?: JobIndexingService,
+    @Optional()
+    @InjectQueue('job-sync-es')
+    private readonly jobSyncQueue?: Queue<JobSyncPayload>,
   ) {}
 
   /**
@@ -127,6 +142,30 @@ export class AdminService {
     };
   }
 
+  private async syncJobIndices(job: Job): Promise<void> {
+    if (this.jobIndexingService) {
+      await this.jobIndexingService.enqueue(job._id).catch(() => undefined);
+    }
+
+    try {
+      if (this.jobSyncQueue) {
+        await this.jobSyncQueue.add(
+          'sync-job',
+          { jobId: job._id },
+          {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: true,
+          },
+        );
+      } else if (this.elasticsearchService) {
+        await this.elasticsearchService.indexJob(job);
+      }
+    } catch {
+      // Non-blocking sync dispatch
+    }
+  }
+
   /**
    * Bật / Tắt trạng thái hiển thị của Job (Kiểm duyệt tin tuyển dụng)
    */
@@ -136,7 +175,10 @@ export class AdminService {
       throw new NotFoundException('Không tìm thấy tin tuyển dụng');
     }
     job.isActive = !job.isActive;
-    return this.jobRepo.save(job);
+    const savedJob = await this.jobRepo.save(job);
+    await this.syncJobIndices(savedJob);
+    await this.redisService?.invalidateJobsCache();
+    return savedJob;
   }
 
   /**
@@ -148,6 +190,29 @@ export class AdminService {
       throw new NotFoundException('Không tìm thấy doanh nghiệp');
     }
     company.isActive = !company.isActive;
-    return this.companyRepo.save(company);
+    const savedCompany = await this.companyRepo.save(company);
+
+    const companyJobs = await this.jobRepo
+      .createQueryBuilder('job')
+      .where("job.company->>'_id' = :companyId", { companyId: id })
+      .andWhere('job.isDeleted = false')
+      .getMany();
+
+    for (const job of companyJobs) {
+      const updatedSnapshot = {
+        ...(job.company || ({} as any)),
+        _id: savedCompany._id,
+        name: savedCompany.name,
+        logo: savedCompany.logo,
+        isActive: savedCompany.isActive,
+      };
+      job.company = updatedSnapshot;
+      await this.jobRepo.update(job._id, { company: updatedSnapshot });
+      await this.syncJobIndices(job);
+    }
+
+    await this.redisService?.invalidateCompaniesCache();
+    await this.redisService?.invalidateJobsCache();
+    return savedCompany;
   }
 }

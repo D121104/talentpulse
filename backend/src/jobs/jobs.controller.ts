@@ -20,6 +20,8 @@ import { IUser } from 'src/users/users.interface';
 import { ApiTags } from '@nestjs/swagger';
 import { RolesGuard } from 'src/guards/roles.guard';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { requiredSecret } from 'src/auth/required-secret';
 
 @Controller('jobs')
 @ApiTags('Jobs Controller')
@@ -27,7 +29,29 @@ export class JobsController {
   constructor(
     private readonly jobsService: JobsService,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
   ) {}
+
+  private extractOptionalUser(req: any): IUser | undefined {
+    if (req.user) {
+      return req.user;
+    }
+    const authHeader = req.headers?.authorization;
+    if (typeof authHeader !== 'string') {
+      return undefined;
+    }
+    const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+    if (!match) {
+      return undefined;
+    }
+    try {
+      return this.jwtService.verify<IUser>(match[1], {
+        secret: requiredSecret(this.configService, 'JWT_SECRET'),
+      });
+    } catch {
+      return undefined;
+    }
+  }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.HR)
@@ -42,18 +66,7 @@ export class JobsController {
     @Query('limit') limit: string,
     @Req() req: any,
   ) {
-    let user = req.user;
-    if (!user && req.headers?.authorization) {
-      try {
-        const token = req.headers.authorization.replace('Bearer ', '');
-        const decoded: any = this.jwtService.decode(token);
-        if (decoded) {
-          user = decoded;
-        }
-      } catch {
-        // Ignore decode errors
-      }
-    }
+    const user = this.extractOptionalUser(req);
     return this.jobsService.getLandingPopularJobs({
       user,
       page: Number(page) || 1,
@@ -69,6 +82,7 @@ export class JobsController {
     @Query('level') level?: string,
     @Query('minSalary') minSalary?: string,
     @Query('maxSalary') maxSalary?: string,
+    @Query('negotiable') negotiable?: string,
     @Query('isHot') isHot?: string,
     @Query('isFeatured') isFeatured?: string,
     @Query('isUrgent') isUrgent?: string,
@@ -90,6 +104,7 @@ export class JobsController {
       level,
       minSalary: minSalary ? Number(minSalary) : undefined,
       maxSalary: maxSalary ? Number(maxSalary) : undefined,
+      negotiable: negotiable !== undefined ? negotiable === 'true' : undefined,
       isHot: isHot !== undefined ? isHot === 'true' : undefined,
       isFeatured: isFeatured !== undefined ? isFeatured === 'true' : undefined,
       isUrgent: isUrgent !== undefined ? isUrgent === 'true' : undefined,
@@ -108,6 +123,11 @@ export class JobsController {
     @Query('lon') lon: string,
     @Query('radius') radius: string,
     @Query('query') query: string,
+    @Query('level') level: string,
+    @Query('workingModel') workingModel: string,
+    @Query('minSalary') minSalary: string,
+    @Query('maxSalary') maxSalary: string,
+    @Query('negotiable') negotiable: string,
     @Query('page') page: string,
     @Query('limit') limit: string,
     @User() user: IUser,
@@ -133,6 +153,11 @@ export class JobsController {
         lon: parsedLon,
         radiusKm: parsedRadius,
         query: query?.trim(),
+        level: level?.trim() || undefined,
+        workingModel: workingModel?.trim() || undefined,
+        minSalary: minSalary ? Number(minSalary) : undefined,
+        maxSalary: maxSalary ? Number(maxSalary) : undefined,
+        negotiable: negotiable !== undefined ? negotiable === 'true' : undefined,
         page: Number(page) || 1,
         limit: Number(limit) || 30,
       },
@@ -169,19 +194,7 @@ export class JobsController {
   @Get(':id/applicant-count-status')
   @ResponseMessage('Lấy thông tin số lượng ứng viên và hạn mức xem')
   async getApplicantCountStatus(@Param('id') id: string, @Req() req: any) {
-    let user = req.user;
-    if (!user && req.headers?.authorization) {
-      try {
-        const authHeader = req.headers.authorization;
-        const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-        const decoded: any = this.jwtService.decode(token);
-        if (decoded) {
-          user = decoded;
-        }
-      } catch {
-        // Ignore decode errors
-      }
-    }
+    const user = this.extractOptionalUser(req);
     return this.jobsService.getApplicantCountStatus(id, user);
   }
 

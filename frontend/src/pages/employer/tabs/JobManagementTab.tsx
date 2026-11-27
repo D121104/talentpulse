@@ -537,14 +537,27 @@ export function JobManagementTab({
 
                       {/* Applications count & Candidate shortcut */}
                       <td className="px-6 py-4 text-center whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => onNavigateTab('candidates', { filterJobId: job._id })}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-1.5 text-xs font-bold text-primary hover:bg-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:hover:bg-blue-900 transition cursor-pointer whitespace-nowrap shadow-2xs"
-                        >
-                          <Users className="h-3.5 w-3.5 shrink-0" />
-                          <span>{job.applicationsCount || 0} hồ sơ</span>
-                        </button>
+                        <div className="inline-flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onNavigateTab('candidates', { filterJobId: job._id })}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-1.5 text-xs font-bold text-primary hover:bg-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:hover:bg-blue-900 transition cursor-pointer whitespace-nowrap shadow-2xs"
+                          >
+                            <Users className="h-3.5 w-3.5 shrink-0" />
+                            <span>{job.applicationsCount || 0} hồ sơ</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onNavigateTab('candidates', { filterJobId: job._id, openAiRank: true })
+                            }
+                            title="Mở bảng AI Xếp hạng ứng viên cho tin này"
+                            className="inline-flex items-center gap-1 rounded-xl border border-indigo-200/80 bg-indigo-50 px-2.5 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800/70 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900 transition cursor-pointer whitespace-nowrap shadow-2xs"
+                          >
+                            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                            <span>AI Rank</span>
+                          </button>
+                        </div>
                       </td>
 
                       {/* Status */}

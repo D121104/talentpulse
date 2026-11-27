@@ -686,7 +686,7 @@ export const PremiumPackagesTab: React.FC<PremiumPackagesTabProps> = ({
                     </div>
                     <div>
                       <p className="font-bold text-xs">Ứng Viên (Candidate)</p>
-                      <p className="text-[10px] text-slate-400 font-normal">Tạo CV Pro, đẩy Top hồ sơ, AI chấm điểm</p>
+                      <p className="text-[10px] text-slate-400 font-normal">Mẫu CV Premium, đẩy Top hồ sơ, AI chấm điểm</p>
                     </div>
                   </button>
 

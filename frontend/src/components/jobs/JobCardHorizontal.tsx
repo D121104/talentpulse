@@ -16,6 +16,7 @@ import {
   JobItem,
   formatSalary,
   formatLocation,
+  formatJobLevel,
   formatDaysRemaining,
   getCompanyInitial,
 } from '../../lib/jobApi';
@@ -112,8 +113,8 @@ export default function JobCardHorizontal({
             </Link>
 
             {/* Company Name */}
-            <div className="mt-0.5 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
-              <span className="truncate max-w-[200px]">
+            <div className="mt-0.5 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400 min-w-0">
+              <span className="truncate">
                 {job.company?.name || 'TalentPulse Employer'}
               </span>
               {job.company?.isActive && (
@@ -133,14 +134,14 @@ export default function JobCardHorizontal({
               </span>
               {job.level && (
                 <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800">
-                  {job.level}
+                  {formatJobLevel(job.level)}
                 </span>
               )}
             </div>
 
             {/* Bottom Row: Skills & Bookmark & Apply on hover */}
-            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
-              <div className="text-[11px] text-slate-400 truncate max-w-[170px]">
+            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 min-w-0">
+              <div className="text-[11px] text-slate-400 truncate min-w-0 flex-1">
                 {Array.isArray(job.skills) && job.skills.length > 0 ? (
                   <span>
                     {job.skills.slice(0, 2).join(', ')}
@@ -298,7 +299,7 @@ export default function JobCardHorizontal({
             {job.level && (
               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200/60 dark:border-slate-700/60">
                 <Briefcase className="w-3 h-3 text-slate-400 shrink-0" />
-                {job.level}
+                {formatJobLevel(job.level)}
               </span>
             )}
           </div>

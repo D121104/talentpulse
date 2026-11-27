@@ -1,4 +1,8 @@
 import 'dotenv/config';
+import { configurePostgresUtcParsers } from 'src/database/pg-type-parsers';
+
+configurePostgresUtcParsers();
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from 'src/app.module';
 import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
