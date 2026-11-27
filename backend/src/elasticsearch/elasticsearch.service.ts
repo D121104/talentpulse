@@ -137,6 +137,8 @@ export class ElasticsearchService implements OnModuleInit {
                   },
                   logo: { type: 'keyword', index: false },
                   isActive: { type: 'boolean' },
+                  scale: { type: 'keyword', index: false },
+                  address: { type: 'keyword', index: false },
                 },
               },
               salary: { type: 'long' },
@@ -192,6 +194,8 @@ export class ElasticsearchService implements OnModuleInit {
         name: job.company?.name || '',
         logo: job.company?.logo || '',
         isActive: job.company?.isActive !== false,
+        scale: job.company?.scale || '',
+        address: job.company?.address || '',
       },
       salary: Number(job.salary) || 0,
       level: job.level || '',
@@ -291,30 +295,15 @@ export class ElasticsearchService implements OnModuleInit {
     return { count: jobs.length, errors: [] };
   }
 
-  /**
-   * Truy vấn danh sách việc làm phổ biến/tốt nhất cho Landing Page
-   * Áp dụng Additive Scoring & Hot Boost có kiểm soát
-   */
-  async searchLandingPopularJobs(options: {
-    candidateSkills?: string[];
-    size?: number;
-  }): Promise<{ jobs: any[]; total: number; isPersonalized: boolean }> {
-    const { candidateSkills = [], size = 45 } = options;
-    const nowIso = new Date().toISOString();
-
-    const normalizedCandidateSkills = candidateSkills
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
-    const isPersonalized = normalizedCandidateSkills.length > 0;
-
-    // Active filters
-    const filterConditions: any[] = [
+  private buildActiveJobFilters(nowIso: string): any[] {
+    return [
       { term: { isActive: true } },
       { term: { isDeleted: false } },
-    ];
-
-    // Must be valid in date bounds if dates exist
-    const mustConditions: any[] = [
+      {
+        bool: {
+          must_not: { term: { 'company.isActive': false } },
+        },
+      },
       {
         bool: {
           should: [
@@ -332,6 +321,60 @@ export class ElasticsearchService implements OnModuleInit {
         },
       },
     ];
+  }
+
+  private buildActiveHotFilter(nowIso: string): any {
+    return {
+      bool: {
+        filter: [
+          { term: { isHot: true } },
+          {
+            bool: {
+              should: [
+                { bool: { must_not: { exists: { field: 'boostExpiresAt' } } } },
+                { range: { boostExpiresAt: { gt: nowIso } } },
+              ],
+            },
+          },
+        ],
+      },
+    };
+  }
+
+  private normalizeEsHit(hit: any, nowMs: number) {
+    const source = (hit._source as any) || {};
+    const isHot = Boolean(
+      source.isHot &&
+        (!source.boostExpiresAt ||
+          new Date(source.boostExpiresAt).getTime() > nowMs),
+    );
+    return {
+      _id: hit._id,
+      ...source,
+      isHot,
+      _score: hit._score,
+    };
+  }
+
+  /**
+   * Truy vấn danh sách việc làm phổ biến/tốt nhất cho Landing Page
+   * Áp dụng Additive Scoring & Hot Boost có kiểm soát
+   */
+  async searchLandingPopularJobs(options: {
+    candidateSkills?: string[];
+    size?: number;
+  }): Promise<{ jobs: any[]; total: number; isPersonalized: boolean }> {
+    const { candidateSkills = [], size = 45 } = options;
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+
+    const normalizedCandidateSkills = candidateSkills
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const isPersonalized = normalizedCandidateSkills.length > 0;
+
+    // Active filters (canonical active jobs + active company + date window)
+    const filterConditions = this.buildActiveJobFilters(nowIso);
 
     let query: any;
 
@@ -348,7 +391,6 @@ export class ElasticsearchService implements OnModuleInit {
           query: {
             bool: {
               filter: filterConditions,
-              must: mustConditions,
               should: [
                 // 1. Exact token matching on normalized skills keyword
                 {
@@ -377,26 +419,8 @@ export class ElasticsearchService implements OnModuleInit {
                 },
                 // 4. Hot Job Bonus (additive bonus 2.5 - Hot only boosts jobs, doesn't override relevance)
                 {
-                  bool: {
-                    filter: [
-                      { term: { isHot: true } },
-                      {
-                        bool: {
-                          should: [
-                            {
-                              bool: {
-                                must_not: {
-                                  exists: { field: 'boostExpiresAt' },
-                                },
-                              },
-                            },
-                            { range: { boostExpiresAt: { gt: nowIso } } },
-                          ],
-                        },
-                      },
-                    ],
-                    boost: 2.5,
-                  },
+                  ...this.buildActiveHotFilter(nowIso),
+                  boost: 2.5,
                 },
                 // 5. Featured bonus
                 {
@@ -436,29 +460,10 @@ export class ElasticsearchService implements OnModuleInit {
           query: {
             bool: {
               filter: filterConditions,
-              must: mustConditions,
               should: [
                 {
-                  bool: {
-                    filter: [
-                      { term: { isHot: true } },
-                      {
-                        bool: {
-                          should: [
-                            {
-                              bool: {
-                                must_not: {
-                                  exists: { field: 'boostExpiresAt' },
-                                },
-                              },
-                            },
-                            { range: { boostExpiresAt: { gt: nowIso } } },
-                          ],
-                        },
-                      },
-                    ],
-                    boost: 4.0,
-                  },
+                  ...this.buildActiveHotFilter(nowIso),
+                  boost: 4.0,
                 },
                 {
                   term: {
@@ -505,7 +510,6 @@ export class ElasticsearchService implements OnModuleInit {
           query,
           sort: [
             { _score: { order: 'desc' } },
-            { isHot: { order: 'desc' } },
             { createdAt: { order: 'desc' } },
           ],
         },
@@ -517,11 +521,7 @@ export class ElasticsearchService implements OnModuleInit {
           ? response.hits.total
           : (response.hits?.total as any)?.value || hits.length;
 
-      const jobs = hits.map((hit) => ({
-        _id: hit._id,
-        ...(hit._source as any),
-        _score: hit._score,
-      }));
+      const jobs = hits.map((hit) => this.normalizeEsHit(hit, nowMs));
 
       return {
         jobs,
@@ -544,6 +544,7 @@ export class ElasticsearchService implements OnModuleInit {
     level?: string;
     minSalary?: number;
     maxSalary?: number;
+    negotiable?: boolean;
     isHot?: boolean;
     isFeatured?: boolean;
     isUrgent?: boolean;
@@ -565,6 +566,7 @@ export class ElasticsearchService implements OnModuleInit {
       level,
       minSalary,
       maxSalary,
+      negotiable,
       isHot,
       isFeatured,
       isUrgent,
@@ -575,28 +577,11 @@ export class ElasticsearchService implements OnModuleInit {
     } = params;
 
     const from = (page - 1) * limit;
-    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
 
-    const must: any[] = [
-      { term: { isActive: true } },
-      { term: { isDeleted: false } },
-      {
-        bool: {
-          should: [
-            { bool: { must_not: { exists: { field: 'startDate' } } } },
-            { range: { startDate: { lte: nowIso } } },
-          ],
-        },
-      },
-      {
-        bool: {
-          should: [
-            { bool: { must_not: { exists: { field: 'endDate' } } } },
-            { range: { endDate: { gt: nowIso } } },
-          ],
-        },
-      },
-    ];
+    const filter: any[] = this.buildActiveJobFilters(nowIso);
+    const must: any[] = [];
 
     if (keyword && keyword.trim()) {
       must.push({
@@ -653,7 +638,7 @@ export class ElasticsearchService implements OnModuleInit {
       const rawLocation = location.trim();
       const locShould: any[] = [];
 
-      // Split multiple locations if separated by semicolon or comma
+      // Split multiple locations if separated by semicolon
       const subLocations = rawLocation
         .split(';')
         .map((s) => s.trim())
@@ -662,37 +647,18 @@ export class ElasticsearchService implements OnModuleInit {
       for (const subLoc of subLocations) {
         // Strip district counts like "Hà Nội (2 quận)"
         const cleanSubLoc = subLoc.replace(/\s*\([^)]*\)/g, '').trim();
+        const cityEntry = VIETNAM_CITY_ALIASES.find((entry) =>
+          entry.pattern.test(cleanSubLoc),
+        );
 
-        if (/hồ chí minh|hcm|hcmc/i.test(cleanSubLoc)) {
-          locShould.push(
-            {
+        if (cityEntry) {
+          for (const variant of cityEntry.variants) {
+            locShould.push({
               match_phrase: {
-                'location.text': { query: 'Hồ Chí Minh', boost: 3.0 },
+                'location.text': { query: variant, boost: variant === cityEntry.canonical ? 3.0 : 2.0 },
               },
-            },
-            {
-              match_phrase: {
-                'location.text': { query: 'TP. Hồ Chí Minh', boost: 3.0 },
-              },
-            },
-            {
-              match_phrase: {
-                'location.text': { query: 'TP Hồ Chí Minh', boost: 3.0 },
-              },
-            },
-            {
-              match_phrase: { 'location.text': { query: 'TPHCM', boost: 2.0 } },
-            },
-          );
-        } else if (/hà nội|hn/i.test(cleanSubLoc)) {
-          locShould.push(
-            {
-              match_phrase: {
-                'location.text': { query: 'Hà Nội', boost: 3.0 },
-              },
-            },
-            { match_phrase: { 'location.text': { query: 'HN', boost: 2.0 } } },
-          );
+            });
+          }
         } else {
           locShould.push(
             {
@@ -723,7 +689,7 @@ export class ElasticsearchService implements OnModuleInit {
       }
 
       if (locShould.length > 0) {
-        must.push({
+        filter.push({
           bool: {
             should: locShould,
             minimum_should_match: 1,
@@ -734,7 +700,7 @@ export class ElasticsearchService implements OnModuleInit {
 
     if (skills.length > 0) {
       const normalizedSkills = skills.map((s) => s.trim().toLowerCase());
-      must.push({
+      filter.push({
         terms: {
           skills: normalizedSkills,
         },
@@ -832,18 +798,28 @@ export class ElasticsearchService implements OnModuleInit {
         }
       }
 
-      must.push({
+      filter.push({
         terms: {
           level: Array.from(levelVariants),
         },
       });
     }
 
-    if (minSalary != null || maxSalary != null) {
+    if (negotiable === true) {
+      filter.push({
+        bool: {
+          should: [
+            { range: { salary: { lte: 0 } } },
+            { bool: { must_not: { exists: { field: 'salary' } } } },
+          ],
+          minimum_should_match: 1,
+        },
+      });
+    } else if (minSalary != null || maxSalary != null) {
       const salaryRange: any = {};
       if (minSalary != null) salaryRange.gte = Number(minSalary);
       if (maxSalary != null) salaryRange.lte = Number(maxSalary);
-      must.push({
+      filter.push({
         range: {
           salary: salaryRange,
         },
@@ -852,39 +828,22 @@ export class ElasticsearchService implements OnModuleInit {
 
     if (isHot !== undefined) {
       if (Boolean(isHot)) {
-        must.push({
-          bool: {
-            filter: [
-              { term: { isHot: true } },
-              {
-                bool: {
-                  should: [
-                    {
-                      bool: {
-                        must_not: { exists: { field: 'boostExpiresAt' } },
-                      },
-                    },
-                    { range: { boostExpiresAt: { gt: nowIso } } },
-                  ],
-                },
-              },
-            ],
-          },
-        });
+        filter.push(this.buildActiveHotFilter(nowIso));
       } else {
-        must.push({
+        filter.push({
           bool: {
             should: [
               { term: { isHot: false } },
               { range: { boostExpiresAt: { lte: nowIso } } },
             ],
+            minimum_should_match: 1,
           },
         });
       }
     }
 
     if (isFeatured !== undefined) {
-      must.push({
+      filter.push({
         term: {
           isFeatured: Boolean(isFeatured),
         },
@@ -892,7 +851,7 @@ export class ElasticsearchService implements OnModuleInit {
     }
 
     if (isUrgent !== undefined) {
-      must.push({
+      filter.push({
         term: {
           isUrgent: Boolean(isUrgent),
         },
@@ -900,20 +859,44 @@ export class ElasticsearchService implements OnModuleInit {
     }
 
     if (companyId && companyId.trim()) {
-      must.push({
+      filter.push({
         term: {
           'company._id': companyId.trim(),
         },
       });
     }
 
+    const baseBoolQuery: any = {
+      bool: {
+        filter,
+        ...(must.length > 0 ? { must } : {}),
+      },
+    };
+
+    // Boost only unexpired HOT jobs in relevance/newest sorts instead of pinning expired HOT docs
+    const searchQuery: any =
+      sort === 'relevance' || sort === 'newest'
+        ? {
+            function_score: {
+              query: baseBoolQuery,
+              functions: [
+                {
+                  filter: this.buildActiveHotFilter(nowIso),
+                  weight: 50,
+                },
+              ],
+              score_mode: 'sum' as const,
+              boost_mode: 'sum' as const,
+            },
+          }
+        : baseBoolQuery;
+
     // Determine Sort Order
     let esSort: any[] = [];
     if (sort === 'newest') {
       esSort = [
-        { isHot: { order: 'desc' } },
-        { createdAt: { order: 'desc' } },
         { _score: { order: 'desc' } },
+        { createdAt: { order: 'desc' } },
       ];
     } else if (sort === 'salary_desc') {
       esSort = [
@@ -930,7 +913,6 @@ export class ElasticsearchService implements OnModuleInit {
     } else {
       // 'relevance' (default)
       esSort = [
-        { isHot: { order: 'desc' } },
         { _score: { order: 'desc' } },
         { createdAt: { order: 'desc' } },
       ];
@@ -942,11 +924,7 @@ export class ElasticsearchService implements OnModuleInit {
         from,
         size: limit,
         body: {
-          query: {
-            bool: {
-              must,
-            },
-          },
+          query: searchQuery,
           sort: esSort,
         },
       });
@@ -957,11 +935,7 @@ export class ElasticsearchService implements OnModuleInit {
           ? response.hits.total
           : (response.hits?.total as any)?.value || 0;
 
-      const jobs = hits.map((h) => ({
-        _id: h._id,
-        ...(h._source as any),
-        _score: h._score,
-      }));
+      const jobs = hits.map((h) => this.normalizeEsHit(h, nowMs));
 
       return {
         jobs,
@@ -987,7 +961,8 @@ export class ElasticsearchService implements OnModuleInit {
    */
   async getRelatedJobs(jobId: string, limit = 6): Promise<any[]> {
     try {
-      const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
       let sourceJob: any = null;
 
       try {
@@ -1002,27 +977,7 @@ export class ElasticsearchService implements OnModuleInit {
         // Document not found in ES
       }
 
-      const must: any[] = [
-        { term: { isActive: true } },
-        { term: { isDeleted: false } },
-        {
-          bool: {
-            should: [
-              { bool: { must_not: { exists: { field: 'startDate' } } } },
-              { range: { startDate: { lte: nowIso } } },
-            ],
-          },
-        },
-        {
-          bool: {
-            should: [
-              { bool: { must_not: { exists: { field: 'endDate' } } } },
-              { range: { endDate: { gt: nowIso } } },
-            ],
-          },
-        },
-      ];
-
+      const filter = this.buildActiveJobFilters(nowIso);
       const mustNot: any[] = [{ ids: { values: [jobId] } }];
 
       const should: any[] = [];
@@ -1064,14 +1019,13 @@ export class ElasticsearchService implements OnModuleInit {
         body: {
           query: {
             bool: {
-              must,
+              filter,
               must_not: mustNot,
               should: should.length > 0 ? should : undefined,
               minimum_should_match: should.length > 0 ? 1 : 0,
             },
           },
           sort: [
-            { isHot: { order: 'desc' } },
             { _score: { order: 'desc' } },
             { createdAt: { order: 'desc' } },
           ],
@@ -1079,11 +1033,7 @@ export class ElasticsearchService implements OnModuleInit {
       });
 
       const hits = response.hits?.hits || [];
-      return hits.map((h) => ({
-        _id: h._id,
-        ...(h._source as any),
-        _score: h._score,
-      }));
+      return hits.map((h) => this.normalizeEsHit(h, nowMs));
     } catch (err) {
       this.logger.error(`Error fetching related jobs from ES: ${err.message}`);
       return [];
@@ -1097,6 +1047,8 @@ export class ElasticsearchService implements OnModuleInit {
     if (!query || query.trim().length < 2) return [];
     try {
       const q = query.trim();
+      const normalizedQuery = normalizeVietnameseText(q);
+      const nowIso = new Date().toISOString();
       const response = await this.client.search({
         index: TALENTPULSE_JOBS_INDEX,
         size: limit * 2,
@@ -1104,10 +1056,7 @@ export class ElasticsearchService implements OnModuleInit {
           _source: ['name', 'skills'],
           query: {
             bool: {
-              must: [
-                { term: { isActive: true } },
-                { term: { isDeleted: false } },
-              ],
+              filter: this.buildActiveJobFilters(nowIso),
               should: [
                 { match_phrase_prefix: { name: { query: q, boost: 3.0 } } },
                 { match: { 'name.autocomplete': { query: q, boost: 2.0 } } },
@@ -1126,7 +1075,7 @@ export class ElasticsearchService implements OnModuleInit {
         const source = hit._source as any;
         if (
           source?.name &&
-          source.name.toLowerCase().includes(q.toLowerCase())
+          normalizeVietnameseText(source.name).includes(normalizedQuery)
         ) {
           suggestions.add(source.name);
         }
@@ -1134,7 +1083,7 @@ export class ElasticsearchService implements OnModuleInit {
           for (const s of source.skills) {
             if (
               typeof s === 'string' &&
-              s.toLowerCase().includes(q.toLowerCase())
+              normalizeVietnameseText(s).includes(normalizedQuery)
             ) {
               suggestions.add(s);
             }
@@ -1149,6 +1098,129 @@ export class ElasticsearchService implements OnModuleInit {
       return [];
     }
   }
+}
+
+const VIETNAM_CITY_ALIASES: Array<{
+  canonical: string;
+  pattern: RegExp;
+  variants: string[];
+}> = [
+  {
+    canonical: 'Hà Nội',
+    pattern: /h[àa]\s*n[ộo]i|hano[iï]+|\bhn\b/i,
+    variants: [
+      'Hà Nội',
+      'Hanoi',
+      'Hanoiï',
+      'HN',
+      'Ba Đình',
+      'Hoàn Kiếm',
+      'Tây Hồ',
+      'Long Biên',
+      'Cầu Giấy',
+      'Đống Đa',
+      'Hai Bà Trưng',
+      'Hoàng Mai',
+      'Thanh Xuân',
+      'Nam Từ Liêm',
+      'Bắc Từ Liêm',
+      'Hà Đông',
+      'Gia Lâm',
+      'Đông Anh',
+      'Thanh Trì',
+      'Hoài Đức',
+      'Thạch Thất',
+      'Hòa Lạc',
+      'Mê Linh',
+      'Sóc Sơn',
+      'Sơn Tây',
+    ],
+  },
+  {
+    canonical: 'Hồ Chí Minh',
+    pattern: /h[ồo]\s*ch[íi]\s*minh|s[àa]i\s*g[òo]n|saigon|tphcm|\bhcm\b|hcmc/i,
+    variants: [
+      'Hồ Chí Minh',
+      'TP. Hồ Chí Minh',
+      'TP Hồ Chí Minh',
+      'TPHCM',
+      'HCM',
+      'Sài Gòn',
+      'Saigon',
+      'Thủ Đức',
+      'Bình Thạnh',
+      'Gò Vấp',
+      'Tân Bình',
+      'Tân Phú',
+      'Phú Nhuận',
+      'Bình Tân',
+      'Quận 1',
+      'Quận 2',
+      'Quận 3',
+      'Quận 4',
+      'Quận 5',
+      'Quận 6',
+      'Quận 7',
+      'Quận 8',
+      'Quận 9',
+      'Quận 10',
+      'Quận 11',
+      'Quận 12',
+      'Nhà Bè',
+      'Bình Chánh',
+      'Hóc Môn',
+    ],
+  },
+  {
+    canonical: 'Đà Nẵng',
+    pattern: /[đd][àa]\s*n[ẵa]ng|danang/i,
+    variants: [
+      'Đà Nẵng',
+      'Da Nang',
+      'Danang',
+      'Hải Châu',
+      'Thanh Khê',
+      'Sơn Trà',
+      'Ngũ Hành Sơn',
+      'Liên Chiểu',
+      'Cẩm Lệ',
+      'Hòa Vang',
+    ],
+  },
+  {
+    canonical: 'Hải Phòng',
+    pattern: /h[ảa]i\s*ph[òo]ng|haiphong/i,
+    variants: ['Hải Phòng', 'Hai Phong', 'Hồng Bàng', 'Ngô Quyền', 'Lê Chân', 'Hải An', 'Thủy Nguyên'],
+  },
+  {
+    canonical: 'Cần Thơ',
+    pattern: /c[ầa]n\s*th[ơo]|cantho/i,
+    variants: ['Cần Thơ', 'Can Tho', 'Ninh Kiều', 'Cái Răng', 'Bình Thủy'],
+  },
+  {
+    canonical: 'Bình Dương',
+    pattern: /b[ìi]nh\s*d[ươu][ơo]ng/i,
+    variants: ['Bình Dương', 'Thủ Dầu Một', 'Dĩ An', 'Thuận An', 'Tân Uyên', 'Bến Cát'],
+  },
+  {
+    canonical: 'Đồng Nai',
+    pattern: /[đd][ồo]ng\s*nai/i,
+    variants: ['Đồng Nai', 'Biên Hòa', 'Long Thành', 'Nhơn Trạch', 'Trảng Bom'],
+  },
+  {
+    canonical: 'Bắc Ninh',
+    pattern: /b[ắa]c\s*ninh/i,
+    variants: ['Bắc Ninh', 'Từ Sơn', 'Yên Phong', 'Quế Võ', 'Tiên Du'],
+  },
+];
+
+function normalizeVietnameseText(input: string): string {
+  return input
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
 }
 
 function candidateCandidateSkillsToQuery(skills: string[]): string {

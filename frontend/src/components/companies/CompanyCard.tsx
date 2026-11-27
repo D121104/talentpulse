@@ -101,12 +101,12 @@ export default function CompanyCard({
         <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:12px_12px]" />
         <div className="absolute -right-6 -bottom-6 w-24 h-24 rounded-full bg-white/10 blur-xl pointer-events-none" />
 
-        {/* HR Premium Spotlight Badge with Crown icon & PRO */}
+        {/* HR Premium Spotlight Badge with Crown icon & PREMIUM */}
         {company.isPremium && (
           <div className="absolute top-2.5 right-2.5 z-10">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 px-3 py-1 text-[11px] font-black text-white shadow-lg shadow-amber-500/30 ring-2 ring-white/70 dark:ring-slate-900/70 backdrop-blur-md">
               <Crown className="h-3.5 w-3.5 text-amber-100 fill-amber-200" />
-              <span>PRO</span>
+              <span>PREMIUM</span>
             </span>
           </div>
         )}
@@ -171,7 +171,7 @@ export default function CompanyCard({
           </button>
         </div>
 
-        {/* Company Title + PRO Tag */}
+        {/* Company Title + PREMIUM Tag */}
         <div>
           <div className="flex items-center gap-1.5">
             <h3 className="text-[15px] sm:text-base font-extrabold text-slate-900 dark:text-white group-hover:text-primary transition-colors line-clamp-1 flex-1">
@@ -185,7 +185,7 @@ export default function CompanyCard({
                 title="Doanh nghiệp HR Premium"
               >
                 <Crown className="h-3 w-3 text-amber-500 fill-amber-400" />
-                <span>PRO</span>
+                <span>PREMIUM</span>
               </span>
             )}
           </div>

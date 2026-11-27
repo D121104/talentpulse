@@ -19,7 +19,6 @@ import {
   PlusCircle,
   MapPin,
   Globe,
-  Compass,
 } from 'lucide-react';
 
 import {
@@ -32,8 +31,7 @@ import { useToast } from '../../../context/ToastContext';
 import { formatDate } from '../../../lib/dateUtils';
 import { useAuth } from '../../../auth/AuthContext';
 import { RichTextEditor } from '../../../components/common/RichTextEditor';
-import CompanyLocationPickerModal from '../../../components/companies/CompanyLocationPickerModal';
-import CompanyMap from '../../../components/companies/CompanyMap';
+import LocationMapPicker from '../../../components/maps/LocationMapPicker';
 
 interface CompanyProfileTabProps {
   company: CompanyInfo | null;
@@ -70,8 +68,6 @@ export function CompanyProfileTab({
     description: company?.description || '',
     logo: company?.logo || '',
   });
-
-  const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
 
   // HR Team State
   const [teamMembers, setTeamMembers] = useState<HrMember[]>([]);
@@ -702,129 +698,34 @@ export function CompanyProfileTab({
                 />
               </div>
 
-              {/* Address with Map Location Picker */}
+              {/* Address with Interactive Map Picker */}
               <div className="sm:col-span-2 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-primary" />
-                    <span>{t('employer.companyTab.addressLabel', 'Địa chỉ trụ sở')}</span> <span className="text-rose-500">*</span>
-                  </label>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-primary" />
+                  <span>{t('employer.companyTab.addressLabel', 'Địa chỉ trụ sở')}</span>
+                  <span className="text-rose-500">*</span>
+                </label>
 
-                  <button
-                    type="button"
-                    onClick={() => setIsLocationPickerOpen(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 hover:bg-primary text-primary hover:text-white dark:bg-primary/20 dark:text-primary-light dark:hover:bg-primary dark:hover:text-white text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95"
-                  >
-                    <Compass className="w-3.5 h-3.5" />
-                    <span>{formData.lat && formData.lon ? 'Đổi vị trí trên bản đồ' : 'Chọn vị trí trên bản đồ'}</span>
-                  </button>
-                </div>
-
-                <input
-                  type="text"
+                <LocationMapPicker
+                  address={formData.address}
+                  lat={formData.lat}
+                  lon={formData.lon}
                   required
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  placeholder="Ví dụ: Tầng 12, Keangnam Landmark 72, Cầu Giấy, Hà Nội"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  markerTitle={formData.name || 'Trụ sở công ty'}
+                  placeholder="Nhập địa chỉ trụ sở (VD: Keangnam Landmark 72, Cầu Giấy, Hà Nội)"
+                  modalTitle="Chọn vị trí trụ sở công ty"
+                  modalSubtitle="Tìm địa chỉ, nhấp bản đồ hoặc kéo thả ghim xanh"
+                  mapHeightClass="h-60 sm:h-64"
+                  onChange={({ address, lat, lon }) => {
+                    setFormData((prev) => ({
+                      ...prev,
+                      address,
+                      lat,
+                      lon,
+                    }));
+                  }}
                 />
-
-                {/* Coords indicator & Manual Lat/Lon Inputs */}
-                <div className="pt-2 space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 flex items-center justify-between">
-                        <span>Vĩ độ (Latitude)</span>
-                        <span className="text-[10px] text-slate-400 font-mono">VD: 21.0173</span>
-                      </label>
-                      <input
-                        type="number"
-                        step="any"
-                        placeholder="21.0173"
-                        value={formData.lat !== null && formData.lat !== undefined ? formData.lat : ''}
-                        onChange={(e) => {
-                          const val = e.target.value === '' ? null : parseFloat(e.target.value);
-                          setFormData((prev) => ({ ...prev, lat: val }));
-                        }}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 flex items-center justify-between">
-                        <span>Kinh độ (Longitude)</span>
-                        <span className="text-[10px] text-slate-400 font-mono">VD: 105.7838</span>
-                      </label>
-                      <input
-                        type="number"
-                        step="any"
-                        placeholder="105.7838"
-                        value={formData.lon !== null && formData.lon !== undefined ? formData.lon : ''}
-                        onChange={(e) => {
-                          const val = e.target.value === '' ? null : parseFloat(e.target.value);
-                          setFormData((prev) => ({ ...prev, lon: val }));
-                        }}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                      />
-                    </div>
-                  </div>
-                  {formData.lat && formData.lon ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1">
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                          <span>Tọa độ đã định vị: <strong>{formData.lat.toFixed(5)}, {formData.lon.toFixed(5)}</strong></span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setIsLocationPickerOpen(true)}
-                          className="text-primary hover:underline font-semibold cursor-pointer"
-                        >
-                          Chỉnh sửa
-                        </button>
-                      </div>
-
-                      {/* Map Preview */}
-                      <CompanyMap
-                        companyName={formData.name || 'Doanh nghiệp'}
-                        address={formData.address}
-                        lat={formData.lat}
-                        lon={formData.lon}
-                        className="h-44 sm:h-52 w-full rounded-xl"
-                      />
-                    </div>
-                  ) : (
-                    <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between gap-3 text-xs">
-                      <span className="text-slate-500 dark:text-slate-400">
-                        Chưa chọn tọa độ bản đồ. Bạn có thể bấm nút bên cạnh để ghim chính xác vị trí trụ sở.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setIsLocationPickerOpen(true)}
-                        className="text-primary font-bold hover:underline shrink-0 cursor-pointer"
-                      >
-                        Ghim ngay →
-                      </button>
-                    </div>
-                  )}
-                </div>
               </div>
-
-              {/* Location Picker Modal */}
-              <CompanyLocationPickerModal
-                isOpen={isLocationPickerOpen}
-                onClose={() => setIsLocationPickerOpen(false)}
-                initialLat={formData.lat}
-                initialLon={formData.lon}
-                initialAddress={formData.address}
-                onConfirm={({ lat, lon, address }) => {
-                  setFormData((prev) => ({
-                    ...prev,
-                    lat,
-                    lon,
-                    address: address || prev.address,
-                  }));
-                }}
-              />
 
               {/* Description */}
               <div className="sm:col-span-2 space-y-1.5">

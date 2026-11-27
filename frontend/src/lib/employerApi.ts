@@ -132,6 +132,8 @@ export interface HrJobItem {
   categories?: string[];
   description: string;
   location: string;
+  lat?: number | null;
+  lon?: number | null;
   startDate: string;
   endDate: string;
   isActive: boolean;
@@ -290,6 +292,9 @@ export interface ApplicationItem {
     salary?: number;
     level?: string;
     location?: string;
+    workingModel?: string;
+    isDeleted?: boolean;
+    deletedAt?: string | null;
   };
   userId: {
     _id: string;
@@ -298,11 +303,18 @@ export interface ApplicationItem {
     avatar?: string;
     address?: string;
     gender?: string;
+    age?: number;
   };
   cvId: {
     _id: string;
     title: string;
     url: string;
+    fileType?: string;
+    onlineCvId?: string;
+    skills?: string[];
+    education?: string[];
+    experience?: string[];
+    certificates?: string[];
   };
 }
 
@@ -592,6 +604,8 @@ export const employerApi = {
       categories?: string[];
       description: string;
       location: string;
+      lat?: number;
+      lon?: number;
       startDate: string;
       endDate: string;
       isActive?: boolean;

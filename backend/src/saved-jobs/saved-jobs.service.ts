@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SavedJob } from './entities/saved-job.entity';
 import { Job } from 'src/jobs/entities/job.entity';
+import { Company } from 'src/companies/entities/company.entity';
 
 @Injectable()
 export class SavedJobsService {
@@ -25,14 +26,6 @@ export class SavedJobsService {
       throw new BadRequestException('jobId không được để trống');
     }
 
-    const job = await this.jobRepo.findOne({
-      where: { _id: jobId },
-    });
-
-    if (!job) {
-      throw new NotFoundException('Không tìm thấy việc làm này');
-    }
-
     const existing = await this.savedJobRepo.findOne({
       where: { userId, jobId },
     });
@@ -44,6 +37,14 @@ export class SavedJobsService {
         message: 'Đã bỏ lưu việc làm',
         jobId,
       };
+    }
+
+    const job = await this.jobRepo.findOne({
+      where: { _id: jobId, isDeleted: false },
+    });
+
+    if (!job) {
+      throw new NotFoundException('Không tìm thấy việc làm này');
     }
 
     const newSaved = this.savedJobRepo.create({
@@ -67,21 +68,31 @@ export class SavedJobsService {
     const limit = Math.max(1, Number(pageSize) || 10);
     const skip = (page - 1) * limit;
 
-    const [items, total] = await this.savedJobRepo.findAndCount({
-      where: { userId },
-      relations: ['job'],
-      order: { createdAt: 'DESC' },
-      skip,
-      take: limit,
-    });
+    const [items, total] = await this.savedJobRepo
+      .createQueryBuilder('saved')
+      .innerJoinAndSelect('saved.job', 'job')
+      .innerJoin(
+        Company,
+        'canonicalCompany',
+        `"canonicalCompany"."_id"::text = job.company->>'_id'`,
+      )
+      .where('saved.userId = :userId', { userId })
+      .andWhere('job."isActive" = true')
+      .andWhere('job."isDeleted" = false')
+      .andWhere('job."deletedAt" IS NULL')
+      .andWhere('"canonicalCompany"."isActive" = true')
+      .andWhere('"canonicalCompany"."isDeleted" = false')
+      .andWhere('"canonicalCompany"."deletedAt" IS NULL')
+      .orderBy('saved.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
 
-    const jobs = items
-      .filter((item) => item.job && item.job.isActive !== false)
-      .map((item) => ({
-        ...item.job,
-        savedAt: item.createdAt,
-        isSaved: true,
-      }));
+    const jobs = items.map((item) => ({
+      ...item.job,
+      savedAt: item.createdAt,
+      isSaved: true,
+    }));
 
     return {
       meta: {

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { Queue } from 'bull';
 import {
   Repository,
@@ -16,6 +17,7 @@ import {
   LessThanOrEqual,
   MoreThanOrEqual,
   Between,
+  In,
 } from 'typeorm';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
@@ -40,6 +42,27 @@ import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service'
 import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
 import { ElasticsearchService } from 'src/elasticsearch/elasticsearch.service';
 import { JobSyncPayload } from 'src/elasticsearch/job-sync.processor';
+import { areQueueWorkersEnabled } from 'src/config/runtime-flags';
+
+const VIETNAMESE_UPPER_CHARS =
+  'ÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ';
+const VIETNAMESE_LOWER_CHARS =
+  'àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ';
+const VIETNAMESE_FOLDED_CHARS =
+  'aaaaaaaaaaaaaaaaaeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyd';
+
+function normalizeVietnameseKeyword(input: string): string {
+  return input
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+}
+
+function sqlFoldVietnamese(expr: string): string {
+  return `translate(lower(${expr}), '${VIETNAMESE_LOWER_CHARS}${VIETNAMESE_UPPER_CHARS}', '${VIETNAMESE_FOLDED_CHARS}${VIETNAMESE_FOLDED_CHARS}')`;
+}
 
 export function getIsoWeekString(d: Date = new Date()): string {
   const target = new Date(d.valueOf());
@@ -157,28 +180,125 @@ export class JobsService {
     action: 'sync-job' | 'delete-job' = 'sync-job',
   ): Promise<void> {
     try {
-      if (this.jobSyncQueue) {
-        await this.jobSyncQueue.add(
-          action,
-          { jobId },
-          {
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 2000 },
-            removeOnComplete: true,
-          },
-        );
-      } else {
-        // Direct sync fallback if queue disabled
-        if (action === 'sync-job') {
-          const job = await this.jobRepo.findOne({ where: { _id: jobId } });
-          if (job) await this.elasticsearchService.indexJob(job);
-        } else {
-          await this.elasticsearchService.deleteJob(jobId);
+      if (action === 'sync-job') {
+        const job = await this.jobRepo.findOne({ where: { _id: jobId } });
+        if (job && !job.isDeleted && !job.deletedAt) {
+          if (job.company?._id) {
+            const canonicalCompany = await this.companyRepo.findOne({
+              where: { _id: job.company._id },
+            });
+            if (canonicalCompany) {
+              job.company = {
+                ...job.company,
+                _id: canonicalCompany._id,
+                name: canonicalCompany.name,
+                logo: canonicalCompany.logo,
+                scale: canonicalCompany.scale,
+                address: canonicalCompany.address,
+                isActive: Boolean(
+                  canonicalCompany.isActive &&
+                    !canonicalCompany.isDeleted &&
+                    !canonicalCompany.deletedAt,
+                ),
+              };
+            }
+          }
+          await this.elasticsearchService.indexJob(job);
+          return;
         }
       }
+
+      await this.elasticsearchService.deleteJob(jobId);
+      return;
     } catch {
-      // Ignore queue dispatch error to keep HTTP request robust
+      // Fall back to Bull queue retry if Elasticsearch is temporarily unreachable
+      try {
+        if (this.jobSyncQueue) {
+          await this.jobSyncQueue.add(
+            action,
+            { jobId },
+            {
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 2000 },
+              removeOnComplete: true,
+            },
+          );
+        }
+      } catch {
+        // Ignore queue dispatch error to keep HTTP request robust
+      }
     }
+  }
+
+  private async attachApplicationsCountAndExpireHot(jobs: Job[]) {
+    if (jobs.length === 0) {
+      return [];
+    }
+
+    const now = new Date();
+    const expiredHotIds: string[] = [];
+    for (const job of jobs) {
+      const isHotExpired = Boolean(
+        job.isHot && job.boostExpiresAt && new Date(job.boostExpiresAt) <= now,
+      );
+      if (isHotExpired) {
+        job.isHot = false;
+        expiredHotIds.push(job._id);
+      }
+    }
+
+    if (expiredHotIds.length > 0) {
+      await this.jobRepo.update({ _id: In(expiredHotIds) }, { isHot: false });
+      for (const expiredId of expiredHotIds) {
+        void this.enqueueJobSync(expiredId);
+      }
+      void this.redisService.invalidateJobsCache();
+    }
+
+    const jobIds = jobs.map((job) => job._id);
+    const rawCounts = await this.applicationRepo
+      .createQueryBuilder('app')
+      .select('app.jobId', 'jobId')
+      .addSelect('COUNT(app._id)', 'count')
+      .where('app.jobId IN (:...jobIds)', { jobIds })
+      .andWhere('app.isDeleted = false')
+      .groupBy('app.jobId')
+      .getRawMany<{ jobId: string; count: string }>();
+
+    const countMap = new Map<string, number>(
+      rawCounts.map((row) => [row.jobId, Number(row.count) || 0]),
+    );
+
+    return jobs.map((job) => ({
+      ...job,
+      applicationsCount: countMap.get(job._id) ?? 0,
+    }));
+  }
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async expireOverdueHotJobs(): Promise<void> {
+    if (!areQueueWorkersEnabled()) return;
+
+    const now = new Date();
+    const expiredJobs = await this.jobRepo.find({
+      where: {
+        isHot: true,
+        boostExpiresAt: LessThanOrEqual(now),
+        isDeleted: false,
+      },
+      select: ['_id'],
+    });
+
+    if (expiredJobs.length === 0) return;
+
+    const expiredIds = expiredJobs.map((j) => j._id);
+    await this.jobRepo.update({ _id: In(expiredIds) }, { isHot: false });
+
+    for (const jobId of expiredIds) {
+      await this.enqueueJobSync(jobId);
+    }
+
+    await this.redisService.invalidateJobsCache();
   }
 
   async getAll() {
@@ -238,30 +358,8 @@ export class JobsService {
       .getManyAndCount();
 
     const totalPage = Math.ceil(totalRecord / limit);
-
-    const now = new Date();
-    const jobsWithApplicationsCount = await Promise.all(
-      jobs.map(async (job) => {
-        const isHotExpired = Boolean(
-          job.isHot &&
-            job.boostExpiresAt &&
-            new Date(job.boostExpiresAt) <= now,
-        );
-        if (isHotExpired) {
-          job.isHot = false;
-          void this.jobRepo.update(job._id, { isHot: false });
-          void this.enqueueJobSync(job._id);
-        }
-
-        const applications = await this.applicationRepo.count({
-          where: { jobId: job._id, isDeleted: false },
-        });
-        return {
-          ...job,
-          applicationsCount: applications,
-        };
-      }),
-    );
+    const jobsWithApplicationsCount =
+      await this.attachApplicationsCountAndExpireHot(jobs);
 
     return {
       meta: {
@@ -333,30 +431,8 @@ export class JobsService {
       .getManyAndCount();
 
     const totalPage = Math.ceil(totalRecord / limit);
-
-    const now = new Date();
-    const jobsWithApplicationsCount = await Promise.all(
-      jobs.map(async (job) => {
-        const isHotExpired = Boolean(
-          job.isHot &&
-            job.boostExpiresAt &&
-            new Date(job.boostExpiresAt) <= now,
-        );
-        if (isHotExpired) {
-          job.isHot = false;
-          void this.jobRepo.update(job._id, { isHot: false });
-          void this.enqueueJobSync(job._id);
-        }
-
-        const applications = await this.applicationRepo.count({
-          where: { jobId: job._id, isDeleted: false },
-        });
-        return {
-          ...job,
-          applicationsCount: applications,
-        };
-      }),
-    );
+    const jobsWithApplicationsCount =
+      await this.attachApplicationsCountAndExpireHot(jobs);
 
     return {
       meta: {
@@ -392,6 +468,16 @@ export class JobsService {
 
     if (!company.isActive) {
       throw new BadRequestException('Company is not active');
+    }
+
+    if (
+      createJobDto.startDate &&
+      createJobDto.endDate &&
+      new Date(createJobDto.endDate) <= new Date(createJobDto.startDate)
+    ) {
+      throw new BadRequestException(
+        'Ngày kết thúc phải lớn hơn ngày bắt đầu',
+      );
     }
 
     // Enforce active jobs limit (6 concurrent active jobs for Standard Free HR, unlimited for HR Premium & Admin)
@@ -446,8 +532,8 @@ export class JobsService {
     const savedJob = await this.jobRepo.save(newJob);
     await this.jobIndexingService.enqueue(savedJob._id);
 
-    // Sync to Elasticsearch
-    void this.enqueueJobSync(savedJob._id);
+    // Sync to Elasticsearch immediately so newly created jobs appear in search
+    await this.enqueueJobSync(savedJob._id);
 
     // Send notification to all users following this company about the new job
     if (company.usersFollow && company.usersFollow.length > 0) {
@@ -708,6 +794,20 @@ export class JobsService {
       updateJobDto.description !== undefined &&
       updateJobDto.description !== currentJob.description;
 
+    const effectiveStartDate = updateJobDto.startDate ?? currentJob.startDate;
+    const effectiveEndDate = updateJobDto.endDate ?? currentJob.endDate;
+    if (
+      (updateJobDto.startDate !== undefined ||
+        updateJobDto.endDate !== undefined) &&
+      effectiveStartDate &&
+      effectiveEndDate &&
+      new Date(effectiveEndDate) <= new Date(effectiveStartDate)
+    ) {
+      throw new BadRequestException(
+        'Ngày kết thúc phải lớn hơn ngày bắt đầu',
+      );
+    }
+
     const updatePayload: any = {
       ...updateJobDto,
       updatedBy: {
@@ -754,8 +854,8 @@ export class JobsService {
     const result = await this.jobRepo.update(id, updatePayload);
 
     await this.jobIndexingService.enqueue(id);
-    // Sync to Elasticsearch
-    void this.enqueueJobSync(id);
+    // Sync to Elasticsearch immediately so updated fields/location reflect on /jobs
+    await this.enqueueJobSync(id);
 
     // Re-process all CVs only when description has changed
     if (descriptionChanged) {
@@ -795,7 +895,7 @@ export class JobsService {
     await this.redisService.invalidateJobsCache();
     await this.jobIndexingService.enqueue(id);
     // Remove from Elasticsearch
-    void this.enqueueJobSync(id, 'delete-job');
+    await this.enqueueJobSync(id, 'delete-job');
 
     return result;
   }
@@ -881,7 +981,7 @@ export class JobsService {
     await this.redisService.invalidateJobsCache();
 
     // Sync to Elasticsearch
-    void this.enqueueJobSync(job._id);
+    await this.enqueueJobSync(job._id);
 
     return {
       message:
@@ -926,7 +1026,7 @@ export class JobsService {
     await this.redisService.invalidateJobsCache();
 
     // Sync to Elasticsearch
-    void this.enqueueJobSync(job._id);
+    await this.enqueueJobSync(job._id);
 
     return {
       message:
@@ -1038,6 +1138,7 @@ export class JobsService {
     level?: string;
     minSalary?: number;
     maxSalary?: number;
+    negotiable?: boolean;
     isHot?: boolean;
     isFeatured?: boolean;
     isUrgent?: boolean;
@@ -1309,6 +1410,8 @@ export class JobsService {
       await this.usersService.getUserCandidateWeeklyApplicantLimit(
         effectiveUser,
       );
+    const getRemainingQuota = (usedCount: number) =>
+      weeklyQuotaMax >= 999999 ? 999999 : Math.max(0, weeklyQuotaMax - usedCount);
 
     // If already unlocked for this job in the current week
     if (distinctJobIds.has(jobId)) {
@@ -1319,10 +1422,7 @@ export class JobsService {
         isUnlocked: true,
         applicantCount,
         weeklyQuotaUsed: distinctJobIds.size,
-        weeklyQuotaRemaining:
-          weeklyQuotaMax >= 999999
-            ? 999999
-            : Math.max(0, weeklyQuotaMax - distinctJobIds.size),
+        weeklyQuotaRemaining: getRemainingQuota(distinctJobIds.size),
         weeklyQuotaMax,
         nextResetDate: nextWeekReset.toISOString(),
         isPremium: true,
@@ -1357,8 +1457,8 @@ export class JobsService {
       isUnlocked: true,
       applicantCount,
       weeklyQuotaUsed: distinctJobIds.size,
-      weeklyQuotaRemaining: Math.max(0, 5 - distinctJobIds.size),
-      weeklyQuotaMax: 5,
+      weeklyQuotaRemaining: getRemainingQuota(distinctJobIds.size),
+      weeklyQuotaMax,
       nextResetDate: nextWeekReset.toISOString(),
       isPremium: true,
       isAdminOrHr: false,
@@ -1374,6 +1474,11 @@ export class JobsService {
       lon: number;
       radiusKm: number;
       query?: string;
+      level?: string;
+      workingModel?: string;
+      minSalary?: number;
+      maxSalary?: number;
+      negotiable?: boolean;
       page?: number;
       limit?: number;
     },
@@ -1405,23 +1510,59 @@ export class JobsService {
     const qb = this.activeJobQueryService
       .createActiveQuery()
       .andWhere(
-        '(job."locationPoint" IS NOT NULL OR "canonicalCompany"."location" IS NOT NULL)',
-      )
-      .andWhere(
-        `ST_DWithin(
-          COALESCE(job."locationPoint", "canonicalCompany"."location")::geography,
-          ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
-          :radiusMeters
+        `(
+          (job."locationPoint" IS NOT NULL AND ST_DWithin(
+            job."locationPoint"::geography,
+            ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+            :radiusMeters
+          ))
+          OR
+          (job."locationPoint" IS NULL AND "canonicalCompany"."location" IS NOT NULL AND ST_DWithin(
+            "canonicalCompany"."location"::geography,
+            ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+            :radiusMeters
+          ))
         )`,
         { lon: params.lon, lat: params.lat, radiusMeters },
       );
 
     if (params.query && params.query.trim()) {
-      const q = `%${params.query.trim()}%`;
+      const normalizedQ = `%${normalizeVietnameseKeyword(params.query.trim())}%`;
       qb.andWhere(
-        `(job.name ILIKE :q OR job.description ILIKE :q OR job.company->>'name' ILIKE :q)`,
-        { q },
+        `(${sqlFoldVietnamese('job.name')} LIKE :qNorm OR ${sqlFoldVietnamese('job.description')} LIKE :qNorm OR ${sqlFoldVietnamese("job.company->>'name'")} LIKE :qNorm OR ${sqlFoldVietnamese('job.location')} LIKE :qNorm)`,
+        { qNorm: normalizedQ },
       );
+    }
+
+    if (params.level && params.level.trim() && params.level.trim() !== 'Tất cả cấp bậc') {
+      qb.andWhere('LOWER(job.level) LIKE :levelFilter', {
+        levelFilter: `%${params.level.trim().toLowerCase()}%`,
+      });
+    }
+
+    if (
+      params.workingModel &&
+      params.workingModel.trim() &&
+      params.workingModel.trim() !== 'Tất cả hình thức'
+    ) {
+      qb.andWhere('LOWER(job."workingModel") LIKE :workingModelFilter', {
+        workingModelFilter: `%${params.workingModel.trim().toLowerCase()}%`,
+      });
+    }
+
+    if (params.negotiable === true) {
+      qb.andWhere('(job.salary IS NULL OR job.salary <= 0)');
+    } else {
+      if (params.minSalary != null && Number.isFinite(params.minSalary)) {
+        qb.andWhere('job.salary >= :minSalary', {
+          minSalary: Number(params.minSalary),
+        });
+      }
+      if (params.maxSalary != null && Number.isFinite(params.maxSalary)) {
+        qb.andWhere('job.salary <= :maxSalary', {
+          maxSalary: Number(params.maxSalary),
+        });
+      }
     }
 
     const total = await qb.getCount();

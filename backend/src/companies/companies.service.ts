@@ -4,8 +4,11 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import { Repository } from 'typeorm';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -29,6 +32,8 @@ import {
 } from 'src/notifications/entities/notification.entity';
 import { ActiveJobQueryService } from 'src/active-jobs/active-job-query.service';
 import { JobIndexingService } from 'src/job-indexing/job-indexing.service';
+import { ElasticsearchService } from 'src/elasticsearch/elasticsearch.service';
+import { JobSyncPayload } from 'src/elasticsearch/job-sync.processor';
 
 import { User, PremiumPlan } from 'src/users/entities/user.entity';
 
@@ -57,6 +62,13 @@ export class CompaniesService {
     private readonly activeJobQueryService: ActiveJobQueryService,
 
     private readonly jobIndexingService: JobIndexingService,
+
+    @Optional()
+    private readonly elasticsearchService?: ElasticsearchService,
+
+    @Optional()
+    @InjectQueue('job-sync-es')
+    private readonly jobSyncQueue?: Queue<JobSyncPayload>,
   ) {}
 
   // Create a new company (Admin only), invalidate Redis cache
@@ -400,10 +412,12 @@ export class CompaniesService {
     for (const job of jobs) {
       const updatedCompany = { ...job.company, isActive: newActiveStatus };
       await this.jobRepo.update(job._id, { company: updatedCompany });
-      await this.jobIndexingService.enqueue(job._id);
+      job.company = updatedCompany;
+      await this.syncSingleCompanyJob(job, 'sync-job');
     }
 
     await this.redisService.invalidateCompaniesCache();
+    await this.redisService.invalidateJobsCache();
 
     // Notify all HRs in company
     const hrsInCompany = await this.usersService.findAllByCompanyId(companyId);
@@ -559,22 +573,36 @@ export class CompaniesService {
     }
 
     const result = await this.companyRepo.update(id, updatePayload);
+    const updatedCompany = await this.companyRepo.findOne({ where: { _id: id } });
 
-    if (updatePayload.location) {
-      await this.jobRepo
-        .createQueryBuilder()
-        .update(Job)
-        .set({
-          lat: updatePayload.lat,
-          lon: updatePayload.lon,
-          locationPoint: updatePayload.location,
-        })
-        .where("company->>'_id' = :companyId", { companyId: id })
-        .andWhere('isDeleted = false')
-        .execute();
+    const companyJobs = await this.jobRepo
+      .createQueryBuilder('job')
+      .where("job.company->>'_id' = :companyId", { companyId: id })
+      .andWhere('job.isDeleted = false')
+      .getMany();
+
+    if (updatedCompany && companyJobs.length > 0) {
+      const snapshotUpdate = {
+        _id: updatedCompany._id,
+        name: updatedCompany.name,
+        logo: updatedCompany.logo,
+        isActive: updatedCompany.isActive,
+        scale: updatedCompany.scale,
+        address: updatedCompany.address,
+      };
+      for (const job of companyJobs) {
+        const jobPatch: any = { company: snapshotUpdate };
+        if (updatePayload.location) {
+          jobPatch.lat = updatePayload.lat;
+          jobPatch.lon = updatePayload.lon;
+          jobPatch.locationPoint = updatePayload.location;
+        }
+        await this.jobRepo.update(job._id, jobPatch);
+      }
     }
 
     await this.redisService.invalidateCompaniesCache();
+    await this.redisService.invalidateJobsCache();
     await this.enqueueCompanyJobs(id);
     return result;
   }
@@ -594,6 +622,7 @@ export class CompaniesService {
     if (!company) throw new BadRequestException('Company not found');
 
     await this.companyRepo.update(id, {
+      isActive: false,
       isDeleted: true,
       deletedAt: new Date(),
       deletedBy: {
@@ -604,16 +633,50 @@ export class CompaniesService {
 
     const result = await this.companyRepo.softDelete(id);
     await this.redisService.invalidateCompaniesCache();
-    await this.enqueueCompanyJobs(id);
+    await this.redisService.invalidateJobsCache();
+    await this.enqueueCompanyJobs(id, 'delete-job');
     return result;
   }
 
-  private async enqueueCompanyJobs(companyId: string): Promise<void> {
+  private async syncSingleCompanyJob(
+    job: Job,
+    action: 'sync-job' | 'delete-job' = 'sync-job',
+  ): Promise<void> {
+    await this.jobIndexingService.enqueue(job._id);
+    try {
+      if (this.jobSyncQueue) {
+        await this.jobSyncQueue.add(
+          action,
+          { jobId: job._id },
+          {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: true,
+          },
+        );
+      } else if (this.elasticsearchService) {
+        if (action === 'delete-job') {
+          await this.elasticsearchService.deleteJob(job._id);
+        } else {
+          await this.elasticsearchService.indexJob(job);
+        }
+      }
+    } catch {
+      // Keep company update resilient when queue/ES is unavailable
+    }
+  }
+
+  private async enqueueCompanyJobs(
+    companyId: string,
+    action: 'sync-job' | 'delete-job' = 'sync-job',
+  ): Promise<void> {
     const jobs = await this.jobRepo
       .createQueryBuilder('job')
       .where("job.company->>'_id' = :companyId", { companyId })
       .getMany();
-    for (const job of jobs) await this.jobIndexingService.enqueue(job._id);
+    for (const job of jobs) {
+      await this.syncSingleCompanyJob(job, action);
+    }
   }
 
   async countCompanies() {

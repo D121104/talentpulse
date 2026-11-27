@@ -18,48 +18,17 @@ interface JobSearchBarProps {
   }) => void;
 }
 
-export const LOCATIONS = [
-  'Tất cả địa điểm',
-  'Hà Nội',
-  'Hồ Chí Minh',
-  'Đà Nẵng',
-  'Cần Thơ',
-  'Hải Phòng',
-  'Bình Dương',
-];
-
-export const LEVELS = [
-  'Tất cả cấp bậc',
-  'Intern',
-  'Fresher',
-  'Junior',
-  'Middle',
-  'Senior',
-  'Lead',
-  'Manager',
-];
-
-export const SALARY_RANGES = [
-  { label: 'Tất cả mức lương', value: '' },
-  { label: 'Dưới 10 triệu', value: '0-10000000' },
-  { label: '10 - 15 triệu', value: '10000000-15000000' },
-  { label: '15 - 20 triệu', value: '15000000-20000000' },
-  { label: '20 - 30 triệu', value: '20000000-30000000' },
-  { label: '30 - 50 triệu', value: '30000000-50000000' },
-  { label: 'Trên 50 triệu', value: '50000000-999999999' },
-  { label: 'Thỏa thuận', value: 'negotiable' },
-];
-
-export const TRENDING_TAGS = [
+const TRENDING_TAGS = [
   'Fullstack',
   'ReactJS',
-  'NodeJS',
   'Python',
   'Java',
-  'Golang',
+  'UI/UX',
+  'Marketing',
+  'Business Analyst',
   'DevOps',
-  'Docker',
-  'AWS',
+  'Bất động sản',
+  'Sales',
   'Fresher',
   'Senior',
 ];
@@ -169,11 +138,11 @@ export default function JobSearchBar({
         onSubmit={handleSubmit}
         className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-xl shadow-blue-500/5 dark:shadow-black/30 border border-slate-200/80 dark:border-slate-800 p-2.5 sm:p-3 transition-all"
       >
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 sm:gap-3 items-center">
+        <div className="grid grid-cols-1 md:grid-cols-12 lg:flex lg:items-center gap-2.5">
           {/* Main Keyword Input */}
           <div
             ref={searchContainerRef}
-            className="relative md:col-span-4 flex items-center bg-slate-50 dark:bg-slate-800/70 rounded-xl px-3.5 py-2.5 border border-slate-200/60 dark:border-slate-700/60 focus-within:border-primary focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-2 focus-within:ring-primary/20 transition-all"
+            className="relative md:col-span-7 lg:flex-1 lg:min-w-[230px] flex items-center bg-slate-50 dark:bg-slate-800/70 rounded-xl px-3.5 py-2.5 border border-slate-200/60 dark:border-slate-700/60 focus-within:border-primary focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-2 focus-within:ring-primary/20 transition-all"
           >
             <Search className="w-4 h-4 text-primary shrink-0 mr-2.5" />
             <input
@@ -192,11 +161,12 @@ export default function JobSearchBar({
             {query && (
               <button
                 type="button"
+                aria-label="Xóa từ khóa"
                 onClick={() => {
                   setQuery('');
                   setSuggestions([]);
                 }}
-                className="p-1 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -214,7 +184,7 @@ export default function JobSearchBar({
                     key={idx}
                     type="button"
                     onClick={() => handleSelectSuggestion(item)}
-                    className="w-full text-left px-3.5 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-primary/10 hover:text-primary dark:hover:bg-primary/20 transition-colors flex items-center gap-2"
+                    className="w-full text-left px-3.5 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-primary/10 hover:text-primary dark:hover:bg-primary/20 transition-colors flex items-center gap-2 cursor-pointer"
                   >
                     <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                     <span className="truncate">{item}</span>
@@ -224,8 +194,8 @@ export default function JobSearchBar({
             )}
           </div>
 
-          {/* Location Select (2-column popup dropdown) */}
-          <div className="md:col-span-3">
+          {/* Location Select (Featured Cities Dropdown) */}
+          <div className="md:col-span-5 lg:w-[195px] xl:w-[215px] shrink-0">
             <LocationDropdown
               value={location}
               onChange={(newLoc) => {
@@ -240,8 +210,8 @@ export default function JobSearchBar({
             />
           </div>
 
-          {/* Experience / Level Select (Custom Checkbox Dropdown) */}
-          <div className="md:col-span-2">
+          {/* Experience / Level Select */}
+          <div className="md:col-span-5 lg:w-[172px] xl:w-[184px] shrink-0">
             <LevelDropdown
               value={level}
               onChange={(newLevel) => {
@@ -256,8 +226,8 @@ export default function JobSearchBar({
             />
           </div>
 
-          {/* Salary Range Select (Custom Checkbox & Range Dropdown) */}
-          <div className="md:col-span-2">
+          {/* Salary Range Select */}
+          <div className="md:col-span-5 lg:w-[184px] xl:w-[198px] shrink-0">
             <SalaryDropdown
               value={salaryRange}
               onChange={(newSalary) => {
@@ -273,13 +243,13 @@ export default function JobSearchBar({
           </div>
 
           {/* Submit Button */}
-          <div className="md:col-span-1">
+          <div className="md:col-span-2 lg:w-auto shrink-0">
             <button
               type="submit"
-              className="w-full py-2.5 px-4 bg-primary hover:bg-primary-dark active:scale-[0.98] text-white text-sm font-semibold rounded-xl transition-all shadow-md shadow-primary/25 hover:shadow-primary/35 flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+              className="w-full py-2.5 px-4 bg-primary hover:bg-primary-dark active:scale-95 text-white text-sm font-semibold rounded-xl transition-all shadow-md shadow-primary/25 hover:shadow-primary/35 flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
             >
-              <Search className="w-4 h-4" />
-              <span className="md:hidden">Tìm việc</span>
+              <Search className="w-4 h-4 shrink-0" />
+              <span>Tìm việc</span>
             </button>
           </div>
         </div>
@@ -296,7 +266,7 @@ export default function JobSearchBar({
             key={tag}
             type="button"
             onClick={() => handleQuickTagClick(tag)}
-            className={`text-xs font-medium px-2.5 py-1 rounded-lg border transition-all ${
+            className={`text-xs font-medium px-2.5 py-1 rounded-lg border transition-all cursor-pointer active:scale-95 ${
               query.toLowerCase() === tag.toLowerCase()
                 ? 'bg-primary text-white border-primary shadow-sm shadow-primary/20'
                 : 'bg-white/80 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 border-slate-200/80 dark:border-slate-700/80 hover:border-primary hover:text-primary dark:hover:border-primary'

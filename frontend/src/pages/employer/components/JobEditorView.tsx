@@ -1,27 +1,15 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
   Briefcase,
   Building2,
   Calendar,
-  Check,
-  CheckCircle2,
-  Database,
   DollarSign,
-  Gift,
-  GraduationCap,
-  Layers,
+  FileText,
   Loader2,
   MapPin,
-  Plus,
   Save,
-  Search,
-  Sparkles,
-  Tag,
-  X,
-  Zap,
 } from 'lucide-react';
 import {
   employerApi,
@@ -32,6 +20,8 @@ import {
 import { useAuth } from '../../../auth/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { RichTextEditor } from '../../../components/common/RichTextEditor';
+import LocationMapPicker from '../../../components/maps/LocationMapPicker';
+import TagCombobox from '../../../components/employer/TagCombobox';
 
 export interface JobFormData {
   name: string;
@@ -45,6 +35,8 @@ export interface JobFormData {
   categories: string[];
   description: string;
   location: string;
+  lat?: number | null;
+  lon?: number | null;
   startDate: string;
   endDate: string;
   isActive: boolean;
@@ -59,7 +51,7 @@ interface JobEditorViewProps {
   onCancel: () => void;
 }
 
-const JOB_LEVELS = [
+const JOB_LEVEL_OPTIONS = [
   { value: 'INTERN', label: 'Thực tập sinh (Intern)' },
   { value: 'FRESHER', label: 'Mới đi làm (Fresher)' },
   { value: 'JUNIOR', label: 'Junior (1 - 2 năm)' },
@@ -69,13 +61,13 @@ const JOB_LEVELS = [
   { value: 'MANAGER', label: 'Quản lý (Manager)' },
 ];
 
-const WORKING_MODELS = [
-  { value: 'Làm việc tại văn phòng / Onsite', label: 'Tại văn phòng / Onsite' },
-  { value: 'Linh hoạt / Hybrid', label: 'Linh hoạt / Hybrid' },
-  { value: 'Làm từ xa / Remote', label: 'Làm từ xa / Remote' },
+const WORKING_MODEL_OPTIONS = [
+  { value: 'Làm việc tại văn phòng / Onsite', label: 'Onsite (Tại văn phòng)' },
+  { value: 'Linh hoạt / Hybrid', label: 'Hybrid (Linh hoạt)' },
+  { value: 'Làm từ xa / Remote', label: 'Remote (Làm từ xa)' },
 ];
 
-const EDUCATION_LEVELS = [
+const EDUCATION_OPTIONS = [
   { value: 'Không yêu cầu', label: 'Không yêu cầu' },
   { value: 'Trung cấp', label: 'Trung cấp' },
   { value: 'Cao đẳng', label: 'Cao đẳng' },
@@ -106,33 +98,23 @@ const SUGGESTED_CATEGORIES = [
   'QA / Tester',
 ];
 
-const QUICK_LOCATIONS = [
-  'Hà Nội',
-  'TP. Hồ Chí Minh',
-  'Đà Nẵng',
-  'Cần Thơ',
-  'Hải Phòng',
-  'Remote / Làm từ xa',
-  'Hybrid / Linh hoạt',
-];
+function normalizeJobLevel(raw?: string): string {
+  if (!raw) return 'MIDDLE';
+  const upper = raw.trim().toUpperCase();
+  const matched = JOB_LEVEL_OPTIONS.find((item) => item.value === upper);
+  return matched ? matched.value : raw.trim();
+}
 
-const DEFAULT_FALLBACK_SKILLS = [
-  'React',
-  'TypeScript',
-  'Node.js',
-  'NestJS',
-  'PostgreSQL',
-  'TailwindCSS',
-  'Next.js',
-  'Python',
-  'Java',
-  'Docker',
-  'Redis',
-  'AWS',
-  'Figma',
-  'Golang',
-  'Vue.js',
-];
+function normalizeWorkingModel(raw?: string): string {
+  if (!raw) return WORKING_MODEL_OPTIONS[0].value;
+  const lower = raw.trim().toLowerCase();
+  if (lower.includes('remote')) return 'Làm từ xa / Remote';
+  if (lower.includes('hybrid')) return 'Linh hoạt / Hybrid';
+  if (lower.includes('onsite') || lower.includes('văn phòng')) {
+    return 'Làm việc tại văn phòng / Onsite';
+  }
+  return raw.trim();
+}
 
 export function JobEditorView({
   company,
@@ -150,21 +132,23 @@ export function JobEditorView({
     initialData || {
       name: editingJob?.name || '',
       skills: editingJob?.skills || ['React', 'TypeScript'],
-      salary: editingJob?.salary || 15000000,
+      salary: editingJob?.salary ?? 15000000,
       quantity: editingJob?.quantity || 1,
-      level: editingJob?.level || 'MIDDLE',
-      workingModel: editingJob?.workingModel || 'Làm việc tại văn phòng / Onsite',
+      level: normalizeJobLevel(editingJob?.level),
+      workingModel: normalizeWorkingModel(editingJob?.workingModel),
       education: editingJob?.education || 'Đại học trở lên',
       benefits:
         editingJob?.benefits && editingJob.benefits.length > 0
           ? editingJob.benefits
-          : ['Bảo hiểm xã hội', 'Du lịch hàng năm', 'Thưởng tháng 13'],
+          : ['Bảo hiểm xã hội', 'Thưởng tháng 13'],
       categories:
         editingJob?.categories && editingJob.categories.length > 0
           ? editingJob.categories
           : ['Công nghệ Thông tin', 'Software Engineering'],
       description: editingJob?.description || '',
-      location: editingJob?.location || company?.address || 'Hà Nội',
+      location: editingJob?.location || company?.address || '',
+      lat: editingJob?.lat ?? company?.lat ?? null,
+      lon: editingJob?.lon ?? company?.lon ?? null,
       startDate: editingJob?.startDate
         ? new Date(editingJob.startDate).toISOString().split('T')[0]
         : new Date().toISOString().split('T')[0],
@@ -175,96 +159,57 @@ export function JobEditorView({
     },
   );
 
-  const [benefitInput, setBenefitInput] = useState('');
-  const [categoryInput, setCategoryInput] = useState('');
+  const hasEditedLocationRef = useRef(Boolean(editingJob || initialData));
 
-  const handleAddBenefit = (b: string) => {
-    const trimmed = b.trim();
-    if (!trimmed) return;
-    if (!formData.benefits.some((item) => item.toLowerCase() === trimmed.toLowerCase())) {
-      setFormData((prev) => ({ ...prev, benefits: [...prev.benefits, trimmed] }));
-    }
-    setBenefitInput('');
-  };
-
-  const handleRemoveBenefit = (b: string) => {
+  // Sync company HQ location asynchronously when creating a new job
+  useEffect(() => {
+    if (editingJob || initialData || !company || hasEditedLocationRef.current) return;
     setFormData((prev) => ({
       ...prev,
-      benefits: prev.benefits.filter((item) => item !== b),
+      location: company.address || prev.location || '',
+      lat: company.lat ?? prev.lat ?? null,
+      lon: company.lon ?? prev.lon ?? null,
     }));
-  };
+  }, [company, editingJob, initialData]);
 
-  const handleAddCategory = (c: string) => {
-    const trimmed = c.trim();
-    if (!trimmed) return;
-    if (!formData.categories.some((item) => item.toLowerCase() === trimmed.toLowerCase())) {
-      setFormData((prev) => ({ ...prev, categories: [...prev.categories, trimmed] }));
-    }
-    setCategoryInput('');
-  };
-
-  const handleRemoveCategory = (c: string) => {
-    setFormData((prev) => ({
-      ...prev,
-      categories: prev.categories.filter((item) => item !== c),
-    }));
-  };
-
-  // =========================================================================
-  // SKILLS FROM DATABASE & DEBOUNCE SEARCH STATE
-  // =========================================================================
+  // DB Skills search & auto-create
   const [dbSkills, setDbSkills] = useState<SkillItem[]>([]);
-  const [skillInput, setSkillInput] = useState('');
-  const [debouncedSkillInput, setDebouncedSkillInput] = useState('');
+  const [skillQuery, setSkillQuery] = useState('');
+  const [debouncedSkillQuery, setDebouncedSkillQuery] = useState('');
   const [isSearchingSkills, setIsSearchingSkills] = useState(false);
-  const [isCreatingSkill, setIsCreatingSkill] = useState(false);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
-  const skillInputRef = useRef<HTMLInputElement>(null);
-  const skillDropdownRef = useRef<HTMLDivElement>(null);
-
-  // 1. Initial Load of Skills from Database
   useEffect(() => {
     let isMounted = true;
-    const fetchInitialSkills = async () => {
-      try {
-        const res = await employerApi.getSkills({ pageSize: 100 }, accessToken || undefined);
-        if (isMounted && res?.result && Array.isArray(res.result)) {
+    void employerApi
+      .getSkills({ pageSize: 100 }, accessToken || undefined)
+      .then((res) => {
+        if (isMounted && Array.isArray(res?.result)) {
           setDbSkills(res.result);
         }
-      } catch (err) {
-        console.error('Failed to load initial skills from database', err);
-      }
-    };
+      })
+      .catch(() => undefined);
 
-    void fetchInitialSkills();
     return () => {
       isMounted = false;
     };
   }, [accessToken]);
 
-  // 2. Debounce skillInput changes (250ms)
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedSkillInput(skillInput.trim());
+      setDebouncedSkillQuery(skillQuery.trim());
     }, 250);
     return () => clearTimeout(timer);
-  }, [skillInput]);
+  }, [skillQuery]);
 
-  // 3. Search DB when debounced input changes
   useEffect(() => {
+    if (!debouncedSkillQuery) return;
     let isCurrent = true;
-    const searchSkillsInDb = async () => {
-      if (!debouncedSkillInput) return;
-      setIsSearchingSkills(true);
-      try {
-        const res = await employerApi.getSkills(
-          { name: debouncedSkillInput, pageSize: 30 },
-          accessToken || undefined,
-        );
-        if (isCurrent && res?.result && Array.isArray(res.result)) {
-          // Merge with existing skills in state without duplicating
+    setIsSearchingSkills(true);
+
+    void employerApi
+      .getSkills({ name: debouncedSkillQuery, pageSize: 30 }, accessToken || undefined)
+      .then((res) => {
+        if (isCurrent && Array.isArray(res?.result)) {
           setDbSkills((prev) => {
             const map = new Map<string, SkillItem>();
             prev.forEach((s) => map.set(s.name.toLowerCase(), s));
@@ -272,250 +217,147 @@ export function JobEditorView({
             return Array.from(map.values());
           });
         }
-      } catch (err) {
-        console.error('Failed to search skills in DB', err);
-      } finally {
-        if (isCurrent) {
-          setIsSearchingSkills(false);
-        }
-      }
-    };
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (isCurrent) setIsSearchingSkills(false);
+      });
 
-    void searchSkillsInDb();
     return () => {
       isCurrent = false;
     };
-  }, [debouncedSkillInput, accessToken]);
+  }, [debouncedSkillQuery, accessToken]);
 
-  // 4. Click outside dropdown listener
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        skillDropdownRef.current &&
-        !skillDropdownRef.current.contains(e.target as Node) &&
-        skillInputRef.current &&
-        !skillInputRef.current.contains(e.target as Node)
-      ) {
-        setIsDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const skillOptions = useMemo(
+    () => dbSkills.map((s) => ({ id: s._id, name: s.name })),
+    [dbSkills],
+  );
+  const benefitOptions = useMemo(
+    () => SUGGESTED_BENEFITS.map((name) => ({ name })),
+    [],
+  );
+  const categoryOptions = useMemo(
+    () => SUGGESTED_CATEGORIES.map((name) => ({ name })),
+    [],
+  );
 
-  // 5. Suggestions computation (matching existing skills + new skill option)
-  const suggestions = useMemo(() => {
-    const trimmed = skillInput.trim().toLowerCase();
-
-    // Match existing skills in DB
-    const matches = dbSkills.filter((s) =>
-      trimmed ? s.name.toLowerCase().includes(trimmed) : true,
-    );
-
-    // Check if there is an exact match
-    const hasExactMatch = dbSkills.some((s) => s.name.toLowerCase() === trimmed);
-
-    const list: Array<{ _id?: string; name: string; isNew?: boolean }> = matches.slice(0, 8);
-
-    // If user typed something not matching any existing skill in DB, add "Create New Skill" option
-    if (trimmed.length > 0 && !hasExactMatch) {
-      list.push({
-        name: skillInput.trim(),
-        isNew: true,
-      });
-    }
-
-    return list;
-  }, [dbSkills, skillInput]);
-
-  // 6. Handle Adding or Creating Skill
-  const handleSelectSkill = async (item: { name: string; isNew?: boolean }) => {
-    const targetName = item.name.trim();
+  const handleAddSkill = async (value: string, meta?: { isNew?: boolean }) => {
+    const targetName = value.trim();
     if (!targetName) return;
 
-    // Check if skill is already selected in the job form
-    const isAlreadyAdded = formData.skills.some(
-      (s) => s.toLowerCase() === targetName.toLowerCase(),
-    );
-
-    if (isAlreadyAdded) {
-      info(`Kỹ năng "${targetName}" đã có trong danh sách yêu cầu`);
-      setSkillInput('');
-      setIsDropdownOpen(false);
+    if (formData.skills.some((s) => s.toLowerCase() === targetName.toLowerCase())) {
+      info(`Kỹ năng "${targetName}" đã có trong danh sách`);
       return;
     }
 
-    // Case A: Create new skill in DB automatically
-    if (item.isNew) {
-      setIsCreatingSkill(true);
+    if (meta?.isNew && accessToken) {
       try {
-        if (accessToken) {
-          const created = await employerApi.createSkill({ name: targetName }, accessToken);
-          if (created && created._id) {
-            setDbSkills((prev) => [...prev, created]);
-          }
-          success(`✨ Đã tự động tạo kỹ năng mới "${targetName}" trong cơ sở dữ liệu hệ thống!`);
+        const created = await employerApi.createSkill({ name: targetName }, accessToken);
+        if (created?._id) {
+          setDbSkills((prev) => [...prev, created]);
         }
-      } catch (err: any) {
-        // If skill already existed on backend, still proceed gracefully
-        console.warn('Skill create response:', err?.message);
-      } finally {
-        setIsCreatingSkill(false);
+        success(`Đã thêm kỹ năng "${targetName}" vào hệ thống`);
+      } catch {
+        // Skill may already exist on backend; still add to job
       }
     }
 
-    // Add skill to Job form
-    setFormData((prev) => ({
-      ...prev,
-      skills: [...prev.skills, targetName],
-    }));
-
-    setSkillInput('');
-    setIsDropdownOpen(false);
-    setHighlightedIndex(-1);
-    skillInputRef.current?.focus();
+    setFormData((prev) => ({ ...prev, skills: [...prev.skills, targetName] }));
   };
 
-  const handleRemoveSkill = (skillToRemove: string) => {
-    setFormData((prev) => ({
-      ...prev,
-      skills: prev.skills.filter((s) => s !== skillToRemove),
-    }));
-  };
-
-  // Keyboard navigation for dropdown
-  const handleKeyDownSkill = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!isDropdownOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      setIsDropdownOpen(true);
-      return;
-    }
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setHighlightedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : 0));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : suggestions.length - 1));
-    } else if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault();
-      if (highlightedIndex >= 0 && highlightedIndex < suggestions.length) {
-        void handleSelectSkill(suggestions[highlightedIndex]);
-      } else if (skillInput.trim()) {
-        const exactMatch = dbSkills.find(
-          (s) => s.name.toLowerCase() === skillInput.trim().toLowerCase(),
-        );
-        if (exactMatch) {
-          void handleSelectSkill({ name: exactMatch.name });
-        } else {
-          void handleSelectSkill({ name: skillInput.trim(), isNew: true });
-        }
+  const handleAddTag = (field: 'benefits' | 'categories', value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    setFormData((prev) => {
+      if (prev[field].some((item) => item.toLowerCase() === trimmed.toLowerCase())) {
+        return prev;
       }
-    } else if (e.key === 'Escape') {
-      setIsDropdownOpen(false);
-    }
+      return { ...prev, [field]: [...prev[field], trimmed] };
+    });
   };
 
-  // Top suggested skills chips from DB or fallback
-  const topSuggestedSkills = useMemo(() => {
-    if (dbSkills.length > 0) {
-      return dbSkills.slice(0, 16).map((s) => s.name);
-    }
-    return DEFAULT_FALLBACK_SKILLS;
-  }, [dbSkills]);
-
-  // Readiness Checklist Calculation (For AI Job-Candidate Matching)
-  const checklist = useMemo(() => {
-    const isNameOk = formData.name.trim().length >= 5;
-    const isSkillsOk = formData.skills.length >= 2;
-    const isDescOk = formData.description.trim().length >= 40 && formData.description !== '<p></p>';
-    const isSalaryOk = Number(formData.salary) > 0;
-    const isLocationOk = formData.location.trim().length > 0;
-    const isDateOk = new Date(formData.endDate) > new Date(formData.startDate);
-
-    let score = 0;
-    if (isNameOk) score += 20;
-    if (isSkillsOk) score += 20;
-    if (isDescOk) score += 30;
-    if (isSalaryOk) score += 10;
-    if (isLocationOk) score += 10;
-    if (isDateOk) score += 10;
-
-    return {
-      isNameOk,
-      isSkillsOk,
-      isDescOk,
-      isSalaryOk,
-      isLocationOk,
-      isDateOk,
-      score,
-    };
-  }, [formData]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    void onSave(formData);
+  const handleRemoveTag = (field: 'skills' | 'benefits' | 'categories', value: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      [field]: prev[field].filter((item) => item !== value),
+    }));
   };
 
   const daysRemaining = useMemo(() => {
     const end = new Date(formData.endDate).getTime();
-    const now = new Date().getTime();
-    const diff = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+    const diff = Math.ceil((end - Date.now()) / (1000 * 60 * 60 * 24));
     return diff > 0 ? diff : 0;
   }, [formData.endDate]);
 
+  const hasCustomLevelOption = !JOB_LEVEL_OPTIONS.some(
+    (opt) => opt.value === formData.level,
+  );
+  const hasCustomWorkingModelOption = !WORKING_MODEL_OPTIONS.some(
+    (opt) => opt.value === formData.workingModel,
+  );
+  const hasCustomEducationOption = !EDUCATION_OPTIONS.some(
+    (opt) => opt.value === formData.education,
+  );
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.location.trim()) {
+      info('Vui lòng chọn địa điểm làm việc');
+      return;
+    }
+    if (
+      formData.startDate &&
+      formData.endDate &&
+      new Date(formData.endDate) <= new Date(formData.startDate)
+    ) {
+      info('Hạn nộp hồ sơ phải sau ngày bắt đầu tuyển dụng');
+      return;
+    }
+    void onSave(formData);
+  };
+
   return (
-    <div className="space-y-6 pb-16 animate-fade-in-up">
-      {/* ========================================================================= */}
-      {/* 1. TOP HEADER & BREADCRUMB BAR                                            */}
-      {/* ========================================================================= */}
+    <div className="space-y-5 pb-14">
+      {/* Compact Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4 dark:border-slate-800">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
             onClick={onCancel}
-            className="group flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-primary hover:bg-primary/5 hover:text-primary active:scale-95 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 cursor-pointer shadow-2xs"
-            title="Quay lại danh sách tin"
+            aria-label="Quay lại danh sách tin"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-primary hover:text-primary active:scale-95 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 cursor-pointer"
           >
-            <ArrowLeft className="h-5 w-5 transition group-hover:-translate-x-0.5" />
+            <ArrowLeft className="h-4.5 w-4.5" />
           </button>
 
-          <div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
-              <span
-                onClick={onCancel}
-                className="hover:text-primary cursor-pointer transition"
-              >
-                {t('employer.jobsTab.title', 'Chiến dịch tuyển dụng')}
-              </span>
-              <span>/</span>
-              <span className="text-primary font-bold">
-                {editingJob ? 'Chỉnh sửa tin' : 'Đăng tin mới'}
-              </span>
-            </div>
-            <h1 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white">
-              {editingJob
-                ? `Chỉnh sửa: ${editingJob.name}`
-                : 'Tạo chiến dịch / Đăng tin tuyển dụng mới'}
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white truncate">
+              {editingJob ? `Chỉnh sửa: ${editingJob.name}` : 'Đăng tin tuyển dụng mới'}
             </h1>
+            {company?.name && (
+              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 truncate">
+                <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                <span>{company.name}</span>
+              </p>
+            )}
           </div>
         </div>
 
-        {/* Action CTAs */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={onCancel}
             disabled={isSubmitting}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 active:scale-95 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 active:scale-95 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
           >
-            Hủy bỏ
+            Hủy
           </button>
 
           <button
             type="button"
             onClick={handleSubmit}
             disabled={isSubmitting}
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary to-primary-dark px-6 py-2.5 text-xs font-bold text-white shadow-lg shadow-primary/25 hover:from-primary-dark hover:to-primary active:scale-95 disabled:opacity-50 transition cursor-pointer"
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2 text-xs font-bold text-white shadow-md shadow-primary/20 hover:bg-primary-dark active:scale-95 disabled:opacity-50 transition cursor-pointer"
           >
             {isSubmitting ? (
               <>
@@ -536,563 +378,226 @@ export function JobEditorView({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* 2. MAIN 2-COLUMN EDITOR LAYOUT                                            */}
-      {/* ========================================================================= */}
+      {/* Main 2-Column Layout */}
       <form onSubmit={handleSubmit}>
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* --------------------------------------------------------------------- */}
-          {/* LEFT COLUMN: PRIMARY DETAILS & RICH TEXT CANVAS (8 COLS)             */}
-          {/* --------------------------------------------------------------------- */}
-          <div className="space-y-6 lg:col-span-8">
-            {/* Card 1: Job Title & Level */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-5 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary dark:bg-primary/20">
-                    <Briefcase className="h-4.5 w-4.5" />
-                  </span>
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                      1. Tiêu đề & Cấp bậc vị trí
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Tên vị trí rõ ràng giúp ứng viên tìm thấy nhanh hơn và tăng độ chính xác của AI Matching
-                    </p>
-                  </div>
-                </div>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-12 items-start">
+          {/* LEFT COLUMN (7 cols): Job Details & Description */}
+          <div className="space-y-5 lg:col-span-7">
+            <section className="rounded-2xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-5">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+                <Briefcase className="h-4.5 w-4.5 text-primary" />
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  Thông tin vị trí
+                </h2>
               </div>
 
-              <div className="space-y-4">
-                {/* Title Input */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {t('employer.jobsTab.jobNameLabel', 'Tiêu đề vị trí tuyển dụng')}{' '}
-                    <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="VD: Senior Fullstack React & Node.js Developer (Lương tới 40M)..."
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/10 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white transition"
-                  />
-                </div>
-
-                {/* Level Quick Select */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
-                    {t('employer.jobsTab.levelLabel', 'Cấp bậc ứng tuyển')}{' '}
-                    <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {JOB_LEVELS.map((lvl) => {
-                      const isSelected = formData.level === lvl.value;
-                      return (
-                        <button
-                          key={lvl.value}
-                          type="button"
-                          onClick={() => setFormData({ ...formData, level: lvl.value })}
-                          className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition active:scale-95 cursor-pointer ${
-                            isSelected
-                              ? 'bg-primary text-white shadow-md shadow-primary/20'
-                              : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
-                          }`}
-                        >
-                          {isSelected && <Check className="h-3.5 w-3.5" />}
-                          <span>{lvl.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Working Model Quick Select */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1.5">
-                    <Building2 className="h-3.5 w-3.5 text-primary" />
-                    <span>Hình thức làm việc</span>
-                    <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {WORKING_MODELS.map((model) => {
-                      const isSelected = formData.workingModel === model.value;
-                      return (
-                        <button
-                          key={model.value}
-                          type="button"
-                          onClick={() => setFormData({ ...formData, workingModel: model.value })}
-                          className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition active:scale-95 cursor-pointer ${
-                            isSelected
-                              ? 'bg-primary text-white shadow-md shadow-primary/20'
-                              : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
-                          }`}
-                        >
-                          {isSelected && <Check className="h-3.5 w-3.5" />}
-                          <span>{model.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Education Level Quick Select */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1.5">
-                    <GraduationCap className="h-3.5 w-3.5 text-primary" />
-                    <span>Yêu cầu học vấn</span>
-                    <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {EDUCATION_LEVELS.map((edu) => {
-                      const isSelected = formData.education === edu.value;
-                      return (
-                        <button
-                          key={edu.value}
-                          type="button"
-                          onClick={() => setFormData({ ...formData, education: edu.value })}
-                          className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition active:scale-95 cursor-pointer ${
-                            isSelected
-                              ? 'bg-primary text-white shadow-md shadow-primary/20'
-                              : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
-                          }`}
-                        >
-                          {isSelected && <Check className="h-3.5 w-3.5" />}
-                          <span>{edu.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 2: Skill Requirements Builder with Real-time DB Search & Auto-Create */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400">
-                    <Sparkles className="h-4.5 w-4.5" />
-                  </span>
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                      <span>2. Kỹ năng & Công nghệ yêu cầu</span>
-                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
-                        <Database className="h-3 w-3" />
-                        <span>Đồng bộ CSDL</span>
-                      </span>
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Gõ tên kỹ năng để tìm kiếm từ cơ sở dữ liệu. Nếu kỹ năng chưa có, hệ thống sẽ tự động tạo mới vào CSDL khi bạn thêm.
-                    </p>
-                  </div>
-                </div>
-
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-extrabold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                  {formData.skills.length} kỹ năng đã chọn
-                </span>
-              </div>
-
-              <div className="space-y-4">
-                {/* Autocomplete Input & Dropdown */}
-                <div className="relative">
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        ref={skillInputRef}
-                        type="text"
-                        value={skillInput}
-                        onFocus={() => setIsDropdownOpen(true)}
-                        onChange={(e) => {
-                          setSkillInput(e.target.value);
-                          setIsDropdownOpen(true);
-                          setHighlightedIndex(-1);
-                        }}
-                        onKeyDown={handleKeyDownSkill}
-                        placeholder="Nhập tên kỹ năng (vd: React, Docker, Python, Spring Boot)..."
-                        className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-10 py-2.5 text-sm text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/10 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white transition"
-                      />
-
-                      {/* Searching Spinner */}
-                      {(isSearchingSkills || isCreatingSkill) && (
-                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                        </div>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (skillInput.trim()) {
-                          const exact = dbSkills.find(
-                            (s) => s.name.toLowerCase() === skillInput.trim().toLowerCase(),
-                          );
-                          if (exact) {
-                            void handleSelectSkill({ name: exact.name });
-                          } else {
-                            void handleSelectSkill({ name: skillInput.trim(), isNew: true });
-                          }
-                        }
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white hover:bg-slate-800 active:scale-95 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 transition cursor-pointer shrink-0"
-                    >
-                      <Plus className="h-4 w-4" />
-                      <span>Thêm</span>
-                    </button>
-                  </div>
-
-                  {/* DEBOUNCED SEARCH DROPDOWN MENU */}
-                  <AnimatePresence>
-                    {isDropdownOpen && (
-                      <motion.div
-                        ref={skillDropdownRef}
-                        initial={{ opacity: 0, y: -4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        transition={{ duration: 0.15 }}
-                        className="absolute left-0 right-0 top-full z-50 mt-1.5 max-h-72 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-                      >
-                        <div className="flex items-center justify-between px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 dark:border-slate-800 mb-1">
-                          <span>Gợi ý từ Cơ sở dữ liệu ({dbSkills.length} kỹ năng)</span>
-                          {isSearchingSkills && (
-                            <span className="flex items-center gap-1 text-primary lowercase font-normal">
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              đang tìm...
-                            </span>
-                          )}
-                        </div>
-
-                        {suggestions.length > 0 ? (
-                          <div className="space-y-0.5">
-                            {suggestions.map((item, index) => {
-                              const isHighlighted = index === highlightedIndex;
-                              const isAlreadyAdded = formData.skills.some(
-                                (s) => s.toLowerCase() === item.name.toLowerCase(),
-                              );
-
-                              if (item.isNew) {
-                                return (
-                                  <button
-                                    key="__new_skill__"
-                                    type="button"
-                                    onClick={() => void handleSelectSkill(item)}
-                                    className={`flex w-full items-center justify-between rounded-xl p-3 text-left transition cursor-pointer border ${
-                                      isHighlighted
-                                        ? 'bg-amber-50 border-amber-300 dark:bg-amber-950/40 dark:border-amber-700'
-                                        : 'bg-amber-50/50 border-amber-200/80 hover:bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800/60 dark:hover:bg-amber-950/40'
-                                    }`}
-                                  >
-                                    <div className="flex items-center gap-2.5">
-                                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
-                                        <Sparkles className="h-4 w-4" />
-                                      </span>
-                                      <div>
-                                        <div className="text-xs font-bold text-amber-900 dark:text-amber-200">
-                                          Tạo mới kỹ năng: <strong className="text-amber-700 dark:text-amber-400 underline">{item.name}</strong>
-                                        </div>
-                                        <div className="text-[11px] text-amber-700/80 dark:text-amber-400/80">
-                                          Chưa có trong CSDL, hệ thống sẽ tự động lưu vào hệ thống
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <span className="rounded-lg bg-amber-600 px-2.5 py-1 text-[10px] font-extrabold text-white shadow-2xs">
-                                      + Tự động tạo & Thêm
-                                    </span>
-                                  </button>
-                                );
-                              }
-
-                              return (
-                                <button
-                                  key={item._id || item.name}
-                                  type="button"
-                                  onClick={() => void handleSelectSkill(item)}
-                                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-medium text-left transition cursor-pointer ${
-                                    isHighlighted
-                                      ? 'bg-primary/10 text-primary font-bold dark:bg-primary/20 dark:text-primary-light'
-                                      : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <Tag className="h-3.5 w-3.5 text-slate-400" />
-                                    <span>{item.name}</span>
-                                  </div>
-
-                                  {isAlreadyAdded ? (
-                                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
-                                      <Check className="h-3.5 w-3.5" />
-                                      <span>Đã thêm</span>
-                                    </span>
-                                  ) : (
-                                    <span className="text-[10px] font-semibold text-slate-400 group-hover:text-primary">
-                                      Nhấn để thêm
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="py-6 text-center text-xs text-slate-400">
-                            Không tìm thấy kỹ năng phù hợp trong CSDL
-                          </div>
-                        )}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                {/* Selected Skills Badges */}
-                {formData.skills.length > 0 ? (
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <AnimatePresence>
-                      {formData.skills.map((skill) => (
-                        <motion.span
-                          key={skill}
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.8 }}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-1.5 text-xs font-bold text-primary border border-blue-200/80 dark:bg-blue-950/40 dark:border-blue-800 dark:text-blue-300 shadow-2xs"
-                        >
-                          <span>{skill}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveSkill(skill)}
-                            className="rounded-full p-0.5 hover:bg-blue-200/60 dark:hover:bg-blue-800 transition cursor-pointer"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </motion.span>
-                      ))}
-                    </AnimatePresence>
-                  </div>
-                ) : (
-                  <p className="text-xs italic text-amber-600 dark:text-amber-400">
-                    Vui lòng chọn hoặc thêm ít nhất 1 kỹ năng yêu cầu cho vị trí này.
-                  </p>
-                )}
-
-                {/* Quick Suggestion Skills from DB */}
-                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2">
-                    Kỹ năng phổ biến có trong CSDL:
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {topSuggestedSkills.map((sk) => {
-                      const isAdded = formData.skills.some(
-                        (s) => s.toLowerCase() === sk.toLowerCase(),
-                      );
-                      return (
-                        <button
-                          key={sk}
-                          type="button"
-                          disabled={isAdded}
-                          onClick={() => void handleSelectSkill({ name: sk })}
-                          className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition cursor-pointer ${
-                            isAdded
-                              ? 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-800 dark:text-slate-600 cursor-default'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900 active:scale-95 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
-                          }`}
-                        >
-                          {isAdded ? `✓ ${sk}` : `+ ${sk}`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 3: Benefits & Perks Builder */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-500/10 text-purple-600 dark:bg-purple-500/20 dark:text-purple-400">
-                    <Gift className="h-4.5 w-4.5" />
-                  </span>
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                      <span>3. Quyền lợi & Chế độ đãi ngộ</span>
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Các chính sách phúc lợi hấp dẫn giúp tin tuyển dụng thu hút nhiều ứng viên tiềm năng hơn
-                    </p>
-                  </div>
-                </div>
-
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-extrabold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                  {formData.benefits.length} quyền lợi
-                </span>
-              </div>
-
-              <div className="space-y-4">
-                {/* Input + Add */}
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={benefitInput}
-                    onChange={(e) => setBenefitInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddBenefit(benefitInput);
-                      }
-                    }}
-                    placeholder="Nhập quyền lợi (vd: Thưởng dự án, Cấp MacBook Pro, Du lịch Châu Âu)..."
-                    className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/10 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white transition"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleAddBenefit(benefitInput)}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white hover:bg-slate-800 active:scale-95 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 transition cursor-pointer shrink-0"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Thêm</span>
-                  </button>
-                </div>
-
-                {/* Selected Benefits Badges */}
-                {formData.benefits.length > 0 ? (
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <AnimatePresence>
-                      {formData.benefits.map((benefit) => (
-                        <motion.span
-                          key={benefit}
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.8 }}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-purple-50 px-3 py-1.5 text-xs font-bold text-purple-700 border border-purple-200/80 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-300 shadow-2xs"
-                        >
-                          <span>{benefit}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveBenefit(benefit)}
-                            className="rounded-full p-0.5 hover:bg-purple-200/60 dark:hover:bg-purple-800 transition cursor-pointer"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </motion.span>
-                      ))}
-                    </AnimatePresence>
-                  </div>
-                ) : (
-                  <p className="text-xs italic text-amber-600 dark:text-amber-400">
-                    Chưa có quyền lợi nào được thêm. Hãy chọn các gợi ý bên dưới hoặc tự nhập.
-                  </p>
-                )}
-
-                {/* Suggested Benefits */}
-                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2">
-                    Gợi ý quyền lợi phổ biến:
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {SUGGESTED_BENEFITS.map((sb) => {
-                      const isAdded = formData.benefits.some(
-                        (b) => b.toLowerCase() === sb.toLowerCase(),
-                      );
-                      return (
-                        <button
-                          key={sb}
-                          type="button"
-                          disabled={isAdded}
-                          onClick={() => handleAddBenefit(sb)}
-                          className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition cursor-pointer ${
-                            isAdded
-                              ? 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-800 dark:text-slate-600 cursor-default'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900 active:scale-95 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
-                          }`}
-                        >
-                          {isAdded ? `✓ ${sb}` : `+ ${sb}`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 4: Word-like TipTap Rich Text Description */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400">
-                    <Layers className="h-4.5 w-4.5" />
-                  </span>
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                      4. Mô tả chi tiết, Yêu cầu & Trách nhiệm
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Soạn thảo trực tiếp với đầy đủ phông chữ, cỡ chữ, bảng biểu, màu sắc và gạch đầu dòng chuẩn Microsoft Word
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <RichTextEditor
-                  value={formData.description}
-                  onChange={(html) => setFormData((prev) => ({ ...prev, description: html }))}
-                  placeholder="Nhập mô tả chi tiết trách nhiệm công việc, yêu cầu chuyên môn, quyền lợi & chế độ đãi ngộ dành cho vị trí tuyển dụng này..."
-                  minHeight="380px"
+              {/* Job Title */}
+              <div>
+                <label
+                  htmlFor="job-title-input"
+                  className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5"
+                >
+                  {t('employer.jobsTab.jobNameLabel', 'Tiêu đề vị trí')}{' '}
+                  <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  id="job-title-input"
+                  type="text"
+                  required
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="VD: Senior Fullstack React & Node.js Developer"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white transition"
                 />
               </div>
-            </div>
-          </div>
 
-          {/* --------------------------------------------------------------------- */}
-          {/* RIGHT COLUMN: METADATA & SETTINGS SIDEBAR (4 COLS)                    */}
-          {/* --------------------------------------------------------------------- */}
-          <div className="space-y-6 lg:col-span-4">
-            {/* Card A: Salary & Quantity */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-4 flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
-                <DollarSign className="h-4 w-4 text-emerald-600" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Mức lương & Chỉ tiêu
-                </h3>
-              </div>
-
-              <div className="space-y-4">
-                {/* Monthly Salary */}
+              {/* 3 Compact Select Inputs */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('employer.jobsTab.salaryLabel', 'Mức lương hàng tháng (VNĐ)')}{' '}
+                  <label
+                    htmlFor="job-level-select"
+                    className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5"
+                  >
+                    {t('employer.jobsTab.levelLabel', 'Cấp bậc')}{' '}
                     <span className="text-rose-500">*</span>
                   </label>
+                  <select
+                    id="job-level-select"
+                    value={formData.level}
+                    onChange={(e) => setFormData({ ...formData, level: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs sm:text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white cursor-pointer"
+                  >
+                    {hasCustomLevelOption && formData.level && (
+                      <option value={formData.level}>{formData.level}</option>
+                    )}
+                    {JOB_LEVEL_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="job-working-model-select"
+                    className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5"
+                  >
+                    Hình thức làm việc <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    id="job-working-model-select"
+                    value={formData.workingModel}
+                    onChange={(e) => setFormData({ ...formData, workingModel: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs sm:text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white cursor-pointer"
+                  >
+                    {hasCustomWorkingModelOption && formData.workingModel && (
+                      <option value={formData.workingModel}>{formData.workingModel}</option>
+                    )}
+                    {WORKING_MODEL_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="job-education-select"
+                    className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5"
+                  >
+                    Học vấn <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    id="job-education-select"
+                    value={formData.education}
+                    onChange={(e) => setFormData({ ...formData, education: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs sm:text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white cursor-pointer"
+                  >
+                    {hasCustomEducationOption && formData.education && (
+                      <option value={formData.education}>{formData.education}</option>
+                    )}
+                    {EDUCATION_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Skills Autocomplete */}
+              <TagCombobox
+                label="Kỹ năng yêu cầu"
+                required
+                placeholder="Tìm hoặc thêm kỹ năng (VD: React, Node.js, Docker)..."
+                selected={formData.skills}
+                options={skillOptions}
+                onAdd={handleAddSkill}
+                onRemove={(val) => handleRemoveTag('skills', val)}
+                onQueryChange={setSkillQuery}
+                isLoading={isSearchingSkills}
+                createActionLabel="Tạo kỹ năng mới"
+                chipTone="blue"
+                emptyHint="Chọn ít nhất 1 kỹ năng yêu cầu."
+              />
+
+              {/* Benefits & Categories Comboboxes side-by-side */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1 border-t border-slate-100 dark:border-slate-800">
+                <TagCombobox
+                  label="Quyền lợi"
+                  placeholder="Chọn hoặc nhập quyền lợi..."
+                  selected={formData.benefits}
+                  options={benefitOptions}
+                  onAdd={(val) => handleAddTag('benefits', val)}
+                  onRemove={(val) => handleRemoveTag('benefits', val)}
+                  chipTone="purple"
+                />
+
+                <TagCombobox
+                  label="Danh mục nghề"
+                  placeholder="Chọn hoặc nhập ngành nghề..."
+                  selected={formData.categories}
+                  options={categoryOptions}
+                  onAdd={(val) => handleAddTag('categories', val)}
+                  onRemove={(val) => handleRemoveTag('categories', val)}
+                  chipTone="slate"
+                />
+              </div>
+            </section>
+
+            {/* Description Editor */}
+            <section className="rounded-2xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+                <FileText className="h-4.5 w-4.5 text-emerald-600" />
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  Mô tả công việc & Yêu cầu <span className="text-rose-500">*</span>
+                </h2>
+              </div>
+
+              <RichTextEditor
+                value={formData.description}
+                onChange={(html) => setFormData((prev) => ({ ...prev, description: html }))}
+                placeholder="Mô tả trách nhiệm công việc, yêu cầu chuyên môn và chế độ đãi ngộ..."
+                minHeight="320px"
+              />
+            </section>
+          </div>
+
+          {/* RIGHT COLUMN (5 cols): Salary, Dates & Interactive Map Location */}
+          <div className="space-y-5 lg:col-span-5">
+            {/* Compensation, Quantity & Schedule */}
+            <section className="rounded-2xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+                <DollarSign className="h-4.5 w-4.5 text-emerald-600" />
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  Mức lương & Thời hạn
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <div className="flex items-center justify-between gap-1 mb-1.5">
+                    <label
+                      htmlFor="job-salary-input"
+                      className="text-xs font-bold text-slate-700 dark:text-slate-300"
+                    >
+                      Mức lương (VNĐ) <span className="text-rose-500">*</span>
+                    </label>
+                    <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                      {formData.salary > 0
+                        ? `${formData.salary.toLocaleString('vi-VN')} ₫`
+                        : 'Thỏa thuận'}
+                    </span>
+                  </div>
                   <input
+                    id="job-salary-input"
                     type="number"
                     min={0}
                     step={500000}
                     required
                     value={formData.salary}
                     onChange={(e) =>
-                      setFormData({ ...formData, salary: Math.max(0, Number(e.target.value)) })
+                      setFormData({
+                        ...formData,
+                        salary: Math.max(0, Number(e.target.value)),
+                      })
                     }
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   />
-                  <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-                    <span>Định dạng hiển thị:</span>
-                    <strong className="text-emerald-600 dark:text-emerald-400 font-extrabold text-xs">
-                      {formData.salary > 0
-                        ? `${formData.salary.toLocaleString('vi-VN')} ₫ / tháng`
-                        : 'Thỏa thuận'}
-                    </strong>
-                  </div>
                 </div>
 
-                {/* Headcount Quantity */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('employer.jobsTab.quantityLabel', 'Số lượng cần tuyển')}{' '}
-                    <span className="text-rose-500">*</span>
+                  <label
+                    htmlFor="job-quantity-input"
+                    className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5"
+                  >
+                    Số lượng tuyển <span className="text-rose-500">*</span>
                   </label>
-                  <div className="flex items-center gap-2">
+                  <div className="relative">
                     <input
+                      id="job-quantity-input"
                       type="number"
                       min={1}
                       max={100}
@@ -1104,287 +609,148 @@ export function JobEditorView({
                           quantity: Math.max(1, Number(e.target.value)),
                         })
                       }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                      className="w-full rounded-xl border border-slate-200 bg-white pl-3.5 pr-14 py-2 text-sm font-semibold text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                     />
-                    <span className="text-xs font-bold text-slate-500 shrink-0">ứng viên</span>
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                      người
+                    </span>
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* Card: Categories / Danh mục nghề liên quan */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-                <div className="flex items-center gap-2">
-                  <Tag className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    Danh mục nghề liên quan
-                  </h3>
-                </div>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                  {formData.categories.length}
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={categoryInput}
-                    onChange={(e) => setCategoryInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddCategory(categoryInput);
-                      }
-                    }}
-                    placeholder="VD: Mobile Developer..."
-                    className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleAddCategory(categoryInput)}
-                    className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 cursor-pointer"
-                  >
-                    +
-                  </button>
-                </div>
-
-                {formData.categories.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {formData.categories.map((cat) => (
-                      <span
-                        key={cat}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                      >
-                        <span>{cat}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveCategory(cat)}
-                          className="text-slate-400 hover:text-slate-600 dark:hover:text-white"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
-                    Gợi ý danh mục:
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {SUGGESTED_CATEGORIES.map((cat) => {
-                      const isAdded = formData.categories.some(
-                        (c) => c.toLowerCase() === cat.toLowerCase(),
-                      );
-                      return (
-                        <button
-                          key={cat}
-                          type="button"
-                          disabled={isAdded}
-                          onClick={() => handleAddCategory(cat)}
-                          className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition cursor-pointer ${
-                            isAdded
-                              ? 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-800 dark:text-slate-600'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
-                          }`}
-                        >
-                          {isAdded ? `✓ ${cat}` : `+ ${cat}`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Card B: Location & Duration */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-4 flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
-                <MapPin className="h-4 w-4 text-primary" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Địa điểm & Thời hạn
-                </h3>
-              </div>
-
-              <div className="space-y-4">
-                {/* Location */}
+              <div className="grid grid-cols-2 gap-3.5 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('employer.jobsTab.locationLabel', 'Địa điểm làm việc')}{' '}
-                    <span className="text-rose-500">*</span>
+                  <label
+                    htmlFor="job-start-date"
+                    className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5"
+                  >
+                    Ngày bắt đầu
                   </label>
                   <input
-                    type="text"
+                    id="job-start-date"
+                    type="date"
                     required
-                    value={formData.location}
-                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                    placeholder="VD: Cầu Giấy, Hà Nội..."
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    value={formData.startDate}
+                    onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   />
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {QUICK_LOCATIONS.map((loc) => (
-                      <button
-                        key={loc}
-                        type="button"
-                        onClick={() => setFormData({ ...formData, location: loc })}
-                        className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
-                      >
-                        {loc}
-                      </button>
-                    ))}
-                  </div>
                 </div>
 
-                {/* Start Date & End Date */}
-                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {t('employer.jobsTab.startDateLabel', 'Ngày bắt đầu')}
+                <div>
+                  <div className="flex items-center justify-between gap-1 mb-1.5">
+                    <label
+                      htmlFor="job-end-date"
+                      className="text-xs font-bold text-slate-700 dark:text-slate-300"
+                    >
+                      Hạn nộp
                     </label>
-                    <input
-                      type="date"
-                      required
-                      value={formData.startDate}
-                      onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                    />
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary">
+                      <Calendar className="h-3 w-3" />
+                      {daysRemaining} ngày
+                    </span>
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      {t('employer.jobsTab.endDateLabel', 'Hạn nộp hồ sơ')}
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      value={formData.endDate}
-                      onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between rounded-xl bg-slate-50 p-2.5 text-xs text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
-                  <span className="flex items-center gap-1.5">
-                    <Calendar className="h-3.5 w-3.5 text-primary" />
-                    <span>Thời hạn hiển thị:</span>
-                  </span>
-                  <strong className="font-bold text-primary">{daysRemaining} ngày còn lại</strong>
+                  <input
+                    id="job-end-date"
+                    type="date"
+                    required
+                    value={formData.endDate}
+                    onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  />
                 </div>
               </div>
-            </div>
 
-            {/* Card C: Publishing Status Toggle */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    {t('employer.jobsTab.isActiveLabel', 'Trạng thái hiển thị')}
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    {formData.isActive ? 'Đang công khai cho ứng viên' : 'Đang ẩn tạm thời'}
-                  </p>
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                    {t('employer.jobsTab.isActiveLabel', 'Hiển thị tin tuyển dụng')}
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {formData.isActive ? 'Đang công khai với ứng viên' : 'Đang ẩn tạm thời'}
+                  </span>
                 </div>
 
                 <button
                   type="button"
                   role="switch"
                   aria-checked={formData.isActive}
+                  aria-label="Bật tắt hiển thị tin tuyển dụng"
                   onClick={() => setFormData({ ...formData, isActive: !formData.isActive })}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/20 ${
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary/25 ${
                     formData.isActive ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'
                   }`}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                    className={`pointer-events-none inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow-sm transition duration-200 ${
                       formData.isActive ? 'translate-x-5.5' : 'translate-x-1'
                     }`}
                   />
                 </button>
               </div>
-            </div>
+            </section>
 
-            {/* Card D: AI Matching Readiness Bento Card */}
-            <div className="relative overflow-hidden rounded-3xl border border-primary/20 bg-gradient-to-br from-primary/5 via-white to-blue-50/40 p-6 shadow-xs dark:from-primary/10 dark:via-slate-900 dark:to-slate-900 dark:border-primary/30">
-              <div className="mb-3 flex items-center justify-between">
+            {/* Workplace Location & Real Interactive Map */}
+            <section className="rounded-2xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3.5">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
                 <div className="flex items-center gap-2">
-                  <Zap className="h-4 w-4 text-primary animate-pulse" />
-                  <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
-                    Chỉ số sẵn sàng AI Matching
-                  </h3>
+                  <MapPin className="h-4.5 w-4.5 text-primary" />
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                    Địa điểm làm việc <span className="text-rose-500">*</span>
+                  </h2>
                 </div>
-                <span className="rounded-full bg-primary px-2.5 py-0.5 text-xs font-black text-white">
-                  {checklist.score}%
-                </span>
+                <span className="text-[11px] text-slate-400">Mặc định theo công ty</span>
               </div>
 
-              {/* Progress Bar */}
-              <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                <div
-                  className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-300"
-                  style={{ width: `${checklist.score}%` }}
-                />
-              </div>
+              <LocationMapPicker
+                address={formData.location}
+                lat={formData.lat}
+                lon={formData.lon}
+                required
+                markerTitle={formData.name || company?.name || 'Địa điểm làm việc'}
+                placeholder="Tìm địa chỉ làm việc (mặc định theo công ty)..."
+                modalTitle="Chọn địa điểm làm việc"
+                modalSubtitle="Tìm địa chỉ hoặc nhấp/kéo ghim xanh để định vị nơi làm việc"
+                mapHeightClass="h-56"
+                companyFallback={
+                  company
+                    ? {
+                        address: company.address,
+                        lat: company.lat,
+                        lon: company.lon,
+                      }
+                    : null
+                }
+                onChange={({ address, lat, lon }) => {
+                  hasEditedLocationRef.current = true;
+                  setFormData((prev) => ({
+                    ...prev,
+                    location: address,
+                    lat,
+                    lon,
+                  }));
+                }}
+              />
+            </section>
 
-              {/* Checklist items */}
-              <div className="space-y-1.5 text-xs">
-                <div
-                  className={`flex items-center gap-2 ${
-                    checklist.isNameOk
-                      ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
-                      : 'text-slate-400'
-                  }`}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Tiêu đề rõ ràng (&gt; 5 ký tự)</span>
-                </div>
-                <div
-                  className={`flex items-center gap-2 ${
-                    checklist.isSkillsOk
-                      ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
-                      : 'text-slate-400'
-                  }`}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Kỹ năng yêu cầu (&ge; 2 kỹ năng)</span>
-                </div>
-                <div
-                  className={`flex items-center gap-2 ${
-                    checklist.isDescOk
-                      ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
-                      : 'text-slate-400'
-                  }`}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Mô tả chi tiết và định dạng chuẩn</span>
-                </div>
-                <div
-                  className={`flex items-center gap-2 ${
-                    checklist.isSalaryOk
-                      ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
-                      : 'text-slate-400'
-                  }`}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Mức lương minh bạch</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Sticky Save CTA in Sidebar */}
-            <div className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+            {/* Submit Bar at Bottom of Right Column */}
+            <div className="flex items-center justify-end gap-3 pt-1">
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={isSubmitting}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 active:scale-95 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 text-sm font-bold text-white shadow-lg shadow-primary/25 hover:bg-primary-dark active:scale-95 disabled:opacity-50 transition cursor-pointer"
+                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg shadow-primary/20 hover:bg-primary-dark active:scale-95 disabled:opacity-50 transition cursor-pointer"
               >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Đang lưu tin tuyển dụng...</span>
+                    <span>Đang lưu...</span>
                   </>
                 ) : (
                   <>
@@ -1396,15 +762,6 @@ export function JobEditorView({
                     </span>
                   </>
                 )}
-              </button>
-
-              <button
-                type="button"
-                onClick={onCancel}
-                disabled={isSubmitting}
-                className="w-full text-center py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white transition cursor-pointer"
-              >
-                Hủy bỏ và quay lại danh sách
               </button>
             </div>
           </div>

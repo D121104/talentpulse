@@ -18,6 +18,7 @@ import {
   JobItem,
   formatSalary,
   formatLocation,
+  formatJobLevel,
   formatDaysRemaining,
 } from '../../lib/jobApi';
 import JobHtmlDescription from './JobHtmlDescription';
@@ -40,7 +41,7 @@ export default function JobQuickPreview({
   const daysRemaining = formatDaysRemaining(job.endDate);
 
   return (
-    <div className="sticky top-24 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl shadow-slate-900/5 dark:shadow-black/40 overflow-hidden flex flex-col h-[calc(100vh-7rem)]">
+    <div className="rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl shadow-slate-900/5 dark:shadow-black/40 overflow-hidden flex flex-col max-h-[82dvh] lg:h-[calc(100vh-7.5rem)] lg:max-h-none">
       {/* HEADER (Sticky at top of panel) */}
       <div className="p-5 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 shrink-0">
         {/* Title & Close Button */}
@@ -93,7 +94,7 @@ export default function JobQuickPreview({
             {/* Level Pill */}
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
               <Briefcase className="w-3.5 h-3.5 text-slate-400" />
-              {job.level || 'Mọi cấp bậc'}
+              {formatJobLevel(job.level)}
             </span>
           </div>
 

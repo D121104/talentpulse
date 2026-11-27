@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Flame,
@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Inbox,
   MapPin,
+  Briefcase,
 } from 'lucide-react';
 import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
@@ -29,6 +30,7 @@ import {
   toggleSaveJobApi,
   getMySavedJobIdsApi,
 } from '../../lib/jobApi';
+import { getVisiblePageNumbers } from '../../lib/pagination';
 
 export default function JobSearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -56,29 +58,25 @@ export default function JobSearchPage() {
     }
   };
 
-  // Read URL query params
+  // Read URL query params as single source of truth
   const paramQuery = searchParams.get('query') || '';
   const paramLocation = searchParams.get('location') || 'Tất cả địa điểm';
   const paramLevel = searchParams.get('level') || 'Tất cả cấp bậc';
   const paramSalaryRange = searchParams.get('salaryRange') || '';
-  const paramSort = (searchParams.get('sort') as any) || 'relevance';
-  const paramIsHot = searchParams.get('isHot') === 'true';
-  const paramIsUrgent = searchParams.get('isUrgent') === 'true';
-  const paramIsFeatured = searchParams.get('isFeatured') === 'true';
-  const paramPage = parseInt(searchParams.get('page') || '1', 10);
+  const sortBy =
+    (searchParams.get('sort') as 'relevance' | 'newest' | 'salary_desc' | 'salary_asc') ||
+    'relevance';
+  const filterHot = searchParams.get('isHot') === 'true';
+  const filterUrgent = searchParams.get('isUrgent') === 'true';
+  const filterFeatured = searchParams.get('isFeatured') === 'true';
+  const currentPage = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1);
 
   // States
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
-  const [currentPage, setCurrentPage] = useState(paramPage);
   const [loading, setLoading] = useState(true);
-
-  // Filter toggles
-  const [sortBy, setSortBy] = useState<'relevance' | 'newest' | 'salary_desc' | 'salary_asc'>(paramSort);
-  const [filterHot, setFilterHot] = useState(paramIsHot);
-  const [filterUrgent, setFilterUrgent] = useState(paramIsUrgent);
-  const [filterFeatured, setFilterFeatured] = useState(paramIsFeatured);
+  const hasMountedRef = useRef(false);
 
   // Saved Jobs tracking (from backend PostgreSQL DB)
   const [savedJobIds, setSavedJobIds] = useState<string[]>([]);
@@ -108,6 +106,7 @@ export default function JobSearchPage() {
 
       let minSalary: number | undefined;
       let maxSalary: number | undefined;
+      const negotiable = paramSalaryRange === 'negotiable' ? true : undefined;
 
       if (paramSalaryRange && paramSalaryRange !== 'negotiable') {
         const [min, max] = paramSalaryRange.split('-').map(Number);
@@ -121,6 +120,7 @@ export default function JobSearchPage() {
         level: paramLevel !== 'Tất cả cấp bậc' ? paramLevel : undefined,
         minSalary,
         maxSalary,
+        negotiable,
         sort: sortBy,
         isHot: filterHot ? true : undefined,
         isUrgent: filterUrgent ? true : undefined,
@@ -154,8 +154,12 @@ export default function JobSearchPage() {
   ]);
 
   useEffect(() => {
-    fetchJobs();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    void fetchJobs();
+    if (hasMountedRef.current) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      hasMountedRef.current = true;
+    }
   }, [fetchJobs]);
 
   // Handle Search Bar submit
@@ -181,7 +185,6 @@ export default function JobSearchPage() {
     else updated.delete('salaryRange');
 
     updated.set('page', '1');
-    setCurrentPage(1);
     setSearchParams(updated);
   };
 
@@ -190,7 +193,24 @@ export default function JobSearchPage() {
     const updated = new URLSearchParams(searchParams);
     updated.set('query', skill);
     updated.set('page', '1');
-    setCurrentPage(1);
+    setSearchParams(updated);
+  };
+
+  const handleToggleQuickFilter = (key: 'isHot' | 'isUrgent' | 'isFeatured', currentValue: boolean) => {
+    const updated = new URLSearchParams(searchParams);
+    if (currentValue) {
+      updated.delete(key);
+    } else {
+      updated.set(key, 'true');
+    }
+    updated.set('page', '1');
+    setSearchParams(updated);
+  };
+
+  const handlePageChange = (nextPage: number) => {
+    const bounded = Math.min(totalPages, Math.max(1, nextPage));
+    const updated = new URLSearchParams(searchParams);
+    updated.set('page', bounded.toString());
     setSearchParams(updated);
   };
 
@@ -220,24 +240,23 @@ export default function JobSearchPage() {
   // Reset all filters
   const handleResetFilters = () => {
     setSelectedJob(null);
-    setSortBy('relevance');
-    setFilterHot(false);
-    setFilterUrgent(false);
-    setFilterFeatured(false);
-    setCurrentPage(1);
     setSearchParams(new URLSearchParams());
   };
 
   // Title generation
   const getPageHeading = () => {
-    const parts: string[] = [];
-    if (paramQuery) parts.push(`"${paramQuery}"`);
-    else parts.push('việc làm hiện có tại TalentPulse');
+    const locationSuffix =
+      paramLocation && paramLocation !== 'Tất cả địa điểm'
+        ? ` tại ${paramLocation}`
+        : '';
 
-    if (paramLocation && paramLocation !== 'Tất cả địa điểm') {
-      parts.push(`tại ${paramLocation}`);
+    if (paramQuery) {
+      return `Kết quả cho "${paramQuery}"${locationSuffix}`;
     }
-    return parts.join(' ');
+    if (locationSuffix) {
+      return `Việc làm${locationSuffix}`;
+    }
+    return 'Tất cả việc làm đang tuyển';
   };
 
   return (
@@ -246,23 +265,25 @@ export default function JobSearchPage() {
 
       <main className="flex-1 pt-20 pb-16">
         {/* HERO SEARCH SECTION */}
-        <section className="relative bg-gradient-to-b from-blue-600/10 via-primary/5 to-transparent dark:from-blue-950/40 dark:via-slate-900/40 dark:to-transparent py-8 sm:py-12 px-4 border-b border-slate-200/60 dark:border-slate-800">
+        <section className="relative bg-gradient-to-b from-blue-600/10 via-primary/5 to-transparent dark:from-blue-950/40 dark:via-slate-900/40 dark:to-transparent py-8 sm:py-11 px-4 border-b border-slate-200/60 dark:border-slate-800">
           <div className="mx-auto max-w-7xl">
             <div className="text-center max-w-3xl mx-auto mb-6 sm:mb-8">
-              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-light border border-primary/20 mb-3">
-                <Sparkles className="w-3.5 h-3.5" />
-                Khám phá 1.000+ Việc làm IT Hot
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary-light border border-primary/20 mb-3">
+                <Briefcase className="w-3.5 h-3.5" />
+                {totalRecords > 0
+                  ? `Đang mở ${totalRecords} vị trí tuyển dụng`
+                  : 'Cơ hội việc làm đa ngành nghề'}
               </span>
               <h1 className="text-2xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-tight">
-                Tìm kiếm cơ hội việc làm IT hàng đầu
+                Tìm kiếm việc làm phù hợp với bạn
               </h1>
-              <p className="mt-2 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                Khám phá hàng ngàn vị trí tuyển dụng với mức lương hấp dẫn và môi trường chuyên nghiệp.
+              <p className="mt-2.5 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+                Cập nhật vị trí mới mỗi ngày trên nhiều lĩnh vực: Công nghệ, Thiết kế, Marketing, Kinh doanh và Bất động sản.
               </p>
             </div>
 
             {/* Embedded Search Bar */}
-            <div className="max-w-5xl mx-auto">
+            <div className="max-w-6xl mx-auto">
               <JobSearchBar
                 initialQuery={paramQuery}
                 initialLocation={paramLocation}
@@ -280,46 +301,55 @@ export default function JobSearchPage() {
             {/* LEFT COLUMN: RESULTS & CARDS (5 cols when preview is active, 8 cols when default) */}
             <div className={`${selectedJob ? 'lg:col-span-5' : 'lg:col-span-8'} space-y-4`}>
               {/* RESULTS TOOLBAR HEADER */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
-                <div>
-                  <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <span>Tuyển dụng {getPageHeading()}</span>
+              <div
+                className={`flex flex-col gap-3.5 bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs ${
+                  selectedJob ? '' : 'xl:flex-row xl:items-center xl:justify-between'
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-snug break-words">
+                    {getPageHeading()}
                   </h2>
-                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
                     Tìm thấy <span className="font-bold text-primary dark:text-primary-light">{totalRecords}</span> việc làm phù hợp
                   </p>
                 </div>
 
-                <div className="flex items-center flex-wrap sm:flex-nowrap gap-3">
+                <div
+                  className={`flex flex-wrap items-center gap-2.5 ${
+                    selectedJob ? 'justify-between w-full pt-2.5 border-t border-slate-100 dark:border-slate-800/80' : 'shrink-0'
+                  }`}
+                >
                   {/* Tìm theo vị trí Button (Candidate Premium) */}
                   <button
                     type="button"
                     onClick={handleOpenLocationSearch}
-                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-600/25 hover:shadow-lg hover:shadow-blue-600/35 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-600/25 hover:shadow-lg hover:shadow-blue-600/35 active:scale-95 transition-all cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                   >
-                    <MapPin className="w-4 h-4 text-white shrink-0" />
+                    <MapPin className="w-3.5 h-3.5 text-white shrink-0" />
                     <span>Tìm theo vị trí</span>
-                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950">
-                      PRO
+                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 leading-none">
+                      PREMIUM
                     </span>
                   </button>
 
                   {/* Sort Dropdown */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap flex items-center gap-1">
                       <ArrowUpDown className="w-3.5 h-3.5" />
-                      Ưu tiên:
+                      Sắp xếp:
                     </span>
                     <select
+                      aria-label="Sắp xếp kết quả"
                       value={sortBy}
                       onChange={(e) => {
-                        const newSort = e.target.value as any;
-                        setSortBy(newSort);
+                        const newSort = e.target.value;
                         const updated = new URLSearchParams(searchParams);
                         updated.set('sort', newSort);
+                        updated.set('page', '1');
                         setSearchParams(updated);
                       }}
-                      className="text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl px-3 py-2 outline-none cursor-pointer hover:border-primary transition-colors"
+                      className="text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl px-3 py-2 outline-none cursor-pointer hover:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 transition-colors"
                     >
                       <option value="relevance">Phù hợp nhất</option>
                       <option value="newest">Mới nhất</option>
@@ -334,7 +364,7 @@ export default function JobSearchPage() {
               <div className="flex items-center flex-wrap gap-2 text-xs">
                 <button
                   type="button"
-                  onClick={() => setFilterHot(!filterHot)}
+                  onClick={() => handleToggleQuickFilter('isHot', filterHot)}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-semibold transition-all cursor-pointer ${
                     filterHot
                       ? 'bg-gradient-to-r from-red-500 to-amber-500 text-white border-transparent shadow-xs shadow-red-500/20'
@@ -347,7 +377,7 @@ export default function JobSearchPage() {
 
                 <button
                   type="button"
-                  onClick={() => setFilterUrgent(!filterUrgent)}
+                  onClick={() => handleToggleQuickFilter('isUrgent', filterUrgent)}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-semibold transition-all cursor-pointer ${
                     filterUrgent
                       ? 'bg-amber-500 text-white border-amber-500 shadow-xs shadow-amber-500/20'
@@ -360,7 +390,7 @@ export default function JobSearchPage() {
 
                 <button
                   type="button"
-                  onClick={() => setFilterFeatured(!filterFeatured)}
+                  onClick={() => handleToggleQuickFilter('isFeatured', filterFeatured)}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-semibold transition-all cursor-pointer ${
                     filterFeatured
                       ? 'bg-primary text-white border-primary shadow-xs shadow-primary/20'
@@ -462,39 +492,38 @@ export default function JobSearchPage() {
                     <button
                       type="button"
                       disabled={currentPage <= 1}
-                      onClick={() => {
-                        const next = Math.max(1, currentPage - 1);
-                        setCurrentPage(next);
-                        const updated = new URLSearchParams(searchParams);
-                        updated.set('page', next.toString());
-                        setSearchParams(updated);
-                      }}
+                      onClick={() => handlePageChange(currentPage - 1)}
                       className="w-8 h-8 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:border-primary hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
 
-                    {/* Page Numbers */}
-                    {Array.from({ length: Math.min(totalPages, 7) }).map((_, idx) => {
-                      const pageNum = idx + 1;
-                      const isActive = pageNum === currentPage;
+                    {/* Windowed Page Numbers */}
+                    {getVisiblePageNumbers(currentPage, totalPages).map((token, idx) => {
+                      if (token === 'ellipsis') {
+                        return (
+                          <span
+                            key={`ellipsis-${idx}`}
+                            className="px-1.5 text-xs font-semibold text-slate-400"
+                          >
+                            ...
+                          </span>
+                        );
+                      }
+
+                      const isActive = token === currentPage;
                       return (
                         <button
-                          key={pageNum}
+                          key={token}
                           type="button"
-                          onClick={() => {
-                            setCurrentPage(pageNum);
-                            const updated = new URLSearchParams(searchParams);
-                            updated.set('page', pageNum.toString());
-                            setSearchParams(updated);
-                          }}
+                          onClick={() => handlePageChange(token)}
                           className={`w-8 h-8 rounded-xl text-xs font-bold transition-all ${
                             isActive
                               ? 'bg-primary text-white shadow-sm shadow-primary/30'
                               : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-primary hover:text-primary'
                           }`}
                         >
-                          {pageNum}
+                          {token}
                         </button>
                       );
                     })}
@@ -503,13 +532,7 @@ export default function JobSearchPage() {
                     <button
                       type="button"
                       disabled={currentPage >= totalPages}
-                      onClick={() => {
-                        const next = Math.min(totalPages, currentPage + 1);
-                        setCurrentPage(next);
-                        const updated = new URLSearchParams(searchParams);
-                        updated.set('page', next.toString());
-                        setSearchParams(updated);
-                      }}
+                      onClick={() => handlePageChange(currentPage + 1)}
                       className="w-8 h-8 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:border-primary hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                     >
                       <ChevronRight className="w-4 h-4" />
@@ -520,7 +543,7 @@ export default function JobSearchPage() {
             </div>
 
             {/* RIGHT COLUMN: PREVIEW PANEL OR SIDEBAR WIDGETS (7 cols when preview open, 4 cols when default) */}
-            <div className={`${selectedJob ? 'lg:col-span-7' : 'lg:col-span-4'} sticky top-24`}>
+            <div className={`${selectedJob ? 'lg:col-span-7' : 'lg:col-span-4'} lg:sticky lg:top-24`}>
               {selectedJob ? (
                 <JobQuickPreview
                   job={selectedJob}

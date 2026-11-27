@@ -69,5 +69,8 @@ test('source contract: locked branch has no narrative; fallback source is explic
   for (const language of ['vi', 'en']) {
     const copy = await readFile(new URL(`../i18n/${language}.ts`, import.meta.url), 'utf8');
     assert.match(copy, /deterministic_fallback:/);
+    assert.match(copy, /consentMissing:/);
   }
+  assert.match(ui, /\/premium\/i\.test\(err\.message\)/);
+  assert.match(ui, /\/consent\|purpose\/i\.test\(err\.message\)/);
 });

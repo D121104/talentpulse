@@ -704,9 +704,7 @@ export default function JobDetailPage() {
 
                             {/* Company Name */}
                             <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300">
-                                Pro
-                              </span>
+                              <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                               <span className="truncate max-w-[260px]">
                                 {rJob.company?.name || 'TalentPulse Employer'}
                               </span>

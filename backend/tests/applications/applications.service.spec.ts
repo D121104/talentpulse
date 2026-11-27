@@ -1,6 +1,6 @@
 import { ApplicationsService } from 'src/applications/applications.service';
 import { ForbiddenException } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { AiCvConsentsService } from 'src/ai-consents/ai-cv-consents.service';
 import {
   AiCvConsent,
@@ -485,5 +485,247 @@ describe('ApplicationsService.create AI ranking consent fencing', () => {
     expect(result._id).toBe(ids.application);
     expect(harness.queueCVProcessing).toHaveBeenCalledWith(ids.application);
     expect(harness.consentEventRepo.save).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ApplicationsService soft-deleted job & detail hydration', () => {
+  const hrUser = {
+    _id: ids.user,
+    email: 'hr@company.test',
+    role: Role.HR,
+    name: 'HR',
+    company: { _id: ids.company, name: 'TalentPulse' },
+  } as any;
+
+  it('includes soft-deleted job details in findAll when QueryBuilder supports withDeleted', async () => {
+    const deletedDate = new Date('2026-09-01T00:00:00Z');
+    const qb: any = {
+      leftJoinAndSelect: jest.fn(() => qb),
+      where: jest.fn(() => qb),
+      withDeleted: jest.fn(() => qb),
+      andWhere: jest.fn(() => qb),
+      orderBy: jest.fn(() => qb),
+      addOrderBy: jest.fn(() => qb),
+      skip: jest.fn(() => qb),
+      take: jest.fn(() => qb),
+      getManyAndCount: jest.fn().mockResolvedValue([
+        [
+          {
+            _id: ids.application,
+            cvId: ids.cv,
+            userId: ids.user,
+            companyId: ids.company,
+            jobId: ids.job,
+            status: ApplicationStatus.REVIEWING,
+            cv: {
+              _id: ids.cv,
+              title: 'Backend CV',
+              url: 'https://cdn.example.com/cv.pdf',
+              fileType: 'pdf',
+              skills: ['NestJS', 'PostgreSQL'],
+              education: ['BSc CS'],
+              experience: ['2 years backend'],
+              certificates: [],
+              parsedText: 'private-raw-text',
+            },
+            user: {
+              _id: ids.user,
+              name: 'Nguyen Van A',
+              email: 'a@example.com',
+              avatar: 'https://cdn.example.com/avatar.png',
+              address: 'Ha Noi',
+              gender: 'male',
+              age: 26,
+              password: 'hashed-password',
+            },
+            company: {
+              _id: ids.company,
+              name: 'TalentPulse',
+              logo: null,
+            },
+            job: {
+              _id: ids.job,
+              name: 'Senior Backend Engineer',
+              salary: 35000000,
+              level: 'SENIOR',
+              location: 'Ha Noi',
+              workingModel: 'HYBRID',
+              isDeleted: true,
+              deletedAt: deletedDate,
+            },
+          },
+        ],
+        1,
+      ]),
+    };
+
+    const service = Object.assign(
+      Object.create(ApplicationsService.prototype),
+      {
+        applicationRepo: { createQueryBuilder: jest.fn(() => qb) },
+        cvMatchResultRepo: { find: jest.fn().mockResolvedValue([]) },
+        usersService: {
+          findOne: jest.fn().mockResolvedValue({ company: { _id: ids.company } }),
+          getUserEntitlements: jest.fn().mockResolvedValue({
+            role: Role.HR,
+            limits: {
+              canExportAiScores: true,
+              canViewCandidateAiAnalysis: true,
+            },
+          }),
+        },
+      },
+    ) as ApplicationsService;
+
+    const res = await service.findAll({}, hrUser);
+
+    expect(qb.withDeleted).toHaveBeenCalledTimes(1);
+    expect(qb.andWhere).toHaveBeenCalledWith('app.deletedAt IS NULL');
+    expect(res.result[0].jobId).toEqual({
+      _id: ids.job,
+      name: 'Senior Backend Engineer',
+      salary: 35000000,
+      level: 'SENIOR',
+      location: 'Ha Noi',
+      workingModel: 'HYBRID',
+      isDeleted: true,
+      deletedAt: deletedDate,
+    });
+    expect(res.result[0].userId).toEqual({
+      _id: ids.user,
+      name: 'Nguyen Van A',
+      email: 'a@example.com',
+      avatar: 'https://cdn.example.com/avatar.png',
+      address: 'Ha Noi',
+      gender: 'male',
+      age: 26,
+    });
+    expect(res.result[0].cvId).toEqual(
+      expect.objectContaining({
+        title: 'Backend CV',
+        skills: ['NestJS', 'PostgreSQL'],
+      }),
+    );
+    expect(JSON.stringify(res.result[0])).not.toContain('private-raw-text');
+    expect(JSON.stringify(res.result[0])).not.toContain('hashed-password');
+  });
+
+  it('populates jobId and avatar in findByJob', async () => {
+    const qb: any = {
+      leftJoinAndSelect: jest.fn(() => qb),
+      where: jest.fn(() => qb),
+      withDeleted: jest.fn(() => qb),
+      andWhere: jest.fn(() => qb),
+      orderBy: jest.fn(() => qb),
+      skip: jest.fn(() => qb),
+      take: jest.fn(() => qb),
+      getManyAndCount: jest.fn().mockResolvedValue([
+        [
+          {
+            _id: ids.application,
+            cvId: ids.cv,
+            userId: ids.user,
+            companyId: ids.company,
+            jobId: ids.job,
+            status: ApplicationStatus.PENDING,
+            user: {
+              _id: ids.user,
+              name: 'Tran B',
+              email: 'b@example.com',
+              avatar: 'https://cdn.example.com/b.png',
+              address: 'Da Nang',
+              gender: 'female',
+              age: 24,
+            },
+          },
+        ],
+        1,
+      ]),
+    };
+
+    const service = Object.assign(
+      Object.create(ApplicationsService.prototype),
+      {
+        applicationRepo: { createQueryBuilder: jest.fn(() => qb) },
+        cvMatchResultRepo: { find: jest.fn().mockResolvedValue([]) },
+        usersService: {
+          findOne: jest.fn().mockResolvedValue({ company: { _id: ids.company } }),
+          getUserEntitlements: jest.fn().mockResolvedValue({
+            role: Role.HR,
+            limits: {
+              canExportAiScores: true,
+              canViewCandidateAiAnalysis: false,
+            },
+          }),
+        },
+        jobsService: {
+          findOneForInternal: jest.fn().mockResolvedValue({
+            _id: ids.job,
+            name: 'Frontend Engineer',
+            salary: 25000000,
+            level: 'MIDDLE',
+            location: 'Ha Noi',
+            workingModel: 'ONSITE',
+            company: { _id: ids.company },
+          }),
+        },
+      },
+    ) as ApplicationsService;
+
+    const res = await service.findByJob(ids.job, {}, hrUser);
+
+    expect(res.result[0].jobId).toEqual({
+      _id: ids.job,
+      name: 'Frontend Engineer',
+      salary: 25000000,
+      level: 'MIDDLE',
+      location: 'Ha Noi',
+      workingModel: 'ONSITE',
+      isDeleted: false,
+      deletedAt: null,
+    });
+    expect(res.result[0].userId).toEqual(
+      expect.objectContaining({
+        avatar: 'https://cdn.example.com/b.png',
+        address: 'Da Nang',
+        age: 24,
+      }),
+    );
+  });
+
+  it('queries findOne with withDeleted=true and non-deleted application guard', async () => {
+    const findOne = jest.fn().mockResolvedValue({
+      _id: ids.application,
+      cvId: ids.cv,
+      userId: ids.user,
+      companyId: ids.company,
+      jobId: ids.job,
+      job: {
+        _id: ids.job,
+        name: 'Old Archived Role',
+        isDeleted: false,
+        deletedAt: new Date('2026-09-02T00:00:00Z'),
+      },
+    });
+    const service = Object.assign(
+      Object.create(ApplicationsService.prototype),
+      {
+        applicationRepo: { findOne },
+      },
+    ) as ApplicationsService;
+
+    const result = await service.findOne(ids.application);
+
+    expect(findOne).toHaveBeenCalledWith({
+      where: { _id: ids.application, isDeleted: false, deletedAt: IsNull() },
+      relations: ['cv', 'user', 'company', 'job'],
+      withDeleted: true,
+    });
+    expect(result.jobId).toEqual(
+      expect.objectContaining({
+        name: 'Old Archived Role',
+        isDeleted: true,
+      }),
+    );
   });
 });

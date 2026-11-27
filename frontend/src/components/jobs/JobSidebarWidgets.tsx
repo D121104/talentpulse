@@ -26,25 +26,18 @@ export const SKILL_CLOUD = [
   'ReactJS',
   'NodeJS',
   'TypeScript',
-  'Fullstack',
   'Python',
-  'Django',
   'Java',
-  'Spring Boot',
-  'Golang',
   'Docker',
-  'Kubernetes',
   'AWS',
-  'DevOps',
-  'PostgreSQL',
-  'MongoDB',
-  'Redis',
-  'Kafka',
-  'NextJS',
-  'VueJS',
-  'NestJS',
+  'UI/UX',
+  'Figma',
+  'SQL',
+  'Digital Marketing',
+  'Business Analyst',
+  'Bất động sản',
+  'Tư vấn bán hàng',
   'Flutter',
-  'React Native',
 ];
 
 export default function JobSidebarWidgets({
@@ -102,36 +95,36 @@ export default function JobSidebarWidgets({
           </div>
 
           <h3 className="text-base font-bold text-white leading-snug">
-            Tìm việc làm phù hợp chính xác theo CV của bạn
+            Gợi ý việc làm theo CV của bạn
           </h3>
 
           <p className="mt-1.5 text-xs text-blue-100/90 leading-relaxed">
-            AI phân tích kỹ năng và kinh nghiệm trong CV để gợi ý công việc.
+            Hệ thống đối chiếu kỹ năng và kinh nghiệm trong CV để lọc ra các vị trí phù hợp.
           </p>
 
           <div className="mt-4 flex flex-col gap-2">
             {user ? (
               <Link
                 to="/my-cv"
-                className="w-full py-2.5 px-4 bg-white hover:bg-blue-50 text-primary font-bold text-xs rounded-xl transition-all shadow-md text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full py-2.5 px-4 bg-white hover:bg-blue-50 text-primary font-bold text-xs rounded-xl transition-all shadow-md text-center flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
               >
                 <FileText className="w-3.5 h-3.5" />
-                Quản lý CV & Xem gợi ý
+                Quản lý CV & xem gợi ý
               </Link>
             ) : (
               <>
                 <Link
                   to="/cv-templates"
-                  className="w-full py-2.5 px-4 bg-white hover:bg-blue-50 text-primary font-bold text-xs rounded-xl transition-all shadow-md text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-white hover:bg-blue-50 text-primary font-bold text-xs rounded-xl transition-all shadow-md text-center flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
                 >
                   <FileText className="w-3.5 h-3.5" />
-                  Tạo CV Online Miễn Phí
+                  Tạo CV online
                 </Link>
                 <Link
                   to="/login"
                   className="w-full py-2 px-3 bg-white/15 hover:bg-white/25 text-white font-medium text-xs rounded-xl transition-colors text-center backdrop-blur-md"
                 >
-                  Đăng nhập để AI gợi ý
+                  Đăng nhập để xem gợi ý
                 </Link>
               </>
             )}
@@ -141,19 +134,17 @@ export default function JobSidebarWidgets({
 
       {/* WIDGET 2: TOP 10 HIRING COMPANIES SPOTLIGHT */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200/80 dark:border-slate-800 shadow-sm">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+        <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
               <Building2 className="w-4 h-4" />
             </div>
-            <div>
-              <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                Top 10 Nhà tuyển dụng hàng đầu
-              </h3>
-            </div>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+              Top 10 nhà tuyển dụng
+            </h3>
           </div>
-          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60">
-            Tuyển nhiều nhất
+          <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60 whitespace-nowrap shrink-0">
+            Tuyển nhiều
           </span>
         </div>
 
@@ -262,7 +253,7 @@ export default function JobSidebarWidgets({
             <TrendingUp className="w-4 h-4" />
           </div>
           <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
-            Kỹ năng IT tìm kiếm nhiều
+            Kỹ năng & lĩnh vực nổi bật
           </h3>
         </div>
 
@@ -272,7 +263,7 @@ export default function JobSidebarWidgets({
               key={skill}
               type="button"
               onClick={() => onSelectSkill?.(skill)}
-              className="text-xs font-medium px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-primary hover:text-white dark:hover:bg-primary dark:hover:text-white border border-slate-200/60 dark:border-slate-700/60 transition-all cursor-pointer"
+              className="text-xs font-medium px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-primary hover:text-white dark:hover:bg-primary dark:hover:text-white border border-slate-200/60 dark:border-slate-700/60 transition-all cursor-pointer active:scale-95"
             >
               {skill}
             </button>
@@ -288,29 +279,33 @@ export default function JobSidebarWidgets({
         </div>
 
         <h4 className="text-sm font-bold text-white">
-          Nhân đôi cơ hội trúng tuyển với gói Premium
+          Quyền lợi gói Candidate Premium
         </h4>
 
         <ul className="mt-3 space-y-1.5 text-xs text-slate-300">
           <li className="flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            Đẩy hồ sơ lên TOP 1 khi nộp đơn
+            Ưu tiên hiển thị hồ sơ khi ứng tuyển
           </li>
           <li className="flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            Mẫu CV ATS chuẩn quốc tế không giới hạn
+            Mở khóa đầy đủ mẫu CV chuẩn ATS
           </li>
           <li className="flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            Xem ai đã xem CV của bạn
+            Xem nhà tuyển dụng đã xem CV của bạn
+          </li>
+          <li className="flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            Tìm việc theo bán kính trên bản đồ
           </li>
         </ul>
 
         <Link
           to="/premium"
-          className="mt-4 w-full py-2 px-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-xs rounded-xl transition-all shadow-md shadow-amber-500/20 text-center flex items-center justify-center gap-1 cursor-pointer"
+          className="mt-4 w-full py-2 px-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-bold text-xs rounded-xl transition-all shadow-md shadow-amber-500/20 text-center flex items-center justify-center gap-1 cursor-pointer active:scale-95"
         >
-          Nâng cấp ngay
+          Xem gói Premium
           <ArrowRight className="w-3.5 h-3.5" />
         </Link>
       </div>

@@ -14,9 +14,30 @@ import {
   Loader2,
   AlertTriangle,
   RotateCw,
+  RotateCcw,
   Compass,
+  ExternalLink,
 } from 'lucide-react';
 import { JobItem, searchJobsByLocationApi, formatSalary } from '../../lib/jobApi';
+import {
+  JOB_LEVEL_OPTIONS,
+  SALARY_PRESETS,
+  WORKING_MODEL_OPTIONS,
+  parseSalaryPresetValue,
+  formatShortSalaryLabel,
+  buildGoogleMapsDirectionsUrl,
+  clusterJobsByLocation,
+  type JobLocationCluster,
+} from '../../lib/jobFilters';
+import { useAuth } from '../../auth/AuthContext';
+import {
+  searchVietnamPlaces,
+  reverseGeocodePlace,
+  detectAccurateDeviceLocation,
+  loadSavedMapLocation,
+  saveMapLocation,
+  type GeocodePlaceSuggestion,
+} from '../../lib/geocoding';
 
 interface JobLocationSearchModalProps {
   isOpen: boolean;
@@ -47,8 +68,33 @@ function isSafeHttpUrl(url?: string | null): boolean {
   return url.startsWith('https://') || url.startsWith('http://') || url.startsWith('/');
 }
 
-function createJobMarkerIcon(distLabel: string, isActive: boolean): L.DivIcon {
-  const safeLabel = escapeHtml(distLabel);
+function createJobMarkerIcon(options: {
+  distLabel: string;
+  salaryLabel?: string;
+  showSalary?: boolean;
+  count?: number;
+  isActive: boolean;
+}): L.DivIcon {
+  const { distLabel, salaryLabel, showSalary = false, count = 1, isActive } = options;
+  const safeDist = escapeHtml(distLabel);
+  const safeSalary = salaryLabel ? escapeHtml(salaryLabel) : '';
+  const isCluster = count > 1;
+
+  const badgeText = isCluster
+    ? `${count} việc · ${safeDist}`
+    : showSalary && safeSalary
+      ? `${safeDist} · ${safeSalary}`
+      : safeDist;
+
+  const background = isCluster
+    ? isActive
+      ? '#4338CA'
+      : '#4F46E5'
+    : isActive
+      ? '#1D4ED8'
+      : '#2563EB';
+  const shadowColor = isCluster ? 'rgba(79, 70, 229, 0.42)' : 'rgba(37, 99, 235, 0.4)';
+
   return L.divIcon({
     className: 'tp-job-map-marker',
     html: `
@@ -57,30 +103,166 @@ function createJobMarkerIcon(distLabel: string, isActive: boolean): L.DivIcon {
           display: inline-flex;
           align-items: center;
           gap: 4px;
-          padding: 4px 8px;
-          background: ${isActive ? '#1D4ED8' : '#2563EB'};
+          padding: 4px 9px;
+          background: ${background};
           color: white;
           font-size: 11px;
           font-weight: 700;
           font-family: system-ui, sans-serif;
           border-radius: 9999px;
           border: 2px solid white;
-          box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+          box-shadow: 0 4px 12px ${shadowColor};
           white-space: nowrap;
-          transform: ${isActive ? 'scale(1.15)' : 'scale(1)'};
+          transform: ${isActive ? 'scale(1.12)' : 'scale(1)'};
         ">
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <rect width="20" height="14" x="2" y="7" rx="2" ry="2"/>
-            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
-          </svg>
-          <span>${safeLabel}</span>
+          ${
+            isCluster
+              ? `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg>`
+              : `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>`
+          }
+          <span>${badgeText}</span>
         </div>
       </div>
     `,
-    iconSize: [80, 30],
-    iconAnchor: [40, 15],
+    iconSize: [isCluster || (showSalary && safeSalary) ? 124 : 84, 30],
+    iconAnchor: [isCluster || (showSalary && safeSalary) ? 62 : 42, 15],
     popupAnchor: [0, -18],
   });
+}
+
+function buildJobActionsHtml(
+  jobId: string,
+  jobLat: number,
+  jobLon: number,
+  origin?: { lat: number; lon: number } | null,
+): string {
+  const safeJobId = encodeURIComponent(String(jobId));
+  const safeDirectionsUrl = escapeHtml(buildGoogleMapsDirectionsUrl(jobLat, jobLon, origin));
+
+  return `
+    <div style="display: flex; align-items: center; gap: 6px; margin-top: 8px;">
+      <a href="${safeDirectionsUrl}" target="_blank" rel="noopener noreferrer" style="
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 6px 8px;
+        background: #F8FAFC;
+        color: #0F172A;
+        border: 1px solid #CBD5E1;
+        font-size: 11px;
+        font-weight: 700;
+        border-radius: 8px;
+        text-decoration: none;
+      ">
+        Chỉ đường
+      </a>
+      <a href="/jobs/${safeJobId}" target="_blank" rel="noopener noreferrer" style="
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 10px;
+        background: #2563EB;
+        color: white;
+        font-size: 11px;
+        font-weight: 700;
+        border-radius: 8px;
+        text-decoration: none;
+      ">
+        Chi tiết →
+      </a>
+    </div>
+  `;
+}
+
+function buildClusterPopupHtml(
+  cluster: JobLocationCluster<JobItem>,
+  origin?: { lat: number; lon: number } | null,
+): string {
+  const distLabel = cluster.distanceKm != null ? `${cluster.distanceKm} km (chim bay)` : 'Gần bạn';
+
+  if (cluster.jobs.length === 1) {
+    const job = cluster.jobs[0];
+    const jobId = String(job._id || (job as any).id);
+    const safeCompanyName = escapeHtml(job.company?.name || 'Công ty tuyển dụng');
+    const safeJobName = escapeHtml(job.name || '');
+    const safeSalaryText = escapeHtml(formatSalary(job.salary));
+    const safeWorkingModel = escapeHtml(job.workingModel || 'Onsite');
+    const safeDistLabel = escapeHtml(distLabel);
+    const safeLogoUrl = isSafeHttpUrl(job.company?.logo) ? escapeHtml(job.company!.logo!) : '';
+
+    return `
+      <div style="font-family: system-ui, sans-serif; padding: 6px; min-width: 230px; max-width: 270px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+          ${
+            safeLogoUrl
+              ? `<img src="${safeLogoUrl}" alt="${safeCompanyName}" style="width: 32px; height: 32px; border-radius: 6px; object-fit: contain; border: 1px solid #e2e8f0; background: white;" />`
+              : ''
+          }
+          <div style="overflow: hidden;">
+            <p style="font-size: 11px; font-weight: 600; color: #64748b; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+              ${safeCompanyName}
+            </p>
+            <h4 style="font-size: 13px; font-weight: 700; color: #0f172a; margin: 2px 0 0 0; line-height: 1.3;">
+              ${safeJobName}
+            </h4>
+          </div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0;">
+          <span style="font-size: 10px; font-weight: 700; padding: 2px 6px; background: #EFF6FF; color: #2563EB; border-radius: 4px;">
+            ${safeSalaryText}
+          </span>
+          <span style="font-size: 10px; font-weight: 600; padding: 2px 6px; background: #F1F5F9; color: #475569; border-radius: 4px;">
+            ${safeWorkingModel}
+          </span>
+          <span style="font-size: 10px; font-weight: 700; padding: 2px 6px; background: #ECFDF5; color: #059669; border-radius: 4px;">
+            ${safeDistLabel}
+          </span>
+        </div>
+        ${buildJobActionsHtml(jobId, cluster.lat, cluster.lon, origin)}
+      </div>
+    `;
+  }
+
+  const rowsHtml = cluster.jobs
+    .map((job) => {
+      const jobId = String(job._id || (job as any).id);
+      const safeCompanyName = escapeHtml(job.company?.name || 'Công ty tuyển dụng');
+      const safeJobName = escapeHtml(job.name || '');
+      const safeSalaryText = escapeHtml(formatSalary(job.salary));
+      const safeWorkingModel = escapeHtml(job.workingModel || 'Onsite');
+
+      return `
+        <div style="padding: 8px 0; border-top: 1px solid #E2E8F0;">
+          <p style="font-size: 10px; font-weight: 600; color: #64748B; margin: 0;">${safeCompanyName}</p>
+          <p style="font-size: 12px; font-weight: 700; color: #0F172A; margin: 2px 0 4px 0; line-height: 1.3;">${safeJobName}</p>
+          <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+            <span style="font-size: 10px; font-weight: 700; padding: 2px 6px; background: #EFF6FF; color: #2563EB; border-radius: 4px;">${safeSalaryText}</span>
+            <span style="font-size: 10px; font-weight: 600; padding: 2px 6px; background: #F1F5F9; color: #475569; border-radius: 4px;">${safeWorkingModel}</span>
+          </div>
+          ${buildJobActionsHtml(jobId, cluster.lat, cluster.lon, origin)}
+        </div>
+      `;
+    })
+    .join('');
+
+  return `
+    <div style="font-family: system-ui, sans-serif; padding: 4px; min-width: 245px; max-width: 290px;">
+      <div style="padding-bottom: 6px;">
+        <p style="font-size: 12px; font-weight: 800; color: #312E81; margin: 0;">
+          ${cluster.jobs.length} vị trí tại cùng địa điểm
+        </p>
+        <p style="font-size: 10px; font-weight: 600; color: #059669; margin: 2px 0 0 0;">
+          Cách bạn ${escapeHtml(distLabel)}
+        </p>
+      </div>
+      <div style="max-height: 240px; overflow-y: auto; padding-right: 4px;">
+        ${rowsHtml}
+      </div>
+    </div>
+  `;
 }
 
 export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
@@ -89,23 +271,28 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
   accessToken,
   onSelectJob,
 }) => {
+  const { user } = useAuth();
   const [locationStatus, setLocationStatus] = useState<LocationStatus>('locating');
   const [currentCoords, setCurrentCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [userLocationName, setUserLocationName] = useState<string>('');
+  const [locationAccuracyNotice, setLocationAccuracyNotice] = useState<string | null>(null);
 
   // Location Address Search
   const [locationInput, setLocationInput] = useState<string>('');
-  const [locationSuggestions, setLocationSuggestions] = useState<
-    Array<{ display_name: string; lat: string; lon: string }>
-  >([]);
+  const [locationSuggestions, setLocationSuggestions] = useState<GeocodePlaceSuggestion[]>([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState<boolean>(false);
   const [showLocationDropdown, setShowLocationDropdown] = useState<boolean>(false);
   const locationSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const locationSearchAbortRef = useRef<AbortController | null>(null);
   const locationDropdownRef = useRef<HTMLDivElement>(null);
 
   const [radiusKm, setRadiusKm] = useState<number>(10);
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [debouncedKeyword, setDebouncedKeyword] = useState<string>('');
+  const [filterLevel, setFilterLevel] = useState<string>('');
+  const [filterSalary, setFilterSalary] = useState<string>('');
+  const [filterWorkingModel, setFilterWorkingModel] = useState<string>('');
+  const [mapZoom, setMapZoom] = useState<number>(13);
 
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [totalJobs, setTotalJobs] = useState<number>(0);
@@ -117,13 +304,29 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
   const radiusCircleRef = useRef<L.Circle | null>(null);
-  const jobMarkersRef = useRef<Map<string, { marker: L.Marker; distLabel: string }>>(new Map());
+  const jobMarkersRef = useRef<
+    Map<
+      string,
+      {
+        cluster: JobLocationCluster<JobItem>;
+        marker: L.Marker;
+        distLabel: string;
+        salaryLabel: string;
+      }
+    >
+  >(new Map());
+  const jobToClusterKeyRef = useRef<Map<string, string>>(new Map());
   const prevActiveJobIdRef = useRef<string | null>(null);
   const activeJobIdRef = useRef<string | null>(activeJobId);
   activeJobIdRef.current = activeJobId;
+  const mapZoomRef = useRef<number>(mapZoom);
+  mapZoomRef.current = mapZoom;
   const radiusKmRef = useRef<number>(radiusKm);
   radiusKmRef.current = radiusKm;
   const skipNextReverseGeocodeRef = useRef<boolean>(false);
+  const currentCoordsRef = useRef<{ lat: number; lon: number } | null>(currentCoords);
+  currentCoordsRef.current = currentCoords;
+  const hasReadyCoords = Boolean(currentCoords);
 
   // Debounce search keyword input
   useEffect(() => {
@@ -133,9 +336,28 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     return () => clearTimeout(timer);
   }, [searchKeyword]);
 
+  const userRef = useRef(user);
+  userRef.current = user;
+  const persistManualLocation = useCallback(
+    (lat: number, lon: number, label?: string) => {
+      setLocationAccuracyNotice(null);
+      saveMapLocation(
+        {
+          lat,
+          lon,
+          label,
+          source: 'manual',
+          updatedAt: Date.now(),
+        },
+        userRef.current?._id,
+      );
+    },
+    [],
+  );
+
   // Request browser location permission or recenter GPS
-  const requestLocation = useCallback((isRecenter: boolean = false) => {
-    if (!navigator.geolocation) {
+  const requestLocation = useCallback(async (isRecenter: boolean = false) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
       if (!isRecenter) setLocationStatus('error');
       return;
     }
@@ -145,38 +367,79 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     }
     setIsLocating(true);
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const next = {
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-        };
-        setCurrentCoords(next);
-        setLocationStatus('ready');
-        setIsLocating(false);
+    try {
+      const detected = await detectAccurateDeviceLocation({
+        timeoutMs: 12000,
+        acceptableAccuracyMeters: 400,
+        refineWindowMs: 2500,
+      });
 
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.flyTo([next.lat, next.lon], 13, { duration: 1.2 });
-        }
-        if (userMarkerRef.current) {
-          userMarkerRef.current.setLatLng([next.lat, next.lon]);
-        }
-        if (radiusCircleRef.current) {
-          radiusCircleRef.current.setLatLng([next.lat, next.lon]);
-        }
-      },
-      (err) => {
-        setIsLocating(false);
-        if (!isRecenter) {
-          if (err.code === err.PERMISSION_DENIED) {
-            setLocationStatus('denied');
-          } else {
-            setLocationStatus('error');
+      const currentUser = userRef.current;
+      let nextCoords = { lat: detected.lat, lon: detected.lon };
+      let notice: string | null = null;
+      let source: 'gps' | 'profile' = 'gps';
+      let presetLabel: string | undefined;
+
+      if (detected.accuracy > 1500) {
+        const approxKm = (detected.accuracy / 1000).toFixed(1);
+        const profileAddress = !isRecenter ? currentUser?.address?.trim() : '';
+
+        if (profileAddress) {
+          const profileMatches = await searchVietnamPlaces(profileAddress, { limit: 1 });
+          if (profileMatches.length > 0) {
+            const pLat = parseFloat(profileMatches[0].lat);
+            const pLon = parseFloat(profileMatches[0].lon);
+            if (Number.isFinite(pLat) && Number.isFinite(pLon)) {
+              nextCoords = { lat: pLat, lon: pLon };
+              source = 'profile';
+              presetLabel = profileMatches[0].short_name;
+              skipNextReverseGeocodeRef.current = true;
+              setUserLocationName(presetLabel);
+              setLocationInput(presetLabel);
+              notice = `Định vị mạng có sai số ~${approxKm} km, đang đặt theo địa chỉ hồ sơ. Bạn có thể nhập lại hoặc kéo ghim.`;
+            }
           }
         }
-      },
-      { timeout: 12000, enableHighAccuracy: true, maximumAge: 0 },
-    );
+
+        if (!notice) {
+          notice = `Định vị qua mạng có sai số ~${approxKm} km. Hãy nhập khu vực cụ thể hoặc kéo ghim về đúng vị trí.`;
+        }
+      }
+
+      setLocationAccuracyNotice(notice);
+      setCurrentCoords(nextCoords);
+      setLocationStatus('ready');
+      saveMapLocation(
+        {
+          lat: nextCoords.lat,
+          lon: nextCoords.lon,
+          label: presetLabel,
+          source,
+          updatedAt: Date.now(),
+        },
+        currentUser?._id,
+      );
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.flyTo([nextCoords.lat, nextCoords.lon], 13, { duration: 1.2 });
+      }
+      if (userMarkerRef.current) {
+        userMarkerRef.current.setLatLng([nextCoords.lat, nextCoords.lon]);
+      }
+      if (radiusCircleRef.current) {
+        radiusCircleRef.current.setLatLng([nextCoords.lat, nextCoords.lon]);
+      }
+    } catch (err: any) {
+      if (!isRecenter) {
+        if (err?.code === 1) {
+          setLocationStatus('denied');
+        } else {
+          setLocationStatus('error');
+        }
+      }
+    } finally {
+      setIsLocating(false);
+    }
   }, []);
 
   // Use default fallback if user rejects permission
@@ -185,6 +448,7 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     skipNextReverseGeocodeRef.current = true;
     setCurrentCoords(fallback);
     setLocationStatus('ready');
+    setLocationAccuracyNotice(null);
     setUserLocationName('Hà Nội (Mặc định)');
     setLocationInput('Hà Nội');
     if (mapInstanceRef.current) {
@@ -192,7 +456,7 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     }
   };
 
-  // Reverse geocode to get city/district name of current coordinates (debounced & abortable)
+  // Reverse geocode to get city/district name of current coordinates (debounced, cached & abortable)
   useEffect(() => {
     if (!currentCoords) return;
     if (skipNextReverseGeocodeRef.current) {
@@ -202,23 +466,18 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
 
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${currentCoords.lat}&lon=${currentCoords.lon}&zoom=14`,
-        {
-          headers: { 'Accept-Language': 'vi,en' },
-          signal: controller.signal,
-        },
-      )
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.display_name) {
-            const parts = data.display_name.split(', ');
-            const shortName = parts.slice(0, 3).join(', ');
+      void reverseGeocodePlace(currentCoords.lat, currentCoords.lon, controller.signal).then(
+        (shortName) => {
+          if (shortName && !controller.signal.aborted) {
             setUserLocationName(shortName);
             setLocationInput(shortName);
+            const saved = loadSavedMapLocation(userRef.current?._id);
+            if (saved && saved.source === 'manual') {
+              saveMapLocation({ ...saved, label: shortName }, userRef.current?._id);
+            }
           }
-        })
-        .catch(() => {});
+        },
+      );
     }, 350);
 
     return () => {
@@ -227,55 +486,64 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     };
   }, [currentCoords]);
 
-  // Handle location search input change
+  // Handle location search input change using Photon + Nominatim autocomplete
   const handleLocationInputChange = (val: string) => {
     setLocationInput(val);
     if (locationSearchTimeoutRef.current) {
       clearTimeout(locationSearchTimeoutRef.current);
     }
+    if (locationSearchAbortRef.current) {
+      locationSearchAbortRef.current.abort();
+      locationSearchAbortRef.current = null;
+    }
 
-    if (!val.trim()) {
+    const normalized = val.trim();
+    if (!normalized) {
       setLocationSuggestions([]);
       setShowLocationDropdown(false);
+      setIsSearchingLocation(false);
       return;
     }
 
     locationSearchTimeoutRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      locationSearchAbortRef.current = controller;
       setIsSearchingLocation(true);
       try {
-        const q = encodeURIComponent(val.trim());
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${q}&countrycodes=vn&limit=5`,
-          {
-            headers: { 'Accept-Language': 'vi,en' },
-          },
-        );
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setLocationSuggestions(data);
-          setShowLocationDropdown(data.length > 0);
+        const bias = currentCoordsRef.current;
+        const results = await searchVietnamPlaces(normalized, {
+          limit: 6,
+          biasLat: bias?.lat,
+          biasLon: bias?.lon,
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) {
+          setLocationSuggestions(results);
+          setShowLocationDropdown(results.length > 0);
         }
       } catch {
-        // Ignore geocode errors
+        // Ignore abort / network geocode errors
       } finally {
+        if (locationSearchAbortRef.current === controller) {
+          locationSearchAbortRef.current = null;
+        }
         setIsSearchingLocation(false);
       }
-    }, 400);
+    }, 350);
   };
 
   // Select location suggestion
-  const handleSelectLocationSuggestion = (item: { display_name: string; lat: string; lon: string }) => {
+  const handleSelectLocationSuggestion = (item: GeocodePlaceSuggestion) => {
     const lat = parseFloat(item.lat);
     const lon = parseFloat(item.lon);
     if (!isNaN(lat) && !isNaN(lon)) {
-      const next = { lat, lon };
+      const short = item.short_name || item.display_name.split(', ').slice(0, 3).join(', ');
       skipNextReverseGeocodeRef.current = true;
-      setCurrentCoords(next);
-      const parts = item.display_name.split(', ');
-      const short = parts.slice(0, 3).join(', ');
+      setCurrentCoords({ lat, lon });
       setLocationInput(short);
       setUserLocationName(short);
       setShowLocationDropdown(false);
+      persistManualLocation(lat, lon, short);
 
       if (mapInstanceRef.current) {
         mapInstanceRef.current.setView([lat, lon], 14, { animate: true });
@@ -297,13 +565,21 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Reset and trigger location request on open
+  // Restore saved manual position or detect device location on open
   useEffect(() => {
     if (!isOpen) {
+      if (locationSearchTimeoutRef.current) {
+        clearTimeout(locationSearchTimeoutRef.current);
+      }
+      if (locationSearchAbortRef.current) {
+        locationSearchAbortRef.current.abort();
+        locationSearchAbortRef.current = null;
+      }
       setLocationStatus('locating');
       setCurrentCoords(null);
       setUserLocationName('');
       setLocationInput('');
+      setLocationAccuracyNotice(null);
       setShowLocationDropdown(false);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
@@ -312,21 +588,36 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
       return;
     }
 
-    requestLocation(false);
+    const saved = loadSavedMapLocation(userRef.current?._id);
+    if (saved && (saved.source === 'manual' || saved.source === 'profile')) {
+      skipNextReverseGeocodeRef.current = Boolean(saved.label);
+      setCurrentCoords({ lat: saved.lat, lon: saved.lon });
+      setUserLocationName(saved.label || '');
+      setLocationInput(saved.label || '');
+      setLocationAccuracyNotice(null);
+      setLocationStatus('ready');
+      return;
+    }
+
+    void requestLocation(false);
   }, [isOpen, requestLocation]);
 
-  // Fetch jobs by location when coordinates are ready
+  // Fetch jobs by location when coordinates or filters change
   const fetchJobs = useCallback(async () => {
     if (!isOpen || !currentCoords) return;
     setIsLoading(true);
 
     try {
+      const salaryBounds = parseSalaryPresetValue(filterSalary);
       const res = await searchJobsByLocationApi(
         {
           lat: currentCoords.lat,
           lon: currentCoords.lon,
           radius: radiusKm,
           query: debouncedKeyword.trim() || undefined,
+          level: filterLevel || undefined,
+          workingModel: filterWorkingModel || undefined,
+          ...salaryBounds,
           limit: 50,
         },
         accessToken,
@@ -340,7 +631,16 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [isOpen, currentCoords, radiusKm, debouncedKeyword, accessToken]);
+  }, [
+    isOpen,
+    currentCoords,
+    radiusKm,
+    debouncedKeyword,
+    filterLevel,
+    filterSalary,
+    filterWorkingModel,
+    accessToken,
+  ]);
 
   useEffect(() => {
     if (isOpen && currentCoords && locationStatus === 'ready') {
@@ -348,15 +648,16 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     }
   }, [isOpen, currentCoords, locationStatus, fetchJobs]);
 
-  // Initialize Map ONLY when currentCoords are available
+  // Initialize Map ONLY once when coordinates become ready
   useEffect(() => {
-    if (!isOpen || locationStatus !== 'ready' || !currentCoords || !mapContainerRef.current) {
+    const coords = currentCoordsRef.current;
+    if (!isOpen || locationStatus !== 'ready' || !hasReadyCoords || !coords || !mapContainerRef.current) {
       return;
     }
 
     if (!mapInstanceRef.current) {
       const map = L.map(mapContainerRef.current, {
-        center: [currentCoords.lat, currentCoords.lon],
+        center: [coords.lat, coords.lon],
         zoom: 13,
         zoomControl: false,
         attributionControl: false,
@@ -391,7 +692,7 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
         iconAnchor: [22, 22],
       });
 
-      const userMarker = L.marker([currentCoords.lat, currentCoords.lon], {
+      const userMarker = L.marker([coords.lat, coords.lon], {
         icon: userIcon,
         draggable: true,
         zIndexOffset: 1000,
@@ -401,12 +702,13 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
       userMarker.on('dragend', (e: any) => {
         const newPos = e.target.getLatLng();
         setCurrentCoords({ lat: newPos.lat, lon: newPos.lng });
+        persistManualLocation(newPos.lat, newPos.lng);
       });
 
       userMarkerRef.current = userMarker;
 
       // Radius Circle
-      const circle = L.circle([currentCoords.lat, currentCoords.lon], {
+      const circle = L.circle([coords.lat, coords.lon], {
         radius: radiusKmRef.current * 1000,
         color: '#2563EB',
         weight: 2,
@@ -419,8 +721,14 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
       map.on('click', (e: L.LeafletMouseEvent) => {
         const { lat, lng } = e.latlng;
         setCurrentCoords({ lat, lon: lng });
+        persistManualLocation(lat, lng);
       });
 
+      map.on('zoomend', () => {
+        setMapZoom(map.getZoom());
+      });
+
+      setMapZoom(map.getZoom());
       mapInstanceRef.current = map;
     }
 
@@ -431,7 +739,7 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     return () => {
       clearTimeout(timer);
     };
-  }, [isOpen, locationStatus, currentCoords]);
+  }, [isOpen, locationStatus, hasReadyCoords, persistManualLocation]);
 
   // Update map user position and radius circle
   useEffect(() => {
@@ -446,132 +754,125 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
     }
   }, [currentCoords, radiusKm]);
 
-  // Render job markers only when job results change (do not tear down on hover)
+  // Render clustered job markers when job results change (do not tear down on hover/zoom)
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     const map = mapInstanceRef.current;
 
     jobMarkersRef.current.forEach(({ marker }) => marker.remove());
     jobMarkersRef.current.clear();
+    jobToClusterKeyRef.current.clear();
 
-    jobs.forEach((job) => {
-      if (job.lat == null || job.lon == null) return;
+    const clusters = clusterJobsByLocation(jobs);
+    const showSalaryOnPin = mapZoomRef.current >= 14;
 
-      const jobId = job._id || (job as any).id;
-      const distLabel = job.distanceKm != null ? `${job.distanceKm} km` : 'Gần bạn';
-      const isCurrentActive = jobId === activeJobIdRef.current;
+    clusters.forEach((cluster) => {
+      const distLabel = cluster.distanceKm != null ? `${cluster.distanceKm} km` : 'Gần bạn';
+      const primaryJob = cluster.jobs[0];
+      const salaryLabel = formatShortSalaryLabel(primaryJob?.salary);
+      const isClusterActive = cluster.jobs.some(
+        (j) => String(j._id || (j as any).id) === activeJobIdRef.current,
+      );
 
-      const marker = L.marker([job.lat, job.lon], {
-        icon: createJobMarkerIcon(distLabel, isCurrentActive),
+      const marker = L.marker([cluster.lat, cluster.lon], {
+        icon: createJobMarkerIcon({
+          distLabel,
+          salaryLabel,
+          showSalary: showSalaryOnPin,
+          count: cluster.jobs.length,
+          isActive: isClusterActive,
+        }),
       }).addTo(map);
 
-      const safeCompanyName = escapeHtml(job.company?.name || 'Công ty tuyển dụng');
-      const safeJobName = escapeHtml(job.name || '');
-      const safeSalaryText = escapeHtml(formatSalary(job.salary));
-      const safeWorkingModel = escapeHtml(job.workingModel || 'Onsite');
-      const safeDistLabel = escapeHtml(distLabel);
-      const safeJobId = encodeURIComponent(String(jobId));
-      const safeLogoUrl = isSafeHttpUrl(job.company?.logo) ? escapeHtml(job.company!.logo!) : '';
-
-      const popupContent = `
-        <div style="font-family: system-ui, sans-serif; padding: 6px; min-width: 220px; max-width: 260px;">
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-            ${
-              safeLogoUrl
-                ? `<img src="${safeLogoUrl}" alt="${safeCompanyName}" style="width: 32px; height: 32px; border-radius: 6px; object-fit: contain; border: 1px solid #e2e8f0; background: white;" />`
-                : ''
-            }
-            <div style="overflow: hidden;">
-              <p style="font-size: 11px; font-weight: 600; color: #64748b; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                ${safeCompanyName}
-              </p>
-              <h4 style="font-size: 13px; font-weight: 700; color: #0f172a; margin: 2px 0 0 0; line-height: 1.3;">
-                ${safeJobName}
-              </h4>
-            </div>
-          </div>
-          <div style="display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0;">
-            <span style="font-size: 10px; font-weight: 700; padding: 2px 6px; background: #EFF6FF; color: #2563EB; border-radius: 4px;">
-              ${safeSalaryText}
-            </span>
-            <span style="font-size: 10px; font-weight: 600; padding: 2px 6px; background: #F1F5F9; color: #475569; border-radius: 4px;">
-              ${safeWorkingModel}
-            </span>
-            <span style="font-size: 10px; font-weight: 700; padding: 2px 6px; background: #ECFDF5; color: #059669; border-radius: 4px;">
-              Cách bạn ${safeDistLabel}
-            </span>
-          </div>
-          <a href="/jobs/${safeJobId}" target="_blank" rel="noopener noreferrer" style="
-            display: block;
-            text-align: center;
-            padding: 7px 12px;
-            background: #2563EB;
-            color: white;
-            font-size: 11px;
-            font-weight: 700;
-            border-radius: 8px;
-            text-decoration: none;
-            margin-top: 6px;
-          ">
-            Xem chi tiết việc làm →
-          </a>
-        </div>
-      `;
-
-      marker.bindPopup(popupContent);
+      const popupHtml = buildClusterPopupHtml(cluster, currentCoordsRef.current);
+      marker.bindPopup(popupHtml, { maxWidth: 310 });
 
       marker.on('click', () => {
-        setActiveJobId(jobId);
+        const firstId = String(primaryJob._id || (primaryJob as any).id);
+        setActiveJobId(firstId);
       });
 
-      jobMarkersRef.current.set(jobId, { marker, distLabel });
+      jobMarkersRef.current.set(cluster.key, {
+        cluster,
+        marker,
+        distLabel,
+        salaryLabel,
+      });
+
+      cluster.jobs.forEach((job) => {
+        const jobId = String(job._id || (job as any).id);
+        jobToClusterKeyRef.current.set(jobId, cluster.key);
+      });
     });
   }, [jobs]);
 
-  // Update only active/previous marker icons without removing markers or closing popups
+  // Update cluster marker icons smoothly when active job or map zoom changes
   useEffect(() => {
+    const showSalary = mapZoom >= 14;
     const prevId = prevActiveJobIdRef.current;
-    if (prevId && prevId !== activeJobId) {
-      const prevEntry = jobMarkersRef.current.get(prevId);
-      if (prevEntry) {
-        prevEntry.marker.setIcon(createJobMarkerIcon(prevEntry.distLabel, false));
-      }
-    }
-    if (activeJobId) {
-      const nextEntry = jobMarkersRef.current.get(activeJobId);
-      if (nextEntry) {
-        nextEntry.marker.setIcon(createJobMarkerIcon(nextEntry.distLabel, true));
-      }
-    }
-    prevActiveJobIdRef.current = activeJobId;
-  }, [activeJobId]);
+    const prevClusterKey = prevId ? jobToClusterKeyRef.current.get(prevId) : undefined;
+    const nextClusterKey = activeJobId ? jobToClusterKeyRef.current.get(activeJobId) : undefined;
 
-  // Handle card hover: highlight marker on map
+    jobMarkersRef.current.forEach((entry, key) => {
+      const isActive = Boolean(nextClusterKey && key === nextClusterKey);
+      const wasActive = Boolean(prevClusterKey && key === prevClusterKey);
+      if (isActive || wasActive || entry.cluster.jobs.length === 1) {
+        entry.marker.setIcon(
+          createJobMarkerIcon({
+            distLabel: entry.distLabel,
+            salaryLabel: entry.salaryLabel,
+            showSalary,
+            count: entry.cluster.jobs.length,
+            isActive,
+          }),
+        );
+      }
+    });
+
+    prevActiveJobIdRef.current = activeJobId;
+  }, [activeJobId, mapZoom]);
+
+  // Handle card hover: highlight cluster marker on map
   const handleCardHover = (job: JobItem) => {
-    const jobId = job._id || (job as any).id;
+    const jobId = String(job._id || (job as any).id);
     setActiveJobId(jobId);
-    if (job.lat != null && job.lon != null && mapInstanceRef.current) {
-      const entry = jobMarkersRef.current.get(jobId);
+    const clusterKey = jobToClusterKeyRef.current.get(jobId);
+    if (clusterKey && mapInstanceRef.current) {
+      const entry = jobMarkersRef.current.get(clusterKey);
       if (entry && !entry.marker.isPopupOpen()) {
         entry.marker.openPopup();
       }
     }
   };
 
-  // Handle card click: center map
+  // Handle card click: center map on job cluster
   const handleCardClick = (job: JobItem) => {
-    const jobId = job._id || (job as any).id;
+    const jobId = String(job._id || (job as any).id);
     setActiveJobId(jobId);
+    const clusterKey = jobToClusterKeyRef.current.get(jobId);
     if (job.lat != null && job.lon != null && mapInstanceRef.current) {
       mapInstanceRef.current.panTo([job.lat, job.lon], { animate: true, duration: 0.5 });
-      const entry = jobMarkersRef.current.get(jobId);
-      if (entry && !entry.marker.isPopupOpen()) {
-        entry.marker.openPopup();
+      if (clusterKey) {
+        const entry = jobMarkersRef.current.get(clusterKey);
+        if (entry && !entry.marker.isPopupOpen()) {
+          entry.marker.openPopup();
+        }
       }
     }
     if (onSelectJob) {
       onSelectJob(job);
     }
+  };
+
+  const hasActiveMapFilters = Boolean(
+    searchKeyword.trim() || filterLevel || filterSalary || filterWorkingModel,
+  );
+
+  const handleResetMapFilters = () => {
+    setSearchKeyword('');
+    setFilterLevel('');
+    setFilterSalary('');
+    setFilterWorkingModel('');
   };
 
   if (!isOpen) return null;
@@ -591,8 +892,8 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
                 <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
                   Tìm việc theo Bản đồ
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800">
-                  PRO
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 border border-amber-300/60">
+                  PREMIUM
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:block truncate max-w-xs">
@@ -638,8 +939,21 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
                   placeholder="Vị trí của bạn (VD: Thượng Thanh, Long Biên)"
                   className="w-full pl-9 pr-8 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-blue-600 dark:focus:border-blue-500 transition-colors"
                 />
-                {isSearchingLocation && (
+                {isSearchingLocation ? (
                   <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-slate-400" />
+                ) : (
+                  locationInput && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleLocationInputChange('');
+                      }}
+                      aria-label="Xóa địa điểm"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )
                 )}
 
                 {/* Autocomplete Dropdown */}
@@ -705,6 +1019,69 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
             </button>
           </div>
         </header>
+
+        {/* QUICK MAP FILTER SUB-BAR */}
+        {locationStatus === 'ready' && (
+          <div className="px-4 sm:px-6 py-2 bg-slate-50/90 dark:bg-slate-900/90 border-b border-slate-200/80 dark:border-slate-800 flex items-center flex-wrap gap-2.5 shrink-0 z-10">
+            {/* Level Filter */}
+            <select
+              aria-label="Lọc cấp bậc trên bản đồ"
+              value={filterLevel}
+              onChange={(e) => setFilterLevel(e.target.value)}
+              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 outline-none focus:border-blue-600 cursor-pointer"
+            >
+              <option value="">Tất cả cấp bậc</option>
+              {JOB_LEVEL_OPTIONS.map((lvl) => (
+                <option key={lvl.id} value={lvl.id}>
+                  {lvl.label}
+                </option>
+              ))}
+            </select>
+
+            {/* Salary Filter */}
+            <select
+              aria-label="Lọc mức lương trên bản đồ"
+              value={filterSalary}
+              onChange={(e) => setFilterSalary(e.target.value)}
+              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 outline-none focus:border-blue-600 cursor-pointer"
+            >
+              {SALARY_PRESETS.map((preset) => (
+                <option key={preset.id || 'all'} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+
+            {/* Working Model Chips */}
+            <div className="flex items-center gap-1 bg-white dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700">
+              {WORKING_MODEL_OPTIONS.map((wm) => (
+                <button
+                  key={wm.id || 'all'}
+                  type="button"
+                  onClick={() => setFilterWorkingModel(wm.id)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    filterWorkingModel === wm.id
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {wm.label}
+                </button>
+              ))}
+            </div>
+
+            {hasActiveMapFilters && (
+              <button
+                type="button"
+                onClick={handleResetMapFilters}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30 transition-colors cursor-pointer ml-auto"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Đặt lại</span>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* PERMISSION & LOCATING STATES */}
         {locationStatus === 'locating' && (
@@ -911,10 +1288,15 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
 
                           {/* Badges / Meta Info */}
                           <div className="flex items-center flex-wrap gap-1.5 mt-2.5 pt-2.5 border-t border-slate-100 dark:border-slate-700/60">
-                            {/* Distance Badge */}
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60">
+                            {/* Straight-line Distance Badge */}
+                            <span
+                              title="Khoảng cách đường chim bay tính theo tọa độ địa lý"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60"
+                            >
                               <Navigation className="w-3 h-3 text-blue-600 dark:text-blue-400 shrink-0" />
-                              <span>{job.distanceKm != null ? `${job.distanceKm} km` : 'Gần bạn'}</span>
+                              <span>
+                                {job.distanceKm != null ? `${job.distanceKm} km (chim bay)` : 'Gần bạn'}
+                              </span>
                             </span>
 
                             {/* Salary Badge */}
@@ -931,8 +1313,21 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
                           </div>
 
                           {/* Bottom Actions Row */}
-                          <div className="mt-2.5 flex items-center justify-between pt-1">
-                            <span className="text-[10px] text-slate-400">Xem vị trí map</span>
+                          <div className="mt-2.5 flex items-center justify-between gap-2 pt-1">
+                            {job.lat != null && job.lon != null ? (
+                              <a
+                                href={buildGoogleMapsDirectionsUrl(job.lat, job.lon, currentCoords)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700/70 dark:hover:bg-slate-700 text-[11px] font-semibold text-slate-700 dark:text-slate-200 transition-colors"
+                              >
+                                <ExternalLink className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                <span>Chỉ đường</span>
+                              </a>
+                            ) : (
+                              <span className="text-[10px] text-slate-400">Xem vị trí map</span>
+                            )}
                             <a
                               href={`/jobs/${jobId}`}
                               target="_blank"
@@ -957,12 +1352,18 @@ export const JobLocationSearchModal: React.FC<JobLocationSearchModalProps> = ({
               {/* Map Canvas Container */}
               <div ref={mapContainerRef} className="w-full h-full z-0" />
 
-              {/* Instruction Floating Hint at top */}
-              <div className="absolute top-4 left-4 z-20 pointer-events-none">
+              {/* Instruction Floating Hint & Accuracy Notice at top */}
+              <div className="absolute top-4 left-4 right-4 z-20 pointer-events-none flex flex-col items-start gap-2">
                 <div className="px-3.5 py-1.5 rounded-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-md shadow-md border border-slate-200/80 dark:border-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
                   <MapPin className="w-3.5 h-3.5 text-blue-600" />
                   <span>Kéo thả ghim xanh hoặc nhấp chuột lên bản đồ để đổi vị trí</span>
                 </div>
+                {locationAccuracyNotice && (
+                  <div className="max-w-md px-3.5 py-2 rounded-2xl bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur-md shadow-md border border-amber-200 dark:border-amber-800 text-[11px] font-medium text-amber-800 dark:text-amber-200 flex items-center gap-2 pointer-events-auto">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>{locationAccuracyNotice}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

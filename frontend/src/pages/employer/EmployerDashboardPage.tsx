@@ -224,8 +224,13 @@ export default function EmployerDashboardPage() {
       return;
     }
 
-    if (formData.skills.length === 0) {
+    if (!formData.skills.length) {
       info(t('employer.jobsTab.skillsLabel', 'Vui lòng thêm ít nhất 1 kỹ năng yêu cầu'));
+      return;
+    }
+
+    if (!formData.location.trim()) {
+      info(t('employer.jobsTab.locationLabel', 'Vui lòng chọn địa điểm làm việc'));
       return;
     }
 
@@ -251,6 +256,9 @@ export default function EmployerDashboardPage() {
             categories: formData.categories,
             description: formData.description,
             location: formData.location,
+            ...(formData.lat != null && formData.lon != null
+              ? { lat: Number(formData.lat), lon: Number(formData.lon) }
+              : {}),
             startDate: new Date(formData.startDate).toISOString(),
             endDate: new Date(formData.endDate).toISOString(),
             isActive: formData.isActive,
@@ -279,6 +287,9 @@ export default function EmployerDashboardPage() {
             categories: formData.categories,
             description: formData.description,
             location: formData.location,
+            ...(formData.lat != null && formData.lon != null
+              ? { lat: Number(formData.lat), lon: Number(formData.lon) }
+              : {}),
             startDate: new Date(formData.startDate).toISOString(),
             endDate: new Date(formData.endDate).toISOString(),
             isActive: formData.isActive,
@@ -400,10 +411,17 @@ export default function EmployerDashboardPage() {
                   <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                     {user?.email}
                   </p>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <span className="rounded-md bg-primary/15 px-1.5 py-0.2 text-[10px] font-bold text-primary dark:text-primary-light">
-                      {t('employer.sidebar.verifiedBadge', 'HR Verified')}
-                    </span>
+                  <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                    {statsData?.isPremium ? (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-amber-400/20 border border-amber-400/40 px-1.5 py-0.5 text-[10px] font-black text-amber-700 dark:text-amber-300">
+                        <Crown className="h-3 w-3 text-amber-500" />
+                        <span>HR Premium</span>
+                      </span>
+                    ) : (
+                      <span className="rounded-md bg-primary/15 px-1.5 py-0.2 text-[10px] font-bold text-primary dark:text-primary-light">
+                        {t('employer.sidebar.verifiedBadge', 'HR Xác Thực')}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -646,6 +664,7 @@ export default function EmployerDashboardPage() {
                 </div>
               ) : (
                 <JobEditorView
+                  key={isEditJobRoute ? `edit-${routeJobId || 'job'}` : 'create-job'}
                   company={statsData?.company ?? null}
                   editingJob={editingJob}
                   isSubmitting={isSubmittingJob}

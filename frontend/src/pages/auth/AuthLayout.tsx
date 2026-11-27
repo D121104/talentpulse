@@ -67,7 +67,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
               <ArrowLeft className="h-3.5 w-3.5" />
               {t('auth.backToHome')}
             </Link>
-            <span>TalentPulse &copy; 2024</span>
+            <span>TalentPulse &copy; 2026</span>
           </div>
         </aside>
 

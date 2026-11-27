@@ -15,7 +15,7 @@ export default function CandidateNarrative({ jobId, applicationId, version, loca
   const [expanded, setExpanded] = useState(false);
   const [result, setResult] = useState<MatchNarrative | null>(null);
   const [loading, setLoading] = useState(false);
-  const [failure, setFailure] = useState<'refresh' | 'error' | null>(null);
+  const [failure, setFailure] = useState<'refresh' | 'error' | 'consent' | 'forbidden' | null>(null);
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => { request.current?.abort(); }, []);
 
@@ -32,7 +32,15 @@ export default function CandidateNarrative({ jobId, applicationId, version, loca
       setResult(data);
     } catch (err) {
       if (controller.signal.aborted) return;
-      if (err instanceof ApiError && err.status === 403) { setResult(null); onForbidden(); return; }
+      if (err instanceof ApiError && err.status === 403) {
+        setResult(null);
+        if (/premium/i.test(err.message)) {
+          onForbidden();
+          return;
+        }
+        setFailure(/consent|purpose/i.test(err.message) ? 'consent' : 'forbidden');
+        return;
+      }
       setFailure(err instanceof ApiError && err.status === 409 ? 'refresh' : 'error');
     } finally {
       if (!controller.signal.aborted) { request.current = null; setLoading(false); }
@@ -44,6 +52,11 @@ export default function CandidateNarrative({ jobId, applicationId, version, loca
     <div className="flex flex-wrap gap-1">{narrativeEvidence(item.evidence, result?.evidenceLabels ?? {}, aiAnalysis, seenGeneric).map(({ label, kind }) =>
       <span key={`${kind}-${label}`} className="rounded-md bg-primary/10 px-2 py-1 text-xs text-primary">{kind !== 'context' && <span className="font-semibold">{t(`employer.candidatesTab.narrative.${kind}`)}: </span>}{label}</span>)}</div>
   </div>;
+  const persistedFacts = aiAnalysis && <section className="space-y-2" aria-label={t('employer.candidatesTab.narrative.facts')}>
+    <h5 className="font-bold">{t('employer.candidatesTab.narrative.facts')}</h5>
+    {aiAnalysis.components.skills.available && (['matchedSkills', 'missingRequiredSkills'] as const).map(field => <p key={field} className="break-words"><span className="font-semibold">{t(`employer.candidatesTab.narrative.${field}`)} ({aiAnalysis[field].length}): </span>{aiAnalysis[field].join(', ') || t('employer.candidatesTab.narrative.noneListed')}</p>)}
+    {!aiAnalysis.components.experience.available && <p>{t('employer.candidatesTab.narrative.experienceUnknown')}</p>}
+  </section>;
   return <div className="border-t border-slate-200 pt-3 dark:border-slate-700">
     <button type="button" aria-expanded={expanded} aria-controls={id}
       className="inline-flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-semibold text-primary focus-visible:outline-2 focus-visible:outline-primary"
@@ -53,14 +66,18 @@ export default function CandidateNarrative({ jobId, applicationId, version, loca
     </button>
     <div id={id} hidden={!expanded} className="space-y-4 pt-3 text-sm text-slate-700 dark:text-slate-300" aria-busy={loading}>
       {loading && <p role="status" className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />{t('employer.candidatesTab.narrative.loading')}</p>}
-      {failure && <div role="alert"><p>{t(`employer.candidatesTab.narrative.${failure}`)}</p><button type="button" className="mt-2 rounded-lg px-2 py-2 font-semibold text-primary underline" onClick={() => failure === 'refresh' ? onRefresh() : void load()}>{t(`employer.candidatesTab.narrative.${failure === 'refresh' ? 'refreshButton' : 'retry'}`)}</button></div>}
+      {(failure === 'error' || failure === 'refresh') && <div role="alert"><p>{t(`employer.candidatesTab.narrative.${failure}`)}</p><button type="button" className="mt-2 rounded-lg px-2 py-2 font-semibold text-primary underline" onClick={() => failure === 'refresh' ? onRefresh() : void load()}>{t(`employer.candidatesTab.narrative.${failure === 'refresh' ? 'refreshButton' : 'retry'}`)}</button></div>}
+      {failure === 'forbidden' && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">{t('employer.candidatesTab.narrative.forbiddenNotice')}</div>}
+      {failure === 'consent' && <div className="space-y-3">
+        <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">{t('employer.candidatesTab.narrative.consentMissing')}</p>
+        {persistedFacts}
+        {aiAnalysis?.strengths && aiAnalysis.strengths.length > 0 && <section className="space-y-1.5"><h5 className="font-bold">{t('employer.candidatesTab.narrative.strengths')}</h5><ul className="list-disc space-y-1.5 pl-5 text-xs">{aiAnalysis.strengths.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
+        {aiAnalysis?.gaps && aiAnalysis.gaps.length > 0 && <section className="space-y-1.5"><h5 className="font-bold">{t('employer.candidatesTab.narrative.pointsToVerify')}</h5><ul className="list-disc space-y-1.5 pl-5 text-xs">{aiAnalysis.gaps.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
+        {aiAnalysis?.explanation?.text && <section className="space-y-1"><h5 className="font-bold">{t('employer.candidatesTab.analysis.explanation')}</h5><p className="rounded-lg bg-slate-100 p-3 text-xs whitespace-pre-line break-words dark:bg-slate-800">{aiAnalysis.explanation.text}</p></section>}
+      </div>}
       {result && <>
         <p className="rounded-lg bg-slate-100 p-3 text-xs dark:bg-slate-800">{t(`employer.candidatesTab.narrative.${result.source}`)}</p>
-        {aiAnalysis && <section className="space-y-2" aria-label={t('employer.candidatesTab.narrative.facts')}>
-          <h5 className="font-bold">{t('employer.candidatesTab.narrative.facts')}</h5>
-          {aiAnalysis.components.skills.available && (['matchedSkills', 'missingRequiredSkills'] as const).map(field => <p key={field} className="break-words"><span className="font-semibold">{t(`employer.candidatesTab.narrative.${field}`)} ({aiAnalysis[field].length}): </span>{aiAnalysis[field].join(', ') || t('employer.candidatesTab.narrative.noneListed')}</p>)}
-          {!aiAnalysis.components.experience.available && <p>{t('employer.candidatesTab.narrative.experienceUnknown')}</p>}
-        </section>}
+        {persistedFacts}
         {statement(result.analysis.summary)}
         {(['strengths', 'pointsToVerify'] as const).map(section => result.analysis[section].length > 0 && <section key={section} className="space-y-2"><h5 className="font-bold">{t(`employer.candidatesTab.narrative.${section}`)}</h5><ul className="list-disc space-y-3 pl-5">{result.analysis[section].map((item, index) => <li key={index}>{statement(item)}</li>)}</ul></section>)}
       </>}

@@ -129,7 +129,10 @@ describe('JobsService map search & coordinate sync', () => {
         lat: 21.0285,
         lon: 105.8542,
         radiusKm: 500,
-        query: 'Backend',
+        query: 'Hà Nội',
+        level: 'SENIOR',
+        workingModel: 'Hybrid',
+        negotiable: true,
         page: 1,
         limit: 20,
       },
@@ -145,6 +148,15 @@ describe('JobsService map search & coordinate sync', () => {
         radiusMeters: 200000,
       }),
     );
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('translate('),
+      expect.objectContaining({ qNorm: '%ha noi%' }),
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'LOWER(job."workingModel") LIKE :workingModelFilter',
+      { workingModelFilter: '%hybrid%' },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith('(job.salary IS NULL OR job.salary <= 0)');
     expect(qb.getCount).toHaveBeenCalledTimes(1);
     expect(response.meta.total).toBe(1);
     expect(response.result[0]).toMatchObject({
